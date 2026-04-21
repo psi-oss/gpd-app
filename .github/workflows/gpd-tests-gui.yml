@@ -251,7 +251,7 @@ jobs:
         shell: bash
         run: |
           test -d "$BUNDLE" || { echo "bundle not found at $BUNDLE"; exit 1; }
-          strings "$BUNDLE/Contents/MacOS/GPD" | grep -q "tauri-plugin-mcp" || { echo "MCP plugin missing from debug bundle"; exit 1; }
+          grep -qF "tauri-plugin-mcp" "$BUNDLE/Contents/MacOS/GPD" || { echo "MCP plugin missing from debug bundle"; exit 1; }
 
       # -----------------------------------------------------------------------
       # Accessibility permission
