@@ -568,6 +568,26 @@ function Remove-GpdHome {
 
 # -- Main ------------------------------------------------------------------
 
+function Remove-GpdDefenderExclusions {
+    # Mirror of Add-GpdDefenderExclusions in install.ps1. Drops the
+    # Defender path+process exclusions the installer added, so a full
+    # uninstall leaves no residual AV-policy footprint. No-op when
+    # Defender isn't available or we're non-admin (same handling as
+    # install-side).
+    if (-not (Get-Command "Remove-MpPreference" -ErrorAction SilentlyContinue)) {
+        return
+    }
+    $tauriInstallRoot = Join-Path $env:LOCALAPPDATA "GPD"
+    $paths = @($tauriInstallRoot, $GpdHome) | Select-Object -Unique
+    $processes = @("GPD.exe", "opencode.exe", "opencode-cli.exe", "gpd.exe")
+    foreach ($p in $paths) {
+        try { Remove-MpPreference -ExclusionPath $p -ErrorAction Stop } catch { }
+    }
+    foreach ($proc in $processes) {
+        try { Remove-MpPreference -ExclusionProcess $proc -ErrorAction Stop } catch { }
+    }
+}
+
 function Invoke-GpdUninstall {
     Write-Banner
 
@@ -653,6 +673,10 @@ function Invoke-GpdUninstall {
     Remove-AuthJsonGpdEntry -Path $LegacyAuthFile
     Remove-OpenCodeGpdFiles
     Remove-GpdHome
+    # Last — Defender exclusions reference paths that are now gone, so
+    # dropping them has no user-visible effect on scanning, it just
+    # keeps the registry clean for uninstall-and-reinstall cycles.
+    Remove-GpdDefenderExclusions
 
     # Final message.
     Write-Host ""

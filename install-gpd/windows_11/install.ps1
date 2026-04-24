@@ -202,6 +202,85 @@ function Test-FileSha256 {
     return ($actual -ieq $Expected)
 }
 
+function Test-SmartAppControl {
+    # Smart App Control (Windows 11 22H2+) hard-blocks unsigned binaries
+    # and has no per-app override. Since the GPD installer downloads and
+    # runs an unsigned NSIS .exe, running under SAC enforcement leaves the
+    # user in a state where half of the install works (files on disk) and
+    # the binary refuses to launch. Better to bail early with exact click
+    # path than to leave that mess.
+    #
+    # Policy state values (learn.microsoft.com/windows/security/application
+    # -security/application-control/smart-app-control/):
+    #   0 = Off
+    #   1 = On (enforced)        <-- blocks; we exit
+    #   2 = Evaluation (logging) <-- permissive; continue
+    # Key absent on Win10 / older Win11 / non-consumer SKUs where SAC
+    # doesn't ship; treat absence as "not enforced" and continue.
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy"
+    try {
+        $val = (Get-ItemProperty -Path $key -Name "VerifiedAndReputablePolicyState" -ErrorAction Stop).VerifiedAndReputablePolicyState
+        if ($val -eq 1) {
+            Write-Err "Smart App Control is ON. It blocks unsigned apps (including GPD today)."
+            Write-Err ""
+            Write-Err "  Turn it off:"
+            Write-Err "    Settings -> Privacy & security -> Windows Security"
+            Write-Err "    -> App & browser control -> Smart App Control settings -> Off"
+            Write-Err ""
+            Write-Err "  Then re-run this installer."
+            Write-Err ""
+            Write-Err "  Note: Windows won't let you re-enable SAC without a reinstall"
+            Write-Err "  of Windows itself. Keep it off until GPD ships a signed build."
+            exit 1
+        }
+    } catch {
+        # Key absent = SAC not present on this build; continue.
+    }
+}
+
+function Add-GpdDefenderExclusions {
+    # Pre-whitelist GPD install paths and process names with Microsoft
+    # Defender so the Tauri-unsigned GPD.exe + opencode-cli.exe don't get
+    # quarantined mid-session by a heuristic false positive. Requires
+    # admin; silently skipped when the installer is run non-elevated
+    # (which is the default — the installer's contract is "no admin
+    # required"). Third-party AV vendors (Norton/McAfee/Bitdefender/
+    # Kaspersky) have their own proprietary quarantine stores and cannot
+    # be whitelisted from here; they are handled by user-facing docs.
+    if (-not (Get-Command "Add-MpPreference" -ErrorAction SilentlyContinue)) {
+        # Defender absent (enterprise image with third-party AV, or the
+        # Defender cmdlets module not installed). Nothing to do.
+        return
+    }
+    $tauriInstallRoot = Join-Path $env:LOCALAPPDATA "GPD"
+    $paths = @($tauriInstallRoot, $GpdHome) | Select-Object -Unique
+    $processes = @("GPD.exe", "opencode.exe", "opencode-cli.exe", "gpd.exe")
+    $added = $false
+    foreach ($p in $paths) {
+        try {
+            Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+            $added = $true
+        } catch {
+            # Non-admin, Defender disabled, or policy-locked exclusions.
+            # All three are expected in the wild; don't noise the user.
+        }
+    }
+    foreach ($proc in $processes) {
+        try {
+            Add-MpPreference -ExclusionProcess $proc -ErrorAction Stop
+            $added = $true
+        } catch {
+            # Same handling as above.
+        }
+    }
+    if ($added) {
+        Write-Success "Added Microsoft Defender exclusions for GPD"
+    } else {
+        # Common on non-admin installs. Not a warning — current-day default.
+        Write-Log "Defender exclusions skipped (non-admin or Defender unavailable)"
+    }
+}
+
 function Test-GpdRunning {
     # Pre-flight: abort if GPD is currently running under $GpdHome. Windows
     # file locking would make in-place overwrites of python.exe / venv
@@ -1057,12 +1136,25 @@ function Invoke-GpdInstall {
     # no clean way back to the prior state.
     Test-GpdRunning
 
+    # Pre-flight: Smart App Control check. Runs BEFORE any file system
+    # changes so we exit cleanly if the user's box will refuse to launch
+    # the installed GPD.exe anyway. Exits with instructions; no partial
+    # state left behind.
+    Test-SmartAppControl
+
     # Create directory structure
     foreach ($dir in @($GpdBinDir, $GpdPythonDir, $GpdVenvDir, $GpdConfigDir)) {
         if (-not (Test-Path $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
     }
+
+    # Whitelist GPD paths with Microsoft Defender before the desktop
+    # installer runs. Defender's real-time AV scans GPD.exe on first
+    # launch and has been observed flagging the Tauri-bundled NSIS
+    # output heuristically; pre-registering the exclusion avoids the
+    # quarantine race. No-op on non-admin runs.
+    Add-GpdDefenderExclusions
 
     # Step 1: git + LaTeX (install first so later steps see them on PATH)
     Write-Log "Step 1/7: Installing git and LaTeX..."
