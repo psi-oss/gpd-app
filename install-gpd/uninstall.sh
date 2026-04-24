@@ -337,18 +337,23 @@ PY
         esac
     else
         # No python3 available. We detected a "gpd" entry, but we can't safely
-        # edit JSON with pure bash. If the file contains other provider keys,
-        # warn before removing. Otherwise just remove it.
+        # edit JSON with pure bash. Match the macOS uninstall policy: refuse
+        # to modify the file and instruct the user to edit it manually.
+        # A prior version of this fallback did `rm -f "$file"` after a warn,
+        # which silently destroyed any other providers' auth credentials a
+        # user might have — unacceptable data loss for a "surgical" uninstall.
         local other_providers
-        # crude: count top-level quoted keys other than "gpd"
         other_providers=$(grep -oE '"[A-Za-z0-9_-]+"[[:space:]]*:' "$file" 2>/dev/null \
             | grep -v '^"gpd"' | head -1 || true)
         if [[ -n "$other_providers" ]]; then
-            warn "python3 not available and $file has other providers — removing whole file anyway"
-            warn "  You may need to re-authenticate other providers in opencode"
+            warn "python3 not available to surgically strip 'gpd' from $file"
+            warn "  The file contains other providers; leaving it intact."
+            warn "  Please remove the \"gpd\" key manually with your editor of choice."
+        else
+            # Only gpd entry; safe to remove the whole file.
+            rm -f "$file"
+            success "Removed $file"
         fi
-        rm -f "$file"
-        success "Removed $file"
     fi
 }
 

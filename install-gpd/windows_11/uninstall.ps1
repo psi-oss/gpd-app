@@ -127,9 +127,26 @@ function Write-Banner {
 # -- Discovery -------------------------------------------------------------
 
 function Get-PathContainsGpd {
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if (-not $currentPath) { return $false }
-    return ($currentPath.Split(";") -contains $GpdBinDir)
+    # Discovery-pass check. Read the registry with raw (unexpanded) values
+    # so the body matches whatever form the actual removal path uses.
+    # Previously used [Environment]::GetEnvironmentVariable which expands
+    # env-var references — that read + exact-compare-against-expanded-
+    # $GpdBinDir happened to work for the literal case but silently
+    # missed an env-var form we would then fail to actually remove.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+    if (-not $key) { return $false }
+    try {
+        $raw = [string]$key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally {
+        $key.Close()
+    }
+    if (-not $raw) { return $false }
+    foreach ($p in $raw.Split(";")) {
+        if (Test-PathPartMatchesGpdBin -Entry $p -Target $GpdBinDir) {
+            return $true
+        }
+    }
+    return $false
 }
 
 # Inspect auth.json and decide whether the "gpd" entry is present. Returns
@@ -247,31 +264,95 @@ function Remove-TauriState {
     }
 }
 
+function Get-UserPathRaw {
+    # Match the installer's helper: read User PATH with %VAR% references
+    # preserved. Using [Environment]::GetEnvironmentVariable here would
+    # expand them, and then the SetEnvironmentVariable write below would
+    # persist the expansion, flattening unrelated user entries like
+    # %JAVA_HOME%\bin on every uninstall.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+    if (-not $key) { return "" }
+    try {
+        $raw = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        return [string]$raw
+    } finally {
+        $key.Close()
+    }
+}
+
+function Set-UserPathExpandable {
+    param([Parameter(Mandatory=$true)][string]$Value)
+    # Write as REG_EXPAND_SZ so %VAR% references we preserved above stay
+    # intact. Broadcast WM_SETTINGCHANGE so open terminals refresh
+    # without logoff.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+    try {
+        $key.SetValue("Path", $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally {
+        $key.Close()
+    }
+    try {
+        $sig = '[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+        $type = Add-Type -MemberDefinition $sig -Name NativeMethods -Namespace GpdUninstaller -PassThru -ErrorAction Stop
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x001A
+        $SMTO_ABORTIFHUNG = 0x0002
+        [UIntPtr]$result = [UIntPtr]::Zero
+        [void]$type::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", $SMTO_ABORTIFHUNG, 5000, [ref]$result)
+    } catch { }
+}
+
+function Test-PathPartMatchesGpdBin {
+    # Mirror of the helper in install.ps1. Compare a PATH entry against
+    # $GpdBinDir by expanding env vars in the entry, trimming trailing
+    # separators, and doing a case-insensitive compare. This catches
+    # both literal ("C:\Users\x\.gpd\bin") and env-var ("%USERPROFILE%
+    # \.gpd\bin") forms — a prior installer version or a user hand-edit
+    # might have written the entry in either form.
+    param([string]$Entry, [string]$Target)
+    if ([string]::IsNullOrEmpty($Entry)) { return $false }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Entry)
+    return ($expanded.TrimEnd('\','/') -ieq $Target.TrimEnd('\','/'))
+}
+
 function Remove-GpdFromPath {
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $currentPath = Get-UserPathRaw
     if (-not $currentPath) {
         Write-Skip "User PATH is empty"
         return
     }
 
     $parts = $currentPath.Split(";")
-    if (-not ($parts -contains $GpdBinDir)) {
+    $present = $false
+    foreach ($p in $parts) {
+        if (Test-PathPartMatchesGpdBin -Entry $p -Target $GpdBinDir) {
+            $present = $true
+            break
+        }
+    }
+    if (-not $present) {
         Write-Skip "$GpdBinDir not on user PATH"
         return
     }
 
-    $newParts = $parts | Where-Object { $_ -ne $GpdBinDir -and $_ -ne "" }
+    # Keep the RAW value of each non-matching part so pre-existing
+    # env-var references like `%JAVA_HOME%\bin` survive verbatim.
+    $newParts = $parts | Where-Object {
+        $_ -and -not (Test-PathPartMatchesGpdBin -Entry $_ -Target $GpdBinDir)
+    }
     $newPath = ($newParts -join ";")
 
     try {
-        [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        Set-UserPathExpandable -Value $newPath
         Write-Success "Removed $GpdBinDir from user PATH"
     } catch {
         Write-Warn "Could not update user PATH -- $_"
     }
 
     # Also update this session so the caller sees the change immediately.
-    $sessionParts = $env:PATH.Split(";") | Where-Object { $_ -ne $GpdBinDir -and $_ -ne "" }
+    $sessionParts = $env:PATH.Split(";") | Where-Object {
+        $_ -and -not (Test-PathPartMatchesGpdBin -Entry $_ -Target $GpdBinDir)
+    }
     $env:PATH = ($sessionParts -join ";")
 }
 
@@ -568,23 +649,63 @@ function Remove-GpdHome {
 
 # -- Main ------------------------------------------------------------------
 
+function Test-IsAdministrator {
+    # Same helper as install.ps1. Gates the Remove-MpPreference calls
+    # below so we don't silently try-and-swallow the CimException that
+    # Defender throws on a non-elevated invocation. An earlier version
+    # had empty `catch { }` blocks that left Defender exclusions in the
+    # registry forever when an admin-ran install was later uninstalled
+    # as a regular user.
+    $principal = New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Remove-GpdDefenderExclusions {
     # Mirror of Add-GpdDefenderExclusions in install.ps1. Drops the
     # Defender path+process exclusions the installer added, so a full
-    # uninstall leaves no residual AV-policy footprint. No-op when
-    # Defender isn't available or we're non-admin (same handling as
-    # install-side).
+    # uninstall leaves no residual AV-policy footprint.
     if (-not (Get-Command "Remove-MpPreference" -ErrorAction SilentlyContinue)) {
+        return
+    }
+    if (-not (Test-IsAdministrator)) {
+        # If the installer was run with admin, but the uninstaller wasn't,
+        # the exclusions remain in HKLM\SOFTWARE\Microsoft\Windows Defender
+        # \Exclusions and there is nothing we can do from here. Tell the
+        # user exactly how to clean them up manually instead of silently
+        # swallowing the CimException the cmdlet would throw.
+        Write-Warn "Skipping Defender exclusion removal (uninstaller not running as administrator)."
+        Write-Warn "  If the installer was run as admin, leftover exclusions remain in:"
+        Write-Warn "    HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions"
+        Write-Warn "  Re-run this uninstaller from an elevated PowerShell to clean them, or run:"
+        Write-Warn "    Remove-MpPreference -ExclusionPath `"$env:LOCALAPPDATA\GPD`",`"$GpdHome`""
+        Write-Warn "    Remove-MpPreference -ExclusionProcess GPD.exe,opencode.exe,opencode-cli.exe,gpd.exe"
         return
     }
     $tauriInstallRoot = Join-Path $env:LOCALAPPDATA "GPD"
     $paths = @($tauriInstallRoot, $GpdHome) | Select-Object -Unique
     $processes = @("GPD.exe", "opencode.exe", "opencode-cli.exe", "gpd.exe")
     foreach ($p in $paths) {
-        try { Remove-MpPreference -ExclusionPath $p -ErrorAction Stop } catch { }
+        try {
+            Remove-MpPreference -ExclusionPath $p -ErrorAction Stop
+        } catch {
+            # "The property PreferenceInconsistent: does not exist in the
+            # Exclusions set" is the cmdlet's way of saying the exclusion
+            # was already absent. Filter that from real errors so we only
+            # warn on genuinely stuck state (Tamper Protection, policy).
+            if ($_.Exception.Message -notmatch "does not exist|cannot be found|PreferenceInconsistent") {
+                Write-Warn "Could not remove Defender exclusion $p -- $($_.Exception.Message)"
+            }
+        }
     }
     foreach ($proc in $processes) {
-        try { Remove-MpPreference -ExclusionProcess $proc -ErrorAction Stop } catch { }
+        try {
+            Remove-MpPreference -ExclusionProcess $proc -ErrorAction Stop
+        } catch {
+            if ($_.Exception.Message -notmatch "does not exist|cannot be found|PreferenceInconsistent") {
+                Write-Warn "Could not remove Defender exclusion process $proc -- $($_.Exception.Message)"
+            }
+        }
     }
 }
 

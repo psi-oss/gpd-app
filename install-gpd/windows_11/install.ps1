@@ -238,46 +238,69 @@ function Test-SmartAppControl {
     }
 }
 
+function Test-IsAdministrator {
+    # Returns $true when the current process is running with the
+    # Administrators role token. Used to gate Defender cmdlets that
+    # require elevation without triggering a CIM UnauthorizedAccess
+    # exception buried in an empty catch.
+    $principal = New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Add-GpdDefenderExclusions {
     # Pre-whitelist GPD install paths and process names with Microsoft
-    # Defender so the Tauri-unsigned GPD.exe + opencode-cli.exe don't get
-    # quarantined mid-session by a heuristic false positive. Requires
-    # admin; silently skipped when the installer is run non-elevated
-    # (which is the default — the installer's contract is "no admin
-    # required"). Third-party AV vendors (Norton/McAfee/Bitdefender/
-    # Kaspersky) have their own proprietary quarantine stores and cannot
-    # be whitelisted from here; they are handled by user-facing docs.
+    # Defender so the Tauri-unsigned GPD.exe + opencode-cli.exe don't
+    # get quarantined mid-session by a heuristic false positive. Third-
+    # party AV vendors (Norton/McAfee/Bitdefender/Kaspersky) have their
+    # own proprietary quarantine stores and cannot be whitelisted from
+    # here; they are handled by user-facing docs.
+    #
+    # Elevation: Add-MpPreference modifies the MSFT_MpPreference WMI
+    # class, which requires Administrators-group membership. On a non-
+    # admin invocation it throws CimException. Detect admin up-front
+    # and skip cleanly rather than try/swallow — a silent swallow would
+    # let the installer claim success while leaving GPD binaries exposed
+    # to real-time scanning. Companion check lives in the uninstaller.
     if (-not (Get-Command "Add-MpPreference" -ErrorAction SilentlyContinue)) {
         # Defender absent (enterprise image with third-party AV, or the
         # Defender cmdlets module not installed). Nothing to do.
         return
     }
+    if (-not (Test-IsAdministrator)) {
+        Write-Log "Defender exclusions skipped (installer not running as administrator)"
+        Write-Log "  To whitelist manually later, run PowerShell as admin:"
+        Write-Log "    Add-MpPreference -ExclusionPath `"$env:LOCALAPPDATA\GPD`""
+        Write-Log "    Add-MpPreference -ExclusionPath `"$GpdHome`""
+        Write-Log "    Add-MpPreference -ExclusionProcess GPD.exe,opencode.exe,opencode-cli.exe,gpd.exe"
+        return
+    }
     $tauriInstallRoot = Join-Path $env:LOCALAPPDATA "GPD"
     $paths = @($tauriInstallRoot, $GpdHome) | Select-Object -Unique
     $processes = @("GPD.exe", "opencode.exe", "opencode-cli.exe", "gpd.exe")
-    $added = $false
+    $pathsAdded = 0
     foreach ($p in $paths) {
         try {
             Add-MpPreference -ExclusionPath $p -ErrorAction Stop
-            $added = $true
+            $pathsAdded++
         } catch {
-            # Non-admin, Defender disabled, or policy-locked exclusions.
-            # All three are expected in the wild; don't noise the user.
+            # Elevated, Defender present, yet add failed — likely Tamper
+            # Protection or a group-policy lock on the Exclusions key.
+            # Surface so admin can investigate instead of silent drop.
+            Write-Warn "Could not add Defender exclusion for $p -- $($_.Exception.Message)"
         }
     }
     foreach ($proc in $processes) {
         try {
             Add-MpPreference -ExclusionProcess $proc -ErrorAction Stop
-            $added = $true
         } catch {
-            # Same handling as above.
+            Write-Warn "Could not add Defender exclusion for process $proc -- $($_.Exception.Message)"
         }
     }
-    if ($added) {
+    if ($pathsAdded -gt 0) {
         Write-Success "Added Microsoft Defender exclusions for GPD"
     } else {
-        # Common on non-admin installs. Not a warning — current-day default.
-        Write-Log "Defender exclusions skipped (non-admin or Defender unavailable)"
+        Write-Warn "Defender ExclusionPath additions all failed (Tamper Protection or policy lock?)"
     }
 }
 
@@ -561,133 +584,40 @@ function Install-LocalPython {
 
         Write-Log "Extracting Python to $newDir..."
 
-        # Use tar (available on Windows 10+) to extract .tar.gz
+        # Use tar (ships with Windows 10 1803+, April 2018) to extract
+        # .tar.gz. An earlier version of this function carried a hand-
+        # rolled .NET tar reader as a fallback for hosts where tar.exe
+        # was absent, but that reader had two concrete bugs: (a) it read
+        # only the ustar name[100] field, ignoring the prefix[155] field
+        # at offset 345, which truncates paths >100 chars (the pinned
+        # PBS 20250409 x86_64-pc-windows-msvc archive has at least four
+        # .pyc paths of 108 chars), and (b) it silently ignored PAX /
+        # GNU-long extended headers, so any future PBS archive using
+        # them would misplace files. Pre-1803 Windows 10 has been EOL
+        # since 2019 and is <0.1% of today's install base, so the honest
+        # fix is to refuse to install rather than silently corrupt the
+        # venv extraction.
         $tarAvailable = Get-Command "tar" -ErrorAction SilentlyContinue
-        if ($tarAvailable) {
-            & tar -xzf $archive -C $newDir --strip-components=1
-            if ($LASTEXITCODE -ne 0) {
-                Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                Stop-WithError "Python extract failed"
-            }
+        if (-not $tarAvailable) {
+            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
+            Stop-WithError @"
+tar.exe is not on PATH. GPD's Windows installer relies on tar.exe to
+extract the Python runtime archive.
+
+tar.exe ships with Windows 10 version 1803 (April 2018) and every
+later build. If tar.exe is missing, your Windows build is either
+pre-1803 (out of Microsoft support) or has had the Windows tooling
+stripped by an image-management policy.
+
+Fix: upgrade Windows to a supported version, or install GNU tar (e.g.
+via Git for Windows) so that "tar.exe" resolves on PATH, then re-run
+this installer.
+"@
         }
-        else {
-            # Fallback: decompress gzip then extract tar using .NET
-            Write-Log "tar not found, using .NET extraction fallback..."
-
-            $tarFile = Join-Path $tmpDir "python.tar"
-
-            # Decompress gzip
-            $gzipStream = [System.IO.File]::OpenRead($archive)
-            $decompStream = New-Object System.IO.Compression.GZipStream($gzipStream, [System.IO.Compression.CompressionMode]::Decompress)
-            $tarStream = [System.IO.File]::Create($tarFile)
-            $decompStream.CopyTo($tarStream)
-            $tarStream.Close()
-            $decompStream.Close()
-            $gzipStream.Close()
-
-            # Extract tar -- minimal tar reader for install_only archives
-            # These archives have a single top-level directory (python/) that we strip
-            $stream = [System.IO.File]::OpenRead($tarFile)
-            $buffer = New-Object byte[] 512
-            while ($true) {
-                $read = $stream.Read($buffer, 0, 512)
-                if ($read -lt 512) { break }
-
-                # Check for end-of-archive (two 512-byte blocks of zeros)
-                $allZero = $true
-                for ($i = 0; $i -lt 512; $i++) {
-                    if ($buffer[$i] -ne 0) { $allZero = $false; break }
-                }
-                if ($allZero) { break }
-
-                # Parse header: name at offset 0 (100 bytes), size at offset 124 (12 bytes), typeflag at offset 156
-                $nameBytes = $buffer[0..99]
-                $nameEnd = [Array]::IndexOf($nameBytes, [byte]0)
-                if ($nameEnd -lt 0) { $nameEnd = 100 }
-                $name = [System.Text.Encoding]::ASCII.GetString($nameBytes, 0, $nameEnd).Trim()
-
-                $sizeStr = [System.Text.Encoding]::ASCII.GetString($buffer[124..135]).Trim().TrimEnd([char]0)
-                $size = if ($sizeStr) { [Convert]::ToInt64($sizeStr, 8) } else { 0 }
-
-                $typeFlag = [char]$buffer[156]
-
-                # Strip first path component (e.g., "python/")
-                $strippedName = $name
-                $slashIdx = $name.IndexOf("/")
-                if ($slashIdx -ge 0) {
-                    $strippedName = $name.Substring($slashIdx + 1)
-                }
-                else {
-                    # Top-level entry with no slash -- skip
-                    $blocks = [math]::Ceiling($size / 512)
-                    if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                if ([string]::IsNullOrWhiteSpace($strippedName)) {
-                    $blocks = [math]::Ceiling($size / 512)
-                    if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                # Zip-slip guard: reject any `..` or empty segment in the
-                # archive's stripped entry path BEFORE we Join-Path, then
-                # re-check that the resolved absolute path still lives
-                # inside $newDir. Defense in depth for the case where the
-                # SHA256 pin drifts away from a known-good PBS archive.
-                $entrySegments = $strippedName -split '[/\\]'
-                foreach ($seg in $entrySegments) {
-                    if ($seg -eq ".." -or $seg -eq "") {
-                        Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                        Stop-WithError "Refusing to extract archive entry with traversal segment: $strippedName"
-                    }
-                }
-
-                $outPath = Join-Path $newDir $strippedName.Replace("/", "\")
-                $newDirFull = [System.IO.Path]::GetFullPath($newDir)
-                $outPathFull = [System.IO.Path]::GetFullPath($outPath)
-                $newDirWithSep = $newDirFull.TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
-                if (-not (
-                    $outPathFull.Equals($newDirFull, [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $outPathFull.StartsWith($newDirWithSep, [System.StringComparison]::OrdinalIgnoreCase)
-                )) {
-                    Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                    Stop-WithError "Refusing to extract archive entry outside target dir: $strippedName"
-                }
-
-                if ($typeFlag -eq "5" -or $name.EndsWith("/")) {
-                    # Directory
-                    New-Item -ItemType Directory -Path $outPath -Force | Out-Null
-                }
-                elseif ($typeFlag -eq "0" -or $typeFlag -eq [char]0) {
-                    # Regular file
-                    $parentDir = Split-Path $outPath -Parent
-                    if (-not (Test-Path $parentDir)) {
-                        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-                    }
-
-                    $fileStream = [System.IO.File]::Create($outPath)
-                    $remaining = $size
-                    $readBuf = New-Object byte[] 65536
-                    while ($remaining -gt 0) {
-                        $toRead = [math]::Min($remaining, 65536)
-                        $bytesRead = $stream.Read($readBuf, 0, $toRead)
-                        $fileStream.Write($readBuf, 0, $bytesRead)
-                        $remaining -= $bytesRead
-                    }
-                    $fileStream.Close()
-
-                    # Skip padding to next 512-byte boundary
-                    $pad = (512 - ($size % 512)) % 512
-                    if ($pad -gt 0) { [void]$stream.Seek($pad, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                # Skip data blocks for this entry
-                $blocks = [math]::Ceiling($size / 512)
-                if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-            }
-            $stream.Close()
+        & tar -xzf $archive -C $newDir --strip-components=1
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
+            Stop-WithError "Python extract failed (tar exit=$LASTEXITCODE)."
         }
 
         # Liveness probe against the staged tree before we swap it into
@@ -1100,20 +1030,90 @@ set "PATH=%GPD_HOME%\venv\Scripts;%GPD_HOME%\bin;%PATH%"
 
 # ── PATH ───────────────────────────────────────────────────────────────────
 
-function Add-GpdToPath {
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+function Get-UserPathRaw {
+    # Read User PATH from the registry WITHOUT expanding %VAR% references.
+    # [Environment]::GetEnvironmentVariable("PATH", "User") silently
+    # expands them, and pairing that read with SetEnvironmentVariable
+    # (which writes REG_SZ unconditionally) would flatten user entries
+    # like `%JAVA_HOME%\bin` to their expanded form on every install —
+    # permanently breaking the reference if the env var later changes.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+    if (-not $key) { return "" }
+    try {
+        # DoNotExpandEnvironmentNames preserves %VAR% literals.
+        $raw = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        return [string]$raw
+    } finally {
+        $key.Close()
+    }
+}
 
-    # Check if already present
-    if ($currentPath -and $currentPath.Split(";") -contains $GpdBinDir) {
+function Set-UserPathExpandable {
+    param([Parameter(Mandatory=$true)][string]$Value)
+    # Write User PATH as REG_EXPAND_SZ so embedded %VAR% references are
+    # preserved. [Environment]::SetEnvironmentVariable's User/Machine
+    # overload writes REG_SZ unconditionally; we use the registry API
+    # directly to set RegistryValueKind.ExpandString. Separately, fire a
+    # WM_SETTINGCHANGE broadcast so Explorer/other shells pick up the
+    # change without a logoff — the .NET setter does this for us, but
+    # the raw registry write does not.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+    try {
+        $key.SetValue("Path", $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally {
+        $key.Close()
+    }
+    # Broadcast WM_SETTINGCHANGE so other processes (new terminals) pick
+    # up the registry update without requiring logoff. Wrapped in a try
+    # since the P/Invoke call can fail on unusual hosts; the PATH value
+    # is already persisted.
+    try {
+        $sig = '[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+        $type = Add-Type -MemberDefinition $sig -Name NativeMethods -Namespace GpdInstaller -PassThru -ErrorAction Stop
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x001A
+        $SMTO_ABORTIFHUNG = 0x0002
+        [UIntPtr]$result = [UIntPtr]::Zero
+        [void]$type::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", $SMTO_ABORTIFHUNG, 5000, [ref]$result)
+    } catch { }
+}
+
+function Test-PathPartMatchesGpdBin {
+    # Compare a PATH entry against $GpdBinDir in a way that matches
+    # either literal ("C:\Users\x\.gpd\bin") or env-var ("%USERPROFILE%
+    # \.gpd\bin") forms, tolerates trailing separators, and is case-
+    # insensitive. We expand the entry with [Environment]::
+    # ExpandEnvironmentVariables so a raw `%USERPROFILE%` entry still
+    # compares equal to the already-expanded $GpdBinDir.
+    param([string]$Entry, [string]$Target)
+    if ([string]::IsNullOrEmpty($Entry)) { return $false }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Entry)
+    return ($expanded.TrimEnd('\','/') -ieq $Target.TrimEnd('\','/'))
+}
+
+function Add-GpdToPath {
+    $currentPath = Get-UserPathRaw
+
+    $parts = if ($currentPath) { $currentPath -split ';' } else { @() }
+    $already = $false
+    foreach ($p in $parts) {
+        if (Test-PathPartMatchesGpdBin -Entry $p -Target $GpdBinDir) {
+            $already = $true
+            break
+        }
+    }
+    if ($already) {
         Write-Success "$GpdBinDir is already on PATH"
         return
     }
 
-    # Add to user PATH
+    # Prepend. Preserve whatever %VAR% references were in the existing
+    # PATH because we read it with DoNotExpandEnvironmentNames.
     $newPath = if ($currentPath) { "${GpdBinDir};${currentPath}" } else { $GpdBinDir }
-    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+    Set-UserPathExpandable -Value $newPath
 
-    # Also update current session
+    # Also update current session so subsequent commands in this
+    # invocation find gpd without waiting for the broadcast to propagate.
     $env:PATH = "${GpdBinDir};${env:PATH}"
 
     Write-Success "Added $GpdBinDir to user PATH"
@@ -1149,12 +1149,14 @@ function Invoke-GpdInstall {
         }
     }
 
-    # Whitelist GPD paths with Microsoft Defender before the desktop
-    # installer runs. Defender's real-time AV scans GPD.exe on first
-    # launch and has been observed flagging the Tauri-bundled NSIS
-    # output heuristically; pre-registering the exclusion avoids the
-    # quarantine race. No-op on non-admin runs.
-    Add-GpdDefenderExclusions
+    # (Defender exclusions are registered LATER, after Test-GpdInstall
+    # confirms the install succeeded. Registering them here, before files
+    # land, would create an orphan-exclusion attack surface: if the
+    # desktop installer then fails and the user never runs the
+    # uninstaller, an attacker who later achieves user-level write to
+    # %LOCALAPPDATA%\GPD\* could drop executables there that Defender
+    # skips. Only register once the target dirs are populated and the
+    # venv is proven healthy.)
 
     # Step 1: git + LaTeX (install first so later steps see them on PATH)
     Write-Log "Step 1/7: Installing git and LaTeX..."
@@ -1195,6 +1197,14 @@ function Invoke-GpdInstall {
     # Step 7: PATH
     Write-Log "Step 7/7: Configuring PATH..."
     Add-GpdToPath
+    Write-Host ""
+
+    # Defender exclusions — register now, AFTER Test-GpdInstall confirmed
+    # the install is healthy. Registering before files land would leave
+    # an exploitable window where an attacker with user-level write could
+    # drop executables into a whitelisted empty path. Harmless no-op on
+    # non-admin or Defender-absent installs.
+    Add-GpdDefenderExclusions
     Write-Host ""
 
     # Run GPD install for OpenCode runtime configuration.

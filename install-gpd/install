@@ -601,10 +601,16 @@ install_gpd_dmg() {
         return 0
     fi
 
-    local tmp_dir dmg_file mount_point
+    local tmp_dir dmg_file mount_point=""
     tmp_dir="$(mktemp -d)"
     dmg_file="$tmp_dir/$asset"
-    trap "hdiutil detach '$mount_point' -quiet 2>/dev/null || true; rm -rf '$tmp_dir'" RETURN
+    # EXIT trap fires on every shell-termination path — normal return, `die`
+    # (which calls `exit`), `set -e` aborts, and explicit `exit N`. A prior
+    # version used RETURN, which bash only fires on function return — it
+    # does NOT fire on `exit`, so `die` later in this function would leak
+    # the mount. The body is SINGLE-quoted so `$mount_point` is resolved
+    # at trap-fire time (after assignment below), not at registration.
+    trap 'if [[ -n "$mount_point" ]]; then hdiutil detach "$mount_point" -quiet 2>/dev/null || true; fi; rm -rf "$tmp_dir"' EXIT
 
     download "$dmg_url" "$dmg_file"
     log "Mounting disk image..."
@@ -628,6 +634,13 @@ install_gpd_dmg() {
     if ! ditto "$mount_point/GPD.app" "/Applications/GPD.app"; then
         die "Failed to copy GPD.app to /Applications (check disk space + permissions)."
     fi
+
+    # Explicit detach on the happy path so the mount is released as soon
+    # as we're done reading from it, rather than lingering until shell
+    # exit. Clear mount_point so the EXIT trap's `[[ -n … ]]` guard
+    # treats this as already-detached and doesn't double-detach.
+    hdiutil detach "$mount_point" -quiet 2>/dev/null || true
+    mount_point=""
 
     # Strip Gatekeeper quarantine so the user isn't blocked with a
     # "developer cannot be verified" dialog on first launch. The chain of
