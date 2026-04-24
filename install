@@ -26,7 +26,11 @@ OPENCODE_FALLBACK_ORG="anomalyco"
 OPENCODE_FALLBACK_REPO="opencode"
 
 GPD_PACKAGE_REPO="psi-oss/get-physics-done"
-GPD_PACKAGE_BRANCH="main"
+# Pin to a specific tag rather than a moving branch so installs are
+# reproducible: every v1.1.8 installer run fetches the exact same tarball.
+# Bump this constant (and verify the tag exists on the psi-oss remote)
+# when cutting a new get-physics-done release.
+GPD_PACKAGE_VERSION="v1.1.0"
 
 LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 
@@ -34,6 +38,17 @@ LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 PBS_TAG="20250409"
 PBS_PYTHON="3.13.3"
 PBS_BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_TAG"
+
+# Pinned SHA256 of each PBS tarball we might download. These are verified
+# against the file we actually pull over the wire; a mismatch aborts the
+# install (tampering, CDN corruption, or stale pin after a retag).
+# Regenerate via install-gpd/scripts/verify-pbs-hashes.sh when bumping
+# PBS_TAG or PBS_PYTHON. Values sourced from upstream SHA256SUMS:
+# https://github.com/astral-sh/python-build-standalone/releases/download/20250409/SHA256SUMS
+PBS_SHA256_LINUX_X64="1314ad7809df183542d5110fda25847ae69ea46c53e3b290fa9c400c91e3a722"
+PBS_SHA256_LINUX_ARM64="2cdf65789be7492e37db1f22958f193ebea0c9353804378799643c568beab623"
+PBS_SHA256_DARWIN_X64="90b3581a23563921b434113b08d905d766a50e7455ee6a66a98ea1b999b7e2a2"
+PBS_SHA256_DARWIN_ARM64="6d8409990e03e11432c957207195f7185da84622889bd3a0fac6f1e4944c1b7a"
 
 REQUIRED_PYTHON_MAJOR=3
 REQUIRED_PYTHON_MINOR=11
@@ -66,7 +81,12 @@ Options:
     -h, --help              Display this help message
     -v, --version <version> Install a specific OpenCode version
         --no-modify-path    Don't modify shell config files
-        --skip-key          Skip LiteLLM API key prompt
+        --skip-key          Skip PSI API key prompt
+        --export-key        Also write GPD_API_KEY into your login profile
+                            (off by default: the gpd wrapper sources the key
+                            from ~/.gpd/config/litellm.env; this flag is only
+                            needed if you launch opencode outside the wrapper
+                            from a login shell)
 
 Examples:
     curl -fsSL https://download.gpd.psi.inc/install | bash
@@ -78,6 +98,18 @@ EOF
 requested_version=""
 no_modify_path=false
 skip_key=false
+# Off by default: the `gpd` wrapper at ~/.gpd/bin/gpd sources the key from
+# ~/.gpd/config/litellm.env (chmod 600 umask 077). The legacy login-profile
+# export is a third copy of the secret that dotfile-sync tools, backups, and
+# editor plugins can slurp, and nothing in the product requires it (Windows
+# installer never wrote it; the desktop sidecar reads auth.json; the CLI
+# wrapper sources litellm.env). Users who launch opencode directly outside
+# the wrapper from a login shell can opt back in with --export-key.
+export_key=false
+# Backward-compat alias: --no-export-key was the old flag when the export was
+# on by default. We keep parsing it as a no-op so existing install scripts
+# (docs, CI, emails) don't break. Logged below.
+no_export_key=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -88,6 +120,8 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --no-modify-path) no_modify_path=true; shift ;;
         --skip-key)       skip_key=true; shift ;;
+        --export-key)     export_key=true; shift ;;
+        --no-export-key)  no_export_key=true; shift ;;  # legacy no-op (default)
         *)  warn "Unknown option: $1"; shift ;;
     esac
 done
@@ -131,20 +165,104 @@ detect_platform() {
 # ── Prerequisites ─────────────────────────────────────────────────────────
 
 check_prerequisites() {
-    for cmd in curl tar; do
-        command -v "$cmd" &>/dev/null || die "'$cmd' is required but not installed."
-    done
-    if [[ "$os" == "darwin" ]]; then
-        command -v unzip &>/dev/null || die "'unzip' is required. Run: xcode-select --install"
-    fi
-    if [[ "$os" == "linux" ]]; then
-        # Ensure python3-venv is available (needed for venv creation on Debian/Ubuntu)
-        if command -v dpkg &>/dev/null && ! dpkg -l python3-venv &>/dev/null 2>&1; then
-            if command -v apt-get &>/dev/null; then
-                log "Installing python3-venv..."
-                sudo apt-get install -y -qq python3-venv 2>/dev/null || true
+    # curl is needed to bootstrap — can't auto-install since we need it to
+    # fetch the installer in the first place
+    command -v curl &>/dev/null || die "'curl' is required but not installed."
+
+    if [[ "$os" == "linux" ]] && command -v apt-get &>/dev/null; then
+        # Collect missing tools and install them in a single apt transaction
+        local missing=()
+        for cmd in tar unzip git; do
+            command -v "$cmd" &>/dev/null || missing+=("$cmd")
+        done
+
+        # python3-venv: test actual venv creation (--help can exit 0 even
+        # when ensurepip is missing), use version-specific package name
+        if command -v python3 &>/dev/null; then
+            local test_venv
+            test_venv="$(mktemp -d)"
+            if ! python3 -m venv "$test_venv" &>/dev/null; then
+                local pyver
+                pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+                missing+=("python${pyver}-venv")
             fi
+            rm -rf "$test_venv"
         fi
+
+        if (( ${#missing[@]} > 0 )); then
+            log "Installing system dependencies: ${missing[*]}"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "${missing[@]}" || \
+                die "Failed to install system deps: ${missing[*]}"
+        fi
+    elif [[ "$os" == "darwin" ]]; then
+        # On macOS we intentionally skip probing for `git` and `python3`.
+        #
+        # Apple ships /usr/bin/git and /usr/bin/python3 as STUBS that pop a
+        # "Install the Xcode Command Line Tools?" GUI dialog the moment they
+        # are invoked on a Mac without the full CLT package installed. The
+        # dialog blocks the process, never returns from SSH, and can kick off
+        # a ~1 GB download if the user clicks the wrong button. Even
+        # `command -v` returns the stub path, so probing either tool is a
+        # trap: detection succeeds but invocation is the footgun.
+        #
+        # Our installer does not actually need git (it pulls get-physics-done
+        # as a tarball via curl, not a git clone) and it does not need the
+        # system python3 (we bootstrap an app-local standalone Python via
+        # python-build-standalone further down in ensure_python). So we just
+        # stop checking. `curl`, `tar`, `unzip` ARE real on macOS and safe.
+        for cmd in tar unzip; do
+            command -v "$cmd" &>/dev/null || die "'$cmd' is required but not installed."
+        done
+    else
+        # Non-Debian Linux (Fedora, Arch, etc.): can't auto-install, just die.
+        for cmd in tar git; do
+            command -v "$cmd" &>/dev/null || die "'$cmd' is required but not installed."
+        done
+    fi
+}
+
+# ── LaTeX ─────────────────────────────────────────────────────────────────
+# Optional dependency for physics paper compilation. Warns on failure.
+
+install_latex() {
+    if command -v pdflatex &>/dev/null; then
+        success "LaTeX already installed"
+        return 0
+    fi
+
+    log "Installing LaTeX tools (~500MB download, takes a few minutes)..."
+
+    case "$os" in
+        linux)
+            if ! command -v apt-get &>/dev/null; then
+                warn "LaTeX auto-install only supports apt-based distros — install manually"
+                return 0
+            fi
+            sudo apt-get install -y -qq texlive-latex-base texlive-binaries latexmk 2>&1 | tail -5 || \
+                warn "LaTeX install failed — run: sudo apt install texlive-latex-base texlive-binaries latexmk"
+            ;;
+        darwin)
+            if ! command -v brew &>/dev/null; then
+                warn "Homebrew not found — skipping LaTeX. Install from https://brew.sh, then: brew install --cask basictex"
+                return 0
+            fi
+            brew install --cask basictex 2>&1 | tail -5 || \
+                warn "BasicTeX install failed — run: brew install --cask basictex"
+            local texbin="/Library/TeX/texbin"
+            if [[ -x "$texbin/tlmgr" ]]; then
+                sudo "$texbin/tlmgr" update --self 2>/dev/null || true
+                sudo "$texbin/tlmgr" install latexmk 2>&1 | tail -3 || \
+                    warn "latexmk install failed — run: sudo tlmgr install latexmk"
+                export PATH="$texbin:$PATH"
+            fi
+            ;;
+    esac
+
+    if command -v pdflatex &>/dev/null; then
+        success "LaTeX installed"
+    else
+        warn "LaTeX install completed but pdflatex not on PATH yet — open a new shell"
     fi
 }
 
@@ -164,6 +282,203 @@ download() {
 
 url_exists() {
     curl -fsSL --head --retry 1 --max-time 10 -o /dev/null "$1" 2>/dev/null
+}
+
+# ── Sentinel markers for rc-file blocks ───────────────────────────────────
+#
+# Every block we write into a user rc file (PATH export, fish_add_path,
+# GPD_API_KEY login export) is wrapped in sentinel comments so we can
+# detect, replace, or remove our block safely on subsequent runs — and
+# so the uninstaller has a precise anchor to strip. The exact marker
+# strings are part of the contract with uninstall.sh / uninstall_macos.sh;
+# do not change the wording or spacing without updating both.
+GPD_SENTINEL_OPEN='# >>> GPD CLI >>>'
+GPD_SENTINEL_CLOSE='# <<< GPD CLI <<<'
+
+# Compute the SHA256 of a file using whatever is available on this system.
+# Returns the hex digest on stdout, non-zero on failure.
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum &>/dev/null; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+# Replace the block between our sentinels inside "$rc" with the content
+# from stdin. If the sentinels don't exist yet, append a new block. We
+# use awk rather than grep+sed so that user-supplied content in adjacent
+# lines can never be interpreted as a regex.
+write_rc_block() {
+    local rc="$1"
+    local new_content
+    new_content="$(cat)"
+
+    # Ensure the parent dir and file exist.
+    mkdir -p "$(dirname "$rc")" 2>/dev/null || true
+    [[ -f "$rc" ]] || : > "$rc"
+
+    local tmp
+    tmp="$(mktemp)"
+
+    if grep -qxF "$GPD_SENTINEL_OPEN" "$rc" && grep -qxF "$GPD_SENTINEL_CLOSE" "$rc"; then
+        # Rewrite between existing sentinels (first occurrence only).
+        # NB: awk reserves `close` as a built-in function name; rename
+        # the variable to `sentend` to avoid "cannot assign to close".
+        awk -v sentbegin="$GPD_SENTINEL_OPEN" \
+            -v sentend="$GPD_SENTINEL_CLOSE" \
+            -v block="$new_content" '
+            BEGIN { inside = 0; done = 0 }
+            {
+                if (!done && $0 == sentbegin) {
+                    print sentbegin
+                    print block
+                    print sentend
+                    inside = 1
+                    done = 1
+                    next
+                }
+                if (inside) {
+                    if ($0 == sentend) { inside = 0 }
+                    next
+                }
+                print
+            }
+        ' "$rc" > "$tmp"
+        mv "$tmp" "$rc"
+    else
+        # Append a new sentinel-wrapped block. Ensure the source file
+        # ends with a newline before we tack on the opener so the marker
+        # doesn't get glued onto the last existing line (happens when a
+        # user's rc file was saved without a trailing \n).
+        cp "$rc" "$tmp"
+        if [[ -s "$tmp" ]]; then
+            local last_char
+            last_char="$(tail -c1 "$tmp" 2>/dev/null || true)"
+            if [[ "$last_char" != $'\n' ]]; then
+                printf '\n' >> "$tmp"
+            fi
+        fi
+        printf '%s\n%s\n%s\n' "$GPD_SENTINEL_OPEN" "$new_content" "$GPD_SENTINEL_CLOSE" >> "$tmp"
+        mv "$tmp" "$rc"
+    fi
+}
+
+# If $rc contains a pre-sentinel (v1.1.6-era) GPD block, rewrap just that
+# block in our new sentinels without touching anything else in the file.
+# Detection: the exact comment markers the old installer used, followed
+# by the single line it wrote. Precise line-range match only — we never
+# do a substring grep on user-supplied content.
+migrate_legacy_rc_block() {
+    local rc="$1"
+    [[ -f "$rc" ]] || return 0
+
+    # Already migrated? Nothing to do.
+    if grep -qxF "$GPD_SENTINEL_OPEN" "$rc"; then
+        return 0
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+
+    # NB: awk reserves `close` as a built-in function name; we use the
+    # names `sentbegin`/`sentend` throughout to avoid the collision.
+    awk -v sentbegin="$GPD_SENTINEL_OPEN" \
+        -v sentend="$GPD_SENTINEL_CLOSE" '
+        {
+            line = $0
+            if (line == "# GPD CLI" || line == "# GPD API key for desktop app") {
+                # Peek the next line; wrap the pair in sentinels if it
+                # matches one of the shapes the old installer emitted.
+                if ((getline next_line) > 0) {
+                    if (next_line ~ /^export PATH=/ ||
+                        next_line ~ /^fish_add_path / ||
+                        next_line ~ /^export GPD_API_KEY=/) {
+                        print sentbegin
+                        print line
+                        print next_line
+                        print sentend
+                        next
+                    } else {
+                        print line
+                        print next_line
+                        next
+                    }
+                } else {
+                    print line
+                    next
+                }
+            }
+            print line
+        }
+    ' "$rc" > "$tmp"
+    mv "$tmp" "$rc"
+}
+
+# Abort if a GPD process is currently running out of $GPD_HOME — rewriting
+# the python/venv dirs under it would corrupt the running interpreter and
+# leave the user with a half-broken install.
+#
+# We cannot rely on `pgrep -f "$GPD_HOME/..."` alone: it matches the
+# kernel-visible cmdline, which for `gpd run` invocations via $PATH often
+# looks like "python -m gpd ..." with no absolute GPD_HOME path. The
+# probe falls through three layers — cmdline match, /proc/<pid>/exe
+# symlink inspection (Linux), and lsof (macOS) — so a PATH-invoked GPD
+# is still caught. All probes are best-effort: if a tool is missing we
+# warn but do not die, since a spurious failure here would block legit
+# re-runs.
+check_no_running_gpd() {
+    local detected=false
+
+    # Fast path: process whose cmdline mentions an absolute $GPD_HOME
+    # path. Catches the venv-wrapper invocation on both platforms.
+    if command -v pgrep &>/dev/null; then
+        if pgrep -f "$GPD_HOME/(venv|python)/bin" >/dev/null 2>&1; then
+            detected=true
+        elif pgrep -f "$GPD_HOME" >/dev/null 2>&1; then
+            detected=true
+        fi
+    fi
+
+    # Linux: walk /proc/<pid>/exe symlinks to catch PATH-launched invocations
+    # whose cmdline no longer reflects GPD_HOME (e.g. `gpd` resolves to the
+    # venv via PATH and execs into `python -m gpd ...`). The exe symlink
+    # always points at the real interpreter binary, so canonicalize both
+    # sides and prefix-match.
+    if [[ "$detected" != true && "$os" == "linux" && -d /proc ]]; then
+        local gpd_resolved
+        gpd_resolved="$(realpath -m -- "$GPD_HOME" 2>/dev/null || echo "$GPD_HOME")"
+        local pid_dir
+        for pid_dir in /proc/[0-9]*; do
+            [[ -r "$pid_dir/exe" ]] || continue
+            local exe_path
+            exe_path="$(readlink -f -- "$pid_dir/exe" 2>/dev/null || true)"
+            [[ -n "$exe_path" ]] || continue
+            if [[ "$exe_path" == "$gpd_resolved"/* ]]; then
+                detected=true
+                break
+            fi
+        done
+    fi
+
+    # macOS: no /proc. Use lsof to find any process holding an fd anywhere
+    # under $GPD_HOME. Quiet on success, non-zero when nothing matches.
+    if [[ "$detected" != true && "$os" == "darwin" ]]; then
+        if command -v lsof &>/dev/null; then
+            if lsof +D "$GPD_HOME" 2>/dev/null | grep -q . ; then
+                detected=true
+            fi
+        else
+            warn "lsof not available — cannot verify no GPD processes hold files in $GPD_HOME"
+        fi
+    fi
+
+    if [[ "$detected" == true ]]; then
+        die "Detected a running GPD process. Quit GPD before running the installer again."
+    fi
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────
@@ -191,49 +506,197 @@ opencode_asset_name() {
     esac
 }
 
-install_opencode() {
-    local dest="$GPD_BIN_DIR/opencode"
+# Install the GPD desktop .deb on Debian/Ubuntu. Die on failure — the .deb
+# is the primary experience on these systems; a silent fallback to CLI-only
+# would leave users without the GUI/menu entry they expect.
+install_gpd_deb() {
+    local dest="$1"
 
-    if [[ -x "$dest" ]]; then
-        success "OpenCode CLI already installed"
+    # Already installed? Symlink CLI and return.
+    if [[ -x "/usr/bin/opencode-cli" ]] && [[ -x "/usr/bin/GPD" ]]; then
+        success "GPD desktop app already installed"
+        ln -sf /usr/bin/opencode-cli "$dest" 2>/dev/null || true
         return 0
     fi
 
-    local asset
-    asset="$(opencode_asset_name)"
-    local gpd_url="https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest/download/${asset}"
-    local fallback_url="https://github.com/${OPENCODE_FALLBACK_ORG}/${OPENCODE_FALLBACK_REPO}/releases/latest/download/${asset}"
+    # Discover .deb URL via web redirect (no API rate limit)
+    local tag deb_url
+    tag="$(curl -fsSLI --max-time 10 "https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest" 2>/dev/null \
+        | grep -i '^location:' | tail -1 | grep -oE 'tag/[^ ]*' | sed 's|tag/||' | tr -d '\r\n')" || true
 
-    local url=""
-    if [[ -n "$requested_version" ]]; then
-        url="https://github.com/${OPENCODE_FALLBACK_ORG}/${OPENCODE_FALLBACK_REPO}/releases/download/v${requested_version}/${asset}"
-    elif url_exists "$gpd_url"; then
-        url="$gpd_url"
-    elif url_exists "$fallback_url"; then
-        url="$fallback_url"
-    else
-        die "Could not find OpenCode CLI binary for ${os}/${arch}."
-    fi
+    [[ -n "$tag" ]] || die "Could not discover latest GPD release tag. Check network connectivity."
+
+    local ver="${tag#*-v}"
+    deb_url="https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/download/${tag}/GPD_${ver}_amd64.deb"
+
+    url_exists "$deb_url" || die "GPD .deb not found at $deb_url (arch mismatch or missing release asset)"
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    local archive="$tmp_dir/$asset"
-    download "$url" "$archive"
+    trap "rm -rf '$tmp_dir'" RETURN
+    local deb_file="$tmp_dir/gpd.deb"
 
-    log "Extracting OpenCode CLI..."
-    case "$asset" in
-        *.tar.gz) tar -xzf "$archive" -C "$tmp_dir" ;;
-        *.zip)    unzip -qo "$archive" -d "$tmp_dir" ;;
+    download "$deb_url" "$deb_file"
+    log "Installing GPD desktop app (.deb, ~80MB)..."
+    # dpkg -i leaves packages unconfigured if deps are missing; apt-get
+    # install -f fixes deps but we must re-run dpkg afterwards to complete
+    # the original install. Chaining them with just `|| apt-get install -f`
+    # leaves GPD half-installed when deps need to be pulled in.
+    if ! sudo dpkg -i "$deb_file" 2>&1; then
+        sudo apt-get install -f -y -qq 2>&1 || \
+            die "apt-get failed to resolve GPD dependencies. Check network and disk space."
+        sudo dpkg -i "$deb_file" 2>&1 || \
+            die "dpkg install failed after dependency fix. Check sudo access and disk space."
+    fi
+
+    if [[ -x "/usr/bin/opencode-cli" ]]; then
+        ln -sf /usr/bin/opencode-cli "$dest"
+        success "GPD desktop app installed (CLI: /usr/bin/opencode-cli, GUI: /usr/bin/GPD)"
+        return 0
+    fi
+
+    die ".deb install completed but /usr/bin/opencode-cli not found"
+}
+
+# Install the GPD desktop app on macOS via the .dmg from /releases/latest.
+# Non-fatal: if the .dmg can't be fetched (draft release, network, etc.),
+# warn and move on so the CLI still installs.
+install_gpd_dmg() {
+    # Idempotency: skip if already present.
+    if [[ -d "/Applications/GPD.app" ]]; then
+        success "GPD desktop app already installed at /Applications/GPD.app"
+        return 0
+    fi
+
+    # Upstream asset arch suffixes differ from our internal arch label.
+    local dmg_arch
+    case "$arch" in
+        arm64) dmg_arch="aarch64" ;;
+        x64)   dmg_arch="x64" ;;
+        *)     warn "GPD desktop app not published for darwin-${arch}; skipping."; return 0 ;;
     esac
 
-    local binary
-    binary="$(find "$tmp_dir" -name 'opencode' -type f -not -path "$archive" | head -1)"
-    [[ -n "$binary" ]] || { rm -rf "$tmp_dir"; die "Could not find opencode binary in archive"; }
+    # Discover tag via the /releases/latest redirect (no API rate limit).
+    # Same pattern as install_gpd_deb.
+    local tag
+    tag="$(curl -fsSLI --max-time 10 "https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest" 2>/dev/null \
+        | grep -i '^location:' | tail -1 | grep -oE 'tag/[^ ]*' | sed 's|tag/||' | tr -d '\r\n')" || true
 
-    mv "$binary" "$dest"
-    chmod +x "$dest"
-    rm -rf "$tmp_dir"
-    success "OpenCode CLI installed"
+    if [[ -z "$tag" ]]; then
+        warn "Couldn't discover GPD release tag — skipping desktop app (install the .dmg manually from the Releases page)."
+        return 0
+    fi
+
+    local ver="${tag#*-v}"
+    if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        warn "Couldn't parse version from tag '$tag' — skipping desktop app."
+        return 0
+    fi
+
+    local asset="GPD_${ver}_${dmg_arch}.dmg"
+    local dmg_url="https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/download/${tag}/${asset}"
+
+    if ! url_exists "$dmg_url"; then
+        warn "GPD .dmg not found at $dmg_url — skipping desktop app."
+        return 0
+    fi
+
+    local tmp_dir dmg_file mount_point
+    tmp_dir="$(mktemp -d)"
+    dmg_file="$tmp_dir/$asset"
+    trap "hdiutil detach '$mount_point' -quiet 2>/dev/null || true; rm -rf '$tmp_dir'" RETURN
+
+    download "$dmg_url" "$dmg_file"
+    log "Mounting disk image..."
+    # Use -plist for parseable output — the tabular form with -quiet
+    # writes nothing to stdout, and without -quiet it's a mix of progress
+    # and final lines that's fragile to parse. plutil ships on every
+    # macOS since 10.5.
+    local plist
+    plist="$(hdiutil attach "$dmg_file" -nobrowse -mountrandom /tmp -plist 2>/dev/null)" || {
+        die "hdiutil attach failed. If the download was interrupted, re-run the installer."
+    }
+    mount_point="$(printf '%s' "$plist" | plutil -p - 2>/dev/null \
+        | awk -F'"' '/"mount-point"/ {print $4; exit}')"
+    if [[ -z "$mount_point" || ! -d "$mount_point" ]]; then
+        die "hdiutil attach succeeded but no mount point in output. Re-run the installer."
+    fi
+
+    log "Copying GPD.app to /Applications..."
+    # ditto preserves resource forks, symlinks, and extended attributes
+    # more faithfully than cp -R on HFS+ / APFS.
+    if ! ditto "$mount_point/GPD.app" "/Applications/GPD.app"; then
+        die "Failed to copy GPD.app to /Applications (check disk space + permissions)."
+    fi
+
+    # Strip Gatekeeper quarantine so the user isn't blocked with a
+    # "developer cannot be verified" dialog on first launch. The chain of
+    # trust here is already "user ran our curl|bash from our URL"; asking
+    # them to open System Settings for every install is bad UX.
+    # When we ship a notarized .dmg, this line becomes redundant.
+    xattr -dr com.apple.quarantine "/Applications/GPD.app" 2>/dev/null || true
+
+    success "GPD desktop app installed at /Applications/GPD.app"
+}
+
+install_opencode() {
+    local dest="$GPD_BIN_DIR/opencode"
+
+    # On Debian/Ubuntu (dpkg + sudo), the .deb is the primary install path
+    # and a failure is fatal. On other Linux (no dpkg), fall back to the
+    # standalone CLI binary.
+    if [[ "$os" == "linux" ]] && command -v dpkg &>/dev/null && command -v sudo &>/dev/null; then
+        install_gpd_deb "$dest"
+        return 0
+    fi
+
+    # Install standalone CLI if not already present.
+    if [[ -x "$dest" ]]; then
+        success "OpenCode CLI already installed"
+    else
+        local asset
+        asset="$(opencode_asset_name)"
+        local gpd_url="https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest/download/${asset}"
+        local fallback_url="https://github.com/${OPENCODE_FALLBACK_ORG}/${OPENCODE_FALLBACK_REPO}/releases/latest/download/${asset}"
+
+        local url=""
+        if [[ -n "$requested_version" ]]; then
+            url="https://github.com/${OPENCODE_FALLBACK_ORG}/${OPENCODE_FALLBACK_REPO}/releases/download/v${requested_version}/${asset}"
+        elif url_exists "$gpd_url"; then
+            url="$gpd_url"
+        elif url_exists "$fallback_url"; then
+            url="$fallback_url"
+        else
+            die "Could not find OpenCode CLI binary for ${os}/${arch}."
+        fi
+
+        local tmp_dir
+        tmp_dir="$(mktemp -d)"
+        local archive="$tmp_dir/$asset"
+        download "$url" "$archive"
+
+        log "Extracting OpenCode CLI..."
+        case "$asset" in
+            *.tar.gz) tar -xzf "$archive" -C "$tmp_dir" ;;
+            *.zip)    unzip -qo "$archive" -d "$tmp_dir" ;;
+        esac
+
+        local binary
+        binary="$(find "$tmp_dir" -name 'opencode' -type f -not -path "$archive" | head -1)"
+        [[ -n "$binary" ]] || { rm -rf "$tmp_dir"; die "Could not find opencode binary in archive"; }
+
+        mv "$binary" "$dest"
+        chmod +x "$dest"
+        rm -rf "$tmp_dir"
+        success "OpenCode CLI installed"
+    fi
+
+    # On macOS, also install the GPD desktop app from the .dmg. The CLI
+    # alone is not what users expect — the README promises /Applications/
+    # GPD.app on macOS, and without this call it was never being installed.
+    if [[ "$os" == "darwin" ]]; then
+        install_gpd_dmg
+    fi
 }
 
 # ── Step 2: Python ────────────────────────────────────────────────────────
@@ -259,29 +722,51 @@ pbs_triple() {
     esac
 }
 
+# Lookup the hardcoded SHA256 for the PBS tarball matching our platform.
+pbs_expected_sha256() {
+    case "${os}_${arch}" in
+        linux_x64)    echo "$PBS_SHA256_LINUX_X64" ;;
+        linux_arm64)  echo "$PBS_SHA256_LINUX_ARM64" ;;
+        darwin_x64)   echo "$PBS_SHA256_DARWIN_X64" ;;
+        darwin_arm64) echo "$PBS_SHA256_DARWIN_ARM64" ;;
+        *)            die "No PBS SHA256 pin for ${os}/${arch}" ;;
+    esac
+}
+
 ensure_python() {
     local python_bin="$GPD_PYTHON_DIR/bin/python3"
 
-    # Check app-local Python first
+    # Check app-local Python first (works on all platforms)
     if [[ -x "$python_bin" ]] && python_version_ok "$python_bin"; then
         success "Using app-local Python"
         PYTHON="$python_bin"
         return 0
     fi
 
-    # Check system Python
-    for cmd in python3 python; do
-        if command -v "$cmd" &>/dev/null && python_version_ok "$cmd"; then
-            local ver
-            ver="$("$cmd" --version 2>&1)"
-            success "Found system $ver"
-            PYTHON="$(command -v "$cmd")"
-            return 0
-        fi
-    done
+    # Check system Python -- but NOT on macOS.
+    #
+    # /usr/bin/python3 on macOS is a stub that pops a GUI "Install Xcode
+    # Command Line Tools?" dialog the moment it's invoked on a Mac without
+    # the full CLT package. `command -v` returns the stub path (detection
+    # succeeds), but then `python_version_ok` runs the stub and triggers
+    # the dialog from what the user expects to be a silent installer.
+    # Skip the probe entirely; we always download the app-local standalone
+    # Python on macOS (30MB, offline-friendly, no CLT dependency).
+    if [[ "$os" != "darwin" ]]; then
+        for cmd in python3 python; do
+            if command -v "$cmd" &>/dev/null && python_version_ok "$cmd"; then
+                local ver
+                ver="$("$cmd" --version 2>&1)"
+                success "Found system $ver"
+                PYTHON="$(command -v "$cmd")"
+                return 0
+            fi
+        done
+    fi
 
-    # Download standalone Python
-    log "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found — installing app-local Python"
+    # Download standalone Python (always on macOS; Linux only if system
+    # python3 is missing or older than 3.11)
+    log "Installing app-local Python ${PBS_PYTHON} (${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ not found or Mac)"
     local triple
     triple="$(pbs_triple)"
     local filename="cpython-${PBS_PYTHON}+${PBS_TAG}-${triple}-install_only.tar.gz"
@@ -289,13 +774,56 @@ ensure_python() {
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    download "$url" "$tmp_dir/$filename"
+    local archive="$tmp_dir/$filename"
+    download "$url" "$archive"
+
+    # Verify SHA256 against our pinned value BEFORE we touch any on-disk
+    # Python dir. A mismatch here means the CDN handed us something other
+    # than the build we vetted — could be tampering, partial download, or
+    # a stale pin after upstream retagged. Either way, do not extract.
+    local expected actual
+    expected="$(pbs_expected_sha256)"
+    actual="$(compute_sha256 "$archive")" || die "Cannot verify Python checksum: no sha256sum/shasum available"
+    if [[ "$actual" != "$expected" ]]; then
+        rm -rf "$tmp_dir"
+        die "PBS checksum mismatch — suspected tampering or stale pin. Aborting."
+    fi
 
     log "Extracting Python to $GPD_PYTHON_DIR..."
-    rm -rf "$GPD_PYTHON_DIR"
-    mkdir -p "$GPD_PYTHON_DIR"
-    tar -xzf "$tmp_dir/$filename" -C "$GPD_PYTHON_DIR" --strip-components=1
-    rm -rf "$tmp_dir"
+    # Atomic extract + swap: never delete the working Python until the
+    # new one is proven runnable. If any step fails we either stay on the
+    # old tree (if it existed) or leave no tree at all — never a half-
+    # populated one. Failure modes we guard against here:
+    #   1. tar extract errors mid-stream (partial tree)
+    #   2. extracted tree missing/broken python3 binary (bad asset, hash
+    #      matched but something is wrong in our pin table)
+    #   3. mv of new tree into place fails after old was moved aside
+    local new_dir="$GPD_PYTHON_DIR.new"
+    local old_dir="$GPD_PYTHON_DIR.old"
+    rm -rf "$new_dir" "$old_dir"
+    mkdir -p "$new_dir"
+    if ! tar -xzf "$archive" -C "$new_dir" --strip-components=1; then
+        rm -rf "$new_dir" "$tmp_dir"
+        die "Python extract failed"
+    fi
+    # Liveness probe: spawn the interpreter and run an empty program.
+    # This catches cases where the archive extracted cleanly but the
+    # binary can't execute (wrong arch, missing dynamic loader, etc.).
+    if ! "$new_dir/bin/python3" -c "" 2>/dev/null; then
+        rm -rf "$new_dir" "$tmp_dir"
+        die "Extracted Python is not runnable"
+    fi
+    if [[ -d "$GPD_PYTHON_DIR" ]]; then
+        mv "$GPD_PYTHON_DIR" "$old_dir"
+    fi
+    if ! mv "$new_dir" "$GPD_PYTHON_DIR"; then
+        # Best-effort rollback to the old tree so the user isn't left
+        # with no Python at all.
+        [[ -d "$old_dir" ]] && mv "$old_dir" "$GPD_PYTHON_DIR"
+        rm -rf "$tmp_dir"
+        die "Python swap failed"
+    fi
+    rm -rf "$old_dir" "$tmp_dir"
 
     [[ -x "$python_bin" ]] || die "Python extraction failed"
     success "Python ${PBS_PYTHON} installed"
@@ -317,12 +845,35 @@ install_gpd_package() {
 
     "$venv_python" -m pip install --upgrade --quiet pip
 
-    local source_url="https://github.com/${GPD_PACKAGE_REPO}/archive/refs/heads/${GPD_PACKAGE_BRANCH}.tar.gz"
-    log "Installing get-physics-done from GitHub..."
+    # Pinned to a concrete tag (not `main`) so every install of this
+    # installer version grabs the exact same source tree.
+    local source_url="https://github.com/${GPD_PACKAGE_REPO}/archive/refs/tags/${GPD_PACKAGE_VERSION}.tar.gz"
+
+    # Pre-flight check: if the tag was deleted upstream, fail loudly
+    # before pip swallows the 404 as a generic "no matching distribution".
+    if ! url_exists "$source_url"; then
+        die "GPD package tag ${GPD_PACKAGE_VERSION} not found — aborting."
+    fi
+
+    log "Installing get-physics-done ${GPD_PACKAGE_VERSION} from GitHub..."
     "$venv_pip" install --upgrade --quiet "$source_url"
 
     [[ -x "$GPD_VENV_DIR/bin/gpd" ]] || die "GPD installation failed — gpd command not found"
     success "GPD package installed"
+}
+
+# Two-step liveness probe run after install. Split into two calls so the
+# user sees a distinct message when the interpreter is broken (venv corrupt)
+# vs. when the package import itself fails (pip install completed but
+# didn't actually produce a usable gpd module).
+verify_gpd_install() {
+    local venv_python="$GPD_VENV_DIR/bin/python"
+    if ! "$venv_python" -c "" 2>/dev/null; then
+        die "GPD venv is not runnable — the Python interpreter inside ${GPD_VENV_DIR} failed to start. Re-run the installer."
+    fi
+    if ! "$venv_python" -c "import gpd" 2>/dev/null; then
+        die "GPD package import failed — 'get-physics-done' was installed but 'import gpd' does not work. Re-run the installer."
+    fi
 }
 
 # ── Step 4: LiteLLM key ──────────────────────────────────────────────────
@@ -331,42 +882,159 @@ configure_litellm_key() {
     local env_file="$GPD_CONFIG_DIR/litellm.env"
 
     if [[ -f "$env_file" ]]; then
-        success "LiteLLM key already configured"
+        success "PSI key already configured"
         return 0
     fi
 
     if [[ "$skip_key" == true ]]; then
-        warn "Skipping LiteLLM key (use --skip-key or set GPD_LITELLM_KEY env var)"
+        warn "Skipping PSI key (use --skip-key or set GPD_API_KEY env var)"
         return 0
     fi
 
+    # Regex for PSI keys — same contract the interactive loop enforces
+    # below. We apply it to the env-var branch too so CI callers that
+    # typo the key or pass a truncated value fail fast instead of writing
+    # a broken key to litellm.env + auth.json + login profile.
+    local key_pattern='^sk-[A-Za-z0-9_-]{10,}$'
+
     # Check for env var (non-interactive mode)
-    if [[ -n "${GPD_LITELLM_KEY:-}" ]]; then
-        local key="$GPD_LITELLM_KEY"
+    local key="${GPD_API_KEY:-${GPD_LITELLM_KEY:-}}"
+    if [[ -n "$key" ]]; then
+        # Env-var preset: normalize the same way we do for interactive
+        # input so a stray CR from a pasted file doesn't corrupt the
+        # saved value, then enforce the shape check. We do NOT re-prompt
+        # in non-interactive mode — the caller (CI, scripted install)
+        # needs to notice the bad input rather than silently skipping.
+        key="${key//$'\r'/}"
+        key="${key//[[:space:]]/}"
+        if [[ ! "$key" =~ $key_pattern ]]; then
+            die "GPD_API_KEY env var does not match expected format sk-<10+ alphanumeric/underscore/hyphen>. Check for typos."
+        fi
     elif [[ ! -t 0 ]]; then
-        warn "Non-interactive mode: set GPD_LITELLM_KEY env var or run 'gpd config set-key' after install"
+        warn "Non-interactive mode: set GPD_API_KEY env var or run 'gpd config set-key' after install"
         return 0
     else
         printf "\n"
-        printf " ${BOLD}LiteLLM API Key Configuration${RESET}\n"
-        printf " ${DIM}Your key connects GPD to AI models. Get it from your lab admin.${RESET}\n"
+        printf " ${BOLD}PSI API Key Configuration${RESET}\n"
+        printf " ${DIM}Your PSI key connects GPD to AI models. Get it from your lab admin.${RESET}\n"
         printf "\n"
 
-        local key=""
-        while [[ -z "$key" ]]; do
-            printf " Enter your LiteLLM key (sk-...): "
+        # Up to 3 validation attempts. Echo the key as the user types so
+        # they can verify what they pasted (per user request; users
+        # generally want to confirm a `sk-` key is intact before hitting
+        # Enter). This does leave the key in terminal scrollback, which
+        # is acceptable on a trusted local install.
+        local attempts=0
+        local max_attempts=3
+        key=""
+        while (( attempts < max_attempts )); do
+            printf " Enter your PSI key (sk-...): "
             read -r key
-            [[ -n "$key" ]] || warn "Key cannot be empty. Ctrl+C to skip."
+            # Strip CR (paste from Windows-terminated files) and any
+            # other whitespace before validating or storing.
+            key="${key//$'\r'/}"
+            key="${key//[[:space:]]/}"
+            if [[ -z "$key" ]]; then
+                warn "Key cannot be empty. Ctrl+C to skip."
+            elif [[ ! "$key" =~ $key_pattern ]]; then
+                warn "Key format looks wrong. Expected sk-<letters/digits/_-> (min 10 chars after prefix)."
+                key=""
+            else
+                break
+            fi
+            attempts=$((attempts + 1))
         done
+        if [[ -z "$key" ]]; then
+            die "Failed to enter a valid PSI key after ${max_attempts} attempts."
+        fi
     fi
 
     ( umask 077; cat > "$env_file" <<EOF
-# GPD LiteLLM configuration
-LITELLM_API_KEY=${key}
-LITELLM_API_BASE=${LITELLM_PROXY_URL}
+# GPD configuration — used by CLI wrapper and sourced into desktop app session
+GPD_API_KEY="${key}"
+LITELLM_API_BASE="${LITELLM_PROXY_URL}"
 EOF
     )
-    success "LiteLLM key saved"
+
+    # Export GPD_API_KEY in the right login-profile file so the desktop app
+    # inherits it. Bash's lookup order is .bash_profile → .bash_login →
+    # .profile, reading whichever exists first. Writing unconditionally to
+    # .profile fails on macOS Terminal.app users who have a .bash_profile
+    # (common when Homebrew or similar installers created one) because bash
+    # stops at .bash_profile and never reaches .profile.
+    local profile="$HOME/.profile"
+    case "$(basename "${SHELL:-bash}")" in
+        zsh)  profile="${ZDOTDIR:-$HOME}/.zprofile" ;;
+        bash) [[ -f "$HOME/.bash_profile" ]] && profile="$HOME/.bash_profile" ;;
+    esac
+
+    if [[ "$export_key" == true ]]; then
+        warn "Writing GPD_API_KEY into login profile; any tool that reads this file (dotfile sync, backup, editor plugins) may see your key. Re-run without --export-key to skip."
+        # Stash the intended export line + target file for the combined
+        # rc-block writer (configure_path). Doing the actual write there
+        # keeps us to one sentinel block per file so we don't have two
+        # competing writers stomping each other's blocks on the same
+        # file (notably bash's .bash_profile, which is both the login
+        # profile AND a PATH target).
+        GPD_KEY_EXPORT_LINE="$(printf 'export GPD_API_KEY=%q' "$key")"
+        GPD_KEY_EXPORT_FILE="$profile"
+    else
+        log "Login-profile GPD_API_KEY export disabled (default). Key lives in $env_file (chmod 600) and auth.json. The gpd wrapper sources litellm.env automatically; pass --export-key if you invoke opencode directly from a login shell."
+    fi
+
+    # Also write the key into opencode's auth.json so the GPD desktop app
+    # can see an existing auth entry on first launch and skip its own
+    # "enter your key" welcome screen. Without this, users who install via
+    # the CLI installer and enter their PSI key here still get prompted
+    # again when they open the desktop app (matching fix in
+    # packages/app/src/app.tsx:SetupGate).
+    #
+    # auth.json path: opencode uses xdg-basedir (npm), which in v5.x
+    # ignores platform and always resolves xdgData to ~/.local/share on
+    # macOS and Windows too — it does NOT honor ~/Library/Application
+    # Support on darwin. Match that behavior exactly; writing to the
+    # conventional macOS path would leave the file invisible to opencode
+    # and the desktop app would re-prompt for the key on first launch.
+    # Format: {"<providerID>": {"type":"api","key":"sk-..."}}
+    local xdg_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    local auth_dir="$xdg_data/opencode"
+    local auth_file="$auth_dir/auth.json"
+    mkdir -p "$auth_dir"
+    # If auth.json already has other providers, preserve them. Otherwise
+    # write a fresh one. Prefer the app-local Python we just installed —
+    # using bare `python3` on a fresh macOS where Xcode CLT is absent
+    # triggers the "install developer tools" GUI prompt even though the
+    # stub succeeds `command -v` checks.
+    local merger_python=""
+    if [[ -n "${PYTHON:-}" && -x "${PYTHON:-}" ]]; then
+        merger_python="$PYTHON"
+    elif [[ -x "$GPD_VENV_DIR/bin/python" ]]; then
+        merger_python="$GPD_VENV_DIR/bin/python"
+    fi
+    if [[ -f "$auth_file" && -n "$merger_python" ]]; then
+        # Pass the key through an env var, not argv, so it doesn't show up
+        # in /proc/<pid>/cmdline (visible via `ps` to the owner on most
+        # systems, and to other users on systems without hidepid).
+        GPD_AUTH_KEY="$key" "$merger_python" - "$auth_file" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+key = os.environ["GPD_AUTH_KEY"]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+data["gpd"] = {"type": "api", "key": key}
+# umask doesn't apply to files that already exist; re-apply 0600 after write.
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+os.chmod(path, 0o600)
+PY
+    else
+        ( umask 077; printf '{\n  "gpd": {\n    "type": "api",\n    "key": "%s"\n  }\n}\n' "$key" > "$auth_file" )
+    fi
+
+    success "PSI key saved"
 }
 
 # ── Step 5: GPD wrapper ──────────────────────────────────────────────────
@@ -395,43 +1063,147 @@ configure_path() {
         return 0
     fi
 
-    # Already on PATH?
-    if echo "$PATH" | tr ':' '\n' | grep -qxF "$GPD_BIN_DIR"; then
-        success "$GPD_BIN_DIR already on PATH"
-        return 0
-    fi
-
     local entry="export PATH=\"$GPD_BIN_DIR:\$PATH\""
     local current_shell
     current_shell="$(basename "${SHELL:-bash}")"
     local added=false
 
-    # Determine rc files by shell
-    local rc_files
+    # Determine rc files by shell. We use arrays (not space-delimited
+    # strings) so paths containing spaces — $HOME or $ZDOTDIR on some
+    # macOS setups — are not word-split. We target both the interactive
+    # rc (.bashrc/.zshrc) and the login rc (.bash_profile/.zprofile) so
+    # that non-interactive login shells (launchd, `ssh host cmd`, VSCode
+    # tasks) also see $PATH, not just Terminal.app.
+    local -a rc_files
     case "$current_shell" in
-        fish) rc_files="$HOME/.config/fish/config.fish" ;;
-        zsh)  rc_files="${ZDOTDIR:-$HOME}/.zshrc" ;;
-        *)    rc_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile" ;;
+        fish)
+            rc_files=("$HOME/.config/fish/config.fish")
+            ;;
+        zsh)
+            rc_files=("${ZDOTDIR:-$HOME}/.zshrc" "${ZDOTDIR:-$HOME}/.zprofile")
+            ;;
+        *)
+            # Bash: .bashrc for interactive non-login, plus whichever of
+            # .bash_profile/.profile bash would actually read on login.
+            # Bash reads .bash_profile → .bash_login → .profile in order
+            # and stops at the first that exists, so picking the wrong
+            # one means our PATH entry is never sourced on login.
+            rc_files=("$HOME/.bashrc")
+            if [[ -f "$HOME/.bash_profile" ]]; then
+                rc_files+=("$HOME/.bash_profile")
+            elif [[ -f "$HOME/.bash_login" ]]; then
+                rc_files+=("$HOME/.bash_login")
+            else
+                rc_files+=("$HOME/.profile")
+            fi
+            ;;
     esac
 
-    for rc in $rc_files; do
-        if [[ -f "$rc" ]] && ! grep -qF "$GPD_BIN_DIR" "$rc"; then
-            if [[ "$current_shell" == "fish" ]]; then
-                printf '\n# GPD CLI\nfish_add_path %s\n' "$GPD_BIN_DIR" >> "$rc"
-            else
-                printf '\n# GPD CLI\n%s\n' "$entry" >> "$rc"
+    # Run the v1.1.6-era legacy block migration on every candidate rc file
+    # BEFORE we decide whether to short-circuit. A v1.1.6 install already
+    # put $GPD_BIN_DIR on $PATH without sentinels, so the env-var check
+    # below would otherwise return early and the legacy block would never
+    # get wrapped in sentinels — leaving the uninstaller unable to find
+    # or strip it on any subsequent run.
+    for rc in "${rc_files[@]}"; do
+        migrate_legacy_rc_block "$rc"
+    done
+    # Also migrate the login profile targeted by configure_litellm_key if
+    # it's not already among rc_files — the legacy "# GPD API key for
+    # desktop app" block could live there on a v1.1.6 install.
+    if [[ -n "${GPD_KEY_EXPORT_FILE:-}" ]]; then
+        local already_in_list=false
+        for rc in "${rc_files[@]}"; do
+            if [[ "$rc" == "$GPD_KEY_EXPORT_FILE" ]]; then
+                already_in_list=true
+                break
             fi
-            log "Added to $rc"
-            added=true
-            break
+        done
+        if [[ "$already_in_list" == false ]]; then
+            migrate_legacy_rc_block "$GPD_KEY_EXPORT_FILE"
         fi
+    fi
+
+    # Already on PATH? write_rc_block is idempotent so re-running it is
+    # safe, but skipping when we truly have nothing to do keeps output
+    # quiet. NB: we run migrate_legacy_rc_block above no matter what, so
+    # v1.1.6 legacy blocks still get wrapped before we return here.
+    if echo "$PATH" | tr ':' '\n' | grep -qxF "$GPD_BIN_DIR"; then
+        success "$GPD_BIN_DIR already on PATH"
+        return 0
+    fi
+
+    # Decide the PATH body once; the key export is optional and only
+    # appears in the file configure_litellm_key picked (typically the
+    # login profile). Using a single sentinel block per file keeps the
+    # contract simple: exactly one GPD block, replaceable on re-install.
+    local path_body
+    if [[ "$current_shell" == "fish" ]]; then
+        path_body="fish_add_path $GPD_BIN_DIR"
+    else
+        path_body="$entry"
+    fi
+
+    # Write the PATH block to each rc file. If this rc file is also the
+    # login-profile file configure_litellm_key targeted, append the key
+    # export INSIDE the same sentinel block.
+    for rc in "${rc_files[@]}"; do
+        # Create missing login-shell rc files so non-interactive logins
+        # (zsh -l -c, launchd, etc.) pick up $PATH. Don't create .bashrc/
+        # .zshrc if missing — the parent dir may legitimately not exist
+        # (fish) and we write to the login file anyway.
+        if [[ ! -f "$rc" ]]; then
+            case "$rc" in
+                *.zprofile|*.bash_profile|*.profile|*.bash_login)
+                    mkdir -p "$(dirname "$rc")" 2>/dev/null || true
+                    : > "$rc"
+                    ;;
+                *)
+                    continue
+                    ;;
+            esac
+        fi
+        migrate_legacy_rc_block "$rc"
+        local body="$path_body"
+        if [[ -n "${GPD_KEY_EXPORT_LINE:-}" && "$rc" == "${GPD_KEY_EXPORT_FILE:-}" ]]; then
+            body+=$'\n'"$GPD_KEY_EXPORT_LINE"
+        fi
+        printf '%s\n' "$body" | write_rc_block "$rc"
+        log "Added to $rc"
+        added=true
     done
 
     if [[ "$added" == false ]]; then
         local target="$HOME/.bashrc"
         [[ "$current_shell" == "zsh" ]] && target="$HOME/.zshrc"
-        printf '\n# GPD CLI\n%s\n' "$entry" >> "$target"
+        migrate_legacy_rc_block "$target"
+        local body="$path_body"
+        if [[ -n "${GPD_KEY_EXPORT_LINE:-}" && "$target" == "${GPD_KEY_EXPORT_FILE:-}" ]]; then
+            body+=$'\n'"$GPD_KEY_EXPORT_LINE"
+        fi
+        printf '%s\n' "$body" | write_rc_block "$target"
         log "Added to $target"
+    fi
+
+    # Edge case: the login-profile target configure_litellm_key picked
+    # might not be among configure_path's rc files (e.g. user's shell is
+    # neither bash nor zsh, or an unusual $SHELL value). Write the key
+    # block there separately so the desktop app still sees the export.
+    if [[ -n "${GPD_KEY_EXPORT_LINE:-}" && -n "${GPD_KEY_EXPORT_FILE:-}" ]]; then
+        local already_wrote=false
+        for rc in "${rc_files[@]}"; do
+            if [[ "$rc" == "$GPD_KEY_EXPORT_FILE" ]]; then
+                already_wrote=true
+                break
+            fi
+        done
+        if [[ "$already_wrote" == false ]]; then
+            mkdir -p "$(dirname "$GPD_KEY_EXPORT_FILE")" 2>/dev/null || true
+            [[ -f "$GPD_KEY_EXPORT_FILE" ]] || : > "$GPD_KEY_EXPORT_FILE"
+            migrate_legacy_rc_block "$GPD_KEY_EXPORT_FILE"
+            printf '%s\n' "$GPD_KEY_EXPORT_LINE" | write_rc_block "$GPD_KEY_EXPORT_FILE"
+            log "Added GPD_API_KEY to $GPD_KEY_EXPORT_FILE"
+        fi
     fi
 
     # GitHub Actions support
@@ -446,26 +1218,63 @@ configure_path() {
 # ── Step 7: GPD runtime config ───────────────────────────────────────────
 
 configure_gpd_runtime() {
+    # Run from $HOME so gpd's checkout-root detection doesn't try to read
+    # an unreadable cwd (e.g. /root when script is run via sudo).
     if [[ -x "$GPD_VENV_DIR/bin/python" ]]; then
         log "Configuring GPD for OpenCode..."
-        "$GPD_VENV_DIR/bin/python" -m gpd.cli install opencode --global --skip-readiness-check 2>/dev/null || \
-            warn "GPD runtime configuration skipped (run manually: gpd install opencode --global)"
+        # NB: the --skip-readiness-check flag was added to gpd.cli on `main`
+        # after the v1.1.0 tag — which is what $GPD_PACKAGE_VERSION pins to.
+        # Don't pass it here; bump the flag back in once get-physics-done
+        # cuts v1.2.0 or later.
+        if ! ( cd "$HOME" && "$GPD_VENV_DIR/bin/python" -m gpd.cli install opencode --global ); then
+            warn "GPD runtime configuration failed. Run manually from your home dir:"
+            warn "  cd ~ && ~/.gpd/venv/bin/gpd install opencode --global"
+        fi
+    fi
+
+    # Write the .gpd-initialized marker so the GPD desktop app's first-run
+    # setup short-circuits via is_venv_valid() -- no uv/python/pip cascade
+    # of console windows, no ~3 minutes of re-downloading what we just
+    # installed. The app looks for this file at $GPD_HOME/.gpd-initialized
+    # (matches the unified path in packages/desktop/src-tauri/src/gpd_setup.rs).
+    #
+    # verify_gpd_install ran earlier in main() and would have aborted the
+    # install if either the venv interpreter or the gpd import failed, so
+    # by the time we reach this point both probes have passed.
+    if [[ -f "$GPD_VENV_DIR/bin/gpd" ]] || [[ -f "$GPD_VENV_DIR/bin/python" ]]; then
+        local marker="$GPD_HOME/.gpd-initialized"
+        if [[ ! -f "$marker" ]]; then
+            printf 'initialized\n' > "$marker"
+            success "GPD desktop app will skip first-run setup"
+        fi
     fi
 }
 
 # ── Success ──────────────────────────────────────────────────────────────
 
 print_success() {
+    local has_desktop=false
+    [[ -x "/usr/bin/GPD" ]] && has_desktop=true
+
     printf "\n"
     success "GPD installed successfully!"
     printf "\n"
-    printf "  Start GPD:    ${BOLD}gpd${RESET}\n"
-    printf "  Show help:    ${BOLD}gpd --help${RESET}\n"
+
+    if [[ "$has_desktop" == true ]]; then
+        printf "  ${BOLD}Desktop app${RESET} ${DIM}(recommended)${RESET}\n"
+        printf "    Launch ${BOLD}GPD${RESET} from your applications menu.\n"
+        printf "    ${DIM}You may be asked for your PSI key again on first launch —${RESET}\n"
+        printf "    ${DIM}use the same key you entered here.${RESET}\n"
+        printf "\n"
+        printf "  ${BOLD}CLI${RESET}\n"
+        printf "    Open a ${BOLD}new terminal${RESET}, then run: ${BOLD}gpd${RESET}\n"
+    else
+        printf "  Run GPD: open a ${BOLD}new terminal${RESET}, then type ${BOLD}gpd${RESET}\n"
+    fi
     printf "\n"
     printf "  ${DIM}Installed to: %s${RESET}\n" "$GPD_HOME"
-    printf "  ${DIM}Desktop app:  https://download.gpd.psi.inc${RESET}\n"
     printf "\n"
-    warn "Open a new terminal to use the gpd command."
+    warn "PATH changes don't apply to THIS terminal — open a new one to use 'gpd'."
     printf "\n"
 }
 
@@ -480,33 +1289,44 @@ main() {
     printf "\n"
 
     check_prerequisites
+    # Pre-flight: abort if GPD is currently running. Swapping the Python
+    # tree or venv under a live process would corrupt the running
+    # interpreter and the user would end up with a half-broken install.
+    check_no_running_gpd
     mkdir -p "$GPD_BIN_DIR" "$GPD_PYTHON_DIR" "$GPD_VENV_DIR" "$GPD_CONFIG_DIR"
 
-    log "Step 1/7: Installing OpenCode CLI..."
+    log "Step 1/8: Installing OpenCode CLI..."
     install_opencode
     printf "\n"
 
-    log "Step 2/7: Ensuring Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+..."
+    log "Step 2/8: Ensuring Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+..."
     ensure_python
     printf "\n"
 
-    log "Step 3/7: Installing GPD package..."
+    log "Step 3/8: Installing GPD package..."
     install_gpd_package
+    # Two-step liveness + import probe. Must pass before we proceed;
+    # also gates the .gpd-initialized marker later in configure_gpd_runtime.
+    verify_gpd_install
     printf "\n"
 
-    log "Step 4/7: Configuring LiteLLM..."
+    log "Step 4/8: Installing LaTeX tools..."
+    install_latex
+    printf "\n"
+
+    log "Step 5/8: Configuring PSI key..."
     configure_litellm_key
     printf "\n"
 
-    log "Step 5/7: Creating gpd command..."
+    log "Step 6/8: Creating gpd command..."
     create_gpd_wrapper
     printf "\n"
 
-    log "Step 6/7: Configuring PATH..."
+    log "Step 7/8: Configuring PATH..."
     configure_path
     printf "\n"
 
-    log "Step 7/7: Configuring GPD runtime..."
+    log "Step 8/8: Configuring GPD runtime..."
     configure_gpd_runtime
     printf "\n"
 
