@@ -787,6 +787,16 @@ function Install-Gpd {
         Write-Warn "Physics libs install failed -- agent code that imports scipy/numpy may break. Retry: ~\.gpd\venv\Scripts\pip.exe install scipy numpy matplotlib sympy"
     }
 
+    # arxiv-mcp-server: upstream package the gpd-arxiv MCP bridge imports
+    # at process startup. Without it, gpd.mcp.servers.arxiv_bridge raises
+    # ModuleNotFoundError on first run and the desktop app shows a red
+    # dot next to gpd-arxiv in the Tools panel.
+    Write-Log "Installing arxiv-mcp-server (powers the gpd-arxiv MCP bridge)..."
+    & $venvPip install --upgrade --quiet "arxiv-mcp-server>=0.4"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "arxiv-mcp-server install failed -- gpd-arxiv MCP will show red-dot/disconnected. Retry: ~\.gpd\venv\Scripts\pip.exe install arxiv-mcp-server"
+    }
+
 }
 
 function Test-GpdInstall {
