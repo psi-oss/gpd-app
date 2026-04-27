@@ -541,15 +541,23 @@ else
     skip "No gpd-file-manifest.json to process"
 fi
 
-# Clean up get-physics-done/ subdir — remove only if empty after the
-# manifest sweep. Anything the user added stays put.
+# Clean up get-physics-done/ subdir. The earlier "remove only if empty
+# after manifest sweep" heuristic was wrong — `gpd install opencode
+# --global` writes files (agents, commands, runtime-config) into this
+# subdir that aren't always recorded in gpd-file-manifest.json (manifest
+# tracking was added in a later release; pre-manifest installs leave
+# orphans here forever). The dir is named after the package and is
+# wholly GPD-owned; remove unconditionally. If the user customised
+# templates here, they should back them up before uninstalling.
+#
+# The bug this fixed: re-running the installer against a stale
+# get-physics-done/ dir tripped gpd 1.2.x's preflight with
+# "untrusted GPD manifest" because the new install didn't recognise
+# the old install's signature. Removing the dir on uninstall makes the
+# next install see a clean target.
 if [[ -d "$opencode_gpd_subdir" ]]; then
-    find "$opencode_gpd_subdir" -depth -type d -empty -delete 2>/dev/null || true
-    if [[ -d "$opencode_gpd_subdir" ]]; then
-        skip "Kept $opencode_gpd_subdir (still has non-GPD content)"
-    else
-        success "Removed empty $opencode_gpd_subdir"
-    fi
+    rm -rf "$opencode_gpd_subdir"
+    success "Removed $opencode_gpd_subdir"
 fi
 
 # ── Remove PATH entries / exports from shell rc files ────────────────────
