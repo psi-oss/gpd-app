@@ -21,17 +21,6 @@
  */
 export const SELECTORS = {
   /**
-   * CodeMirror contenteditable host for the line editor in the file-edit
-   * panel. Must be attached to `view.contentDOM` after `onMount` creates
-   * the EditorView — NOT to the outer wrapper div, which is empty at
-   * mount time and not focusable.
-   *
-   * See `packages/app/src/components/file-edit/line-editor.tsx` and
-   * Task 3.6 rollout.
-   */
-  FILE_EDIT_LINE_INPUT: "file-edit-line-input",
-
-  /**
    * GPD physics shortcut toolbar container rendered above the prompt
    * input on `packages/app/src/components/physics-shortcuts-bar.tsx`.
    * Used by E2E to scope button-level assertions to this toolbar.

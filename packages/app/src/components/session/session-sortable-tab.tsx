@@ -9,11 +9,22 @@ import { getFilename } from "@opencode-ai/util/path"
 import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useCommand } from "@/context/command"
-import { dirtyFileSet } from "@/components/file-edit/dirty-tracker"
+import { useCloseTabDialog } from "@/components/file-edit/close-tab-dialog"
+import { useEditorRegistry } from "@/components/file-edit/editor-registry"
 
 export function FileVisual(props: { path: string; active?: boolean }): JSX.Element {
   const language = useLanguage()
-  const dirty = createMemo(() => dirtyFileSet().has(props.path))
+  const registry = useEditorRegistry()
+  const status = createMemo(() => registry.get(props.path)?.status())
+  const active = createMemo(() => !!status() && status() !== "clean")
+  const title = createMemo(() => {
+    const current = status()
+    if (current === "saving") return language.t("session.tab.fileStatus.saving")
+    if (current === "stale") return language.t("session.tab.fileStatus.stale")
+    if (current === "conflict") return language.t("session.tab.fileStatus.conflict")
+    if (current === "dirty") return language.t("session.tab.unsavedFileEditor")
+    return ""
+  })
   return (
     <div class="flex items-center gap-x-1.5 min-w-0">
       <Show
@@ -26,11 +37,17 @@ export function FileVisual(props: { path: string; active?: boolean }): JSX.Eleme
         </span>
       </Show>
       <span class="text-14-medium truncate">{getFilename(props.path)}</span>
-      <Show when={dirty()}>
+      <Show when={active()}>
         <span
           aria-hidden="true"
-          class="ml-0.5 inline-block size-1.5 shrink-0 rounded-full bg-text-weak"
-          title={language.t("session.tab.unsavedInlineEdit")}
+          class="ml-0.5 inline-block size-1.5 shrink-0 rounded-full"
+          classList={{
+            "animate-pulse bg-text-weak": status() === "saving",
+            "bg-icon-warning-base": status() === "stale",
+            "bg-text-error": status() === "conflict",
+            "bg-text-weak": !status() || status() === "dirty",
+          }}
+          title={title()}
         />
       </Show>
     </div>
@@ -41,6 +58,7 @@ export function SortableTab(props: { tab: string; onTabClose: (tab: string) => v
   const file = useFile()
   const language = useLanguage()
   const command = useCommand()
+  const close = useCloseTabDialog()
   const sortable = createSortable(props.tab)
   const path = createMemo(() => file.pathFromTab(props.tab))
   const content = createMemo(() => {
@@ -64,13 +82,13 @@ export function SortableTab(props: { tab: string; onTabClose: (tab: string) => v
                 icon="close-small"
                 variant="ghost"
                 class="h-5 w-5"
-                onClick={() => props.onTabClose(props.tab)}
+                onClick={() => close.request(props.tab, path(), props.onTabClose)}
                 aria-label={language.t("common.closeTab")}
               />
             </TooltipKeybind>
           }
           hideCloseButton
-          onMiddleClick={() => props.onTabClose(props.tab)}
+          onMiddleClick={() => close.request(props.tab, path(), props.onTabClose)}
         >
           <Show when={content()}>{(value) => value()}</Show>
         </Tabs.Trigger>

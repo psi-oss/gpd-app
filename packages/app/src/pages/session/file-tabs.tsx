@@ -18,13 +18,11 @@ import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange
 import { useComments } from "@/context/comments"
 import { useLanguage } from "@/context/language"
 import { usePrompt } from "@/context/prompt"
+import { useSettings } from "@/context/settings"
 import { getSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { fileEligibility } from "@/components/file-edit/eligibility"
-import { createFileEditState } from "@/components/file-edit/use-file-edit"
-import { FileEditHotspotLayer } from "@/components/file-edit/hotspot-layer"
-import { setFileDirty } from "@/components/file-edit/dirty-tracker"
+import { FileEditor } from "@/components/file-edit/file-editor"
 
 function FileCommentMenu(props: {
   moreLabel: string
@@ -182,6 +180,7 @@ export function FileTabContent(props: { tab: string }) {
   const comments = useComments()
   const language = useLanguage()
   const prompt = usePrompt()
+  const settings = useSettings()
   const fileComponent = useFileComponent()
   const { sessionKey, tabs, view } = useSessionLayout()
   const activeFileTab = createSessionTabs({
@@ -205,6 +204,7 @@ export function FileTabContent(props: { tab: string }) {
     return file.get(p)
   })
   const contents = createMemo(() => state()?.content?.content ?? "")
+  const hash = createMemo(() => state()?.content?.hash)
   const cacheKey = createMemo(() => sampledChecksum(contents()))
   const selectedLines = createMemo<SelectedLineRange | null>(() => {
     const p = path()
@@ -406,34 +406,25 @@ export function FileTabContent(props: { tab: string }) {
     scrollSync.queueRestore()
   })
 
-  // Inline single-line edit state (pencil hotspots + CodeMirror editor).
-  const editState = createFileEditState()
-  const eligibility = createMemo(() => fileEligibility(state()?.content))
-  const [hotspotHost, setHotspotHost] = createSignal<HTMLDivElement | undefined>()
-
-  // Keep the dirty-path tracker in sync with whichever file is mid-edit in this tab.
-  createEffect(() => {
-    const target = editState.target()
-    if (target) {
-      setFileDirty(target.file, true)
-      onCleanup(() => setFileDirty(target.file, false))
-    }
+  // Whether this tab should mount the new full-file editor. When the
+  // experimental setting is off, the file panel renders the read-only
+  // Pierre viewer with no edit affordance — users must enable the
+  // setting to make changes.
+  const sourceEditor = createMemo(() => {
+    if (!settings.general.experimentalFileEditor()) return false
+    const content = state()?.content
+    if (!content) return false
+    if (content.type !== "text") return false
+    if (content.encoding === "base64") return false
+    if (content.mimeType?.startsWith("image/")) return false
+    if (content.mimeType?.startsWith("audio/")) return false
+    if (content.mimeType?.startsWith("video/")) return false
+    if (content.mimeType === "application/pdf") return false
+    return true
   })
 
-  // If the underlying path changes, abandon any in-progress edit.
-  createEffect(
-    on(
-      path,
-      () => {
-        editState.close()
-        editState.setConflict(null)
-      },
-      { defer: true },
-    ),
-  )
-
   const renderFile = (source: string) => (
-    <div class="relative overflow-hidden pb-40" ref={setHotspotHost}>
+    <div class="relative overflow-hidden pb-40">
       <Dynamic
         component={fileComponent}
         mode="text"
@@ -475,24 +466,32 @@ export function FileTabContent(props: { tab: string }) {
           },
         }}
       />
-      <Show when={(() => {
-        const p = path()
-        const e = eligibility()
-        if (!p || !e.editable) return null
-        return { path: p, tier: e.tier }
-      })()}>
-        {(ctx) => (
-          <FileEditHotspotLayer
-            container={hotspotHost()}
-            filePath={ctx().path}
-            content={source}
-            editState={editState}
-            tier={ctx().tier}
-          />
-        )}
-      </Show>
     </div>
   )
+
+  const renderLoaded = () => {
+    const p = path()
+    if (p && sourceEditor()) {
+      return (
+        <FileEditor
+          path={p}
+          content={{ content: contents(), hash: hash() }}
+          renderTexPreview={
+            isTex()
+              ? () => (
+                  <TexBuildPane
+                    texFile={p}
+                    onNavigateSource={scrollToLine}
+                    maximized={false}
+                  />
+                )
+              : undefined
+          }
+        />
+      )
+    }
+    return renderFile(contents())
+  }
 
   const isTex = createMemo(() => {
     const p = path()
@@ -528,7 +527,7 @@ export function FileTabContent(props: { tab: string }) {
               </div>
             </Show>
             <Switch>
-              <Match when={state()?.loaded}>{renderFile(contents())}</Match>
+              <Match when={state()?.loaded}>{renderLoaded()}</Match>
               <Match when={state()?.loading}>
                 <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}{language.t("common.loading.ellipsis")}</div>
               </Match>
@@ -552,7 +551,7 @@ export function FileTabContent(props: { tab: string }) {
                   </Button>
                 </div>
                 <Switch>
-                  <Match when={state()?.loaded}>{renderFile(contents())}</Match>
+                  <Match when={state()?.loaded}>{renderLoaded()}</Match>
                   <Match when={state()?.loading}>
                     <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}{language.t("common.loading.ellipsis")}</div>
                   </Match>
