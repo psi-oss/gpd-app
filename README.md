@@ -12,22 +12,11 @@ curl -fsSL https://download.gpd.psi.inc/install | bash
 ```
 
 ```powershell
-# Windows 11 (non-admin PowerShell)
+# Windows
 irm https://download.gpd.psi.inc/install.ps1 | iex
 ```
 
-Each one-liner installs the GPD desktop app, the `gpd` CLI, an app-local
-Python venv, LaTeX (`pdflatex` + `latexmk`), and `git` if missing — all
-into `~/.gpd/` (or `%USERPROFILE%\.gpd` on Windows). No admin / `sudo`
-required on Windows; the macOS / Linux one-liner uses `sudo` only when
-installing system LaTeX or the Ubuntu `.deb`. The PSI access key gets
-entered through the desktop app's welcome screen on first launch — no
-install-time prompt needed.
-
-Prefer to read before piping? See the verify-then-run flow in
-[`install-gpd/README.md`](install-gpd/README.md#verify-the-installer-before-executing-optional-recommended)
-or grab the desktop bundle directly from
-[download.gpd.psi.inc](https://download.gpd.psi.inc).
+Flags, verify-before-piping, manual download: [`install-gpd/README.md`](install-gpd/README.md).
 
 ## For professors / post-docs
 
