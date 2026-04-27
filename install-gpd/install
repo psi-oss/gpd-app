@@ -1307,6 +1307,41 @@ configure_gpd_runtime() {
     # opencode contract. Override XDG_CONFIG_HOME if a sandboxed test
     # needs containment.
     if [[ -x "$GPD_VENV_DIR/bin/python" ]]; then
+        # Recover from "untrusted GPD manifest" state. gpd 1.2.x refuses
+        # to install into a config dir that has GPD-managed markers but
+        # no `gpd-file-manifest.json`. That state is reached when an
+        # earlier GPD install left files behind without writing a
+        # manifest, OR when a user `rm -rf ~/.gpd` (without running the
+        # uninstall script) but $HOME/.config/opencode/ retained the
+        # markers.
+        #
+        # The marker policy for opencode is declared in the gpd runtime
+        # catalog (`adapters/runtime_catalog.json` →
+        # `runtime_name: "opencode"` →
+        # `managed_install_surface.flat_command_globs:
+        # ["command/gpd-*.md"]`). We mirror the well-known managed paths
+        # here so a fresh install can adopt the dir cleanly. Files that
+        # don't match these patterns are user-owned and left untouched.
+        local opencode_dir="$HOME/.config/opencode"
+        local manifest="$opencode_dir/gpd-file-manifest.json"
+        if [[ -d "$opencode_dir" && ! -f "$manifest" ]]; then
+            local stale_marker
+            stale_marker="$(ls -1 "$opencode_dir/command/" 2>/dev/null | grep -E '^gpd-.*\.md$' | head -1 || true)"
+            if [[ -z "$stale_marker" ]]; then
+                stale_marker="$(ls -1 "$opencode_dir/agents/" 2>/dev/null | grep -E '^gpd-.*\.md$' | head -1 || true)"
+            fi
+            if [[ -n "$stale_marker" || -d "$opencode_dir/get-physics-done" ]]; then
+                log "Cleaning stale GPD markers in $opencode_dir (no manifest, prior install or partial uninstall)..."
+                # Patterns mirror runtime_catalog.json + the opencode
+                # adapter's deploy paths. If gpd's catalog grows new
+                # globs, this list needs updating in lockstep.
+                find "$opencode_dir/command" -maxdepth 1 -type f -name 'gpd-*.md' -delete 2>/dev/null || true
+                find "$opencode_dir/agents"  -maxdepth 1 -type f -name 'gpd-*.md' -delete 2>/dev/null || true
+                find "$opencode_dir/hooks"   -maxdepth 1 -type f -name 'gpd-*'    -delete 2>/dev/null || true
+                rm -rf "$opencode_dir/get-physics-done" 2>/dev/null || true
+            fi
+        fi
+
         log "Configuring GPD for OpenCode..."
         # Suppress stdout (rich-formatted summary table + "/gpd-help" hint
         # that confuses desktop-first users) but keep stderr so we still

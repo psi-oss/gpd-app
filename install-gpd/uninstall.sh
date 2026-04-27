@@ -483,7 +483,29 @@ process_gpd_manifest() {
     local manifest="$1"
     local base_dir="$2"
 
-    [[ -f "$manifest" ]] || { skip "No gpd-file-manifest.json to process"; return; }
+    if [[ ! -f "$manifest" ]]; then
+        # Fallback: a partial install (or a user who manually wiped
+        # ~/.gpd) can leave GPD-managed files in $base_dir without a
+        # manifest. Sweep the well-known managed paths from the gpd
+        # runtime catalog (`flat_command_globs: ["command/gpd-*.md"]`
+        # for opencode, plus the conventional agents/ + hooks/ patterns)
+        # so a future fresh install isn't blocked by orphan markers.
+        local swept=0
+        for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
+            local matched
+            matched=$(find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$matched" != "0" ]]; then
+                find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f -delete 2>/dev/null || true
+                swept=$((swept + matched))
+            fi
+        done
+        if (( swept > 0 )); then
+            success "Removed $swept orphan GPD marker file(s) from $base_dir (no manifest)"
+        else
+            skip "No gpd-file-manifest.json to process"
+        fi
+        return
+    fi
 
     if ! command -v python3 &>/dev/null; then
         warn "python3 not available — cannot parse $manifest; removing manifest only"
