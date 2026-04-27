@@ -43,6 +43,61 @@ export type GpdModelMetadata = {
   limit?: { context?: number; output?: number }
 }
 
+// Per-model `reasoning_effort` tier overrides. Empirically probed against
+// the LiteLLM proxy on 2026-04-27 (see /tmp/reasoning-probe.log + agent
+// matrix) — values that returned HTTP 400 from upstream are excluded.
+//
+// LiteLLM proxy version note: bumping Railway to v1.83.14.rc.1 unlocks
+// opus-4-7 (was broken on v1.83.7) and gpt-5.5 xhigh. This table reflects
+// the post-bump matrix; running against v1.83.7 will degrade some entries
+// but never error harder than the picker default would.
+//
+// Defaults to `["low","medium","high"]` (WIDELY_SUPPORTED_EFFORTS in
+// transform.ts) when omitted. Overrides are model-id-keyed, NOT inside
+// GPD_MODEL_METADATA, so dynamic models picked up from `/v1/models` that
+// have no metadata still get the safe default.
+export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
+  // opus-4-7 supports the full ladder. supports_max_reasoning_effort=true
+  // and supports_xhigh_reasoning_effort=true in LiteLLM's model map; the
+  // adapter sends thinking.type=adaptive + output_config.effort=<tier>.
+  "claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
+  // opus-4-6 supports `max` (only Anthropic Opus 4.6+) but not `xhigh`.
+  "claude-opus-4-6": ["low", "medium", "high", "max"],
+  // sonnet-4-6 / haiku-4-5 use the adaptive path; xhigh + max are not in
+  // their model-map flags. Both also need `max_tokens > thinking budget`,
+  // which is bounded elsewhere (see Anthropic adapter limits).
+  "claude-sonnet-4-6": ["low", "medium", "high"],
+  "claude-haiku-4-5": ["low", "medium", "high"],
+  // gpt-5.5 supports xhigh post-bump (v1.83.14.rc.1 model map sets
+  // supports_xhigh_reasoning_effort=true). `max` not supported. Also note
+  // that `tool_choice` is fixed in the same bump.
+  "gpt-5.5": ["low", "medium", "high", "xhigh"],
+  // gpt-5.4 family: xhigh OK, max rejected upstream by OpenAI.
+  "gpt-5.4": ["low", "medium", "high", "xhigh"],
+  "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
+  "gpt-5.4-nano": ["low", "medium", "high", "xhigh"],
+  // gpt-5.4-pro rejects `low` upstream:
+  //   "Unsupported value: 'low' is not supported with the 'gpt-5.4-pro'
+  //    model. Supported values are: 'medium', 'high', and 'xhigh'."
+  // No `max` either (LiteLLM raises Unmapped). Floor=medium.
+  "gpt-5.4-pro": ["medium", "high", "xhigh"],
+  // gemini-3.1-pro-preview: low/medium/high only. xhigh + max return
+  // LiteLLM-side "Invalid reasoning effort" 500.
+  "gemini-3.1-pro-preview": ["low", "medium", "high"],
+  // gemini-3.1-flash-lite-preview: low/medium/high all return reasoning
+  // content (probed 2026-04-27). xhigh + max → LiteLLM Vertex/Gemini
+  // adapter "Invalid reasoning effort" 500.
+  "gemini-3.1-flash-lite-preview": ["low", "medium", "high"],
+  // gpt-5.3-codex: low/medium/high return reasoning_tokens. xhigh →
+  // upstream "reasoning_effort=xhigh is not supported" 400. max → HTTP
+  // 200 but reasoning_tokens=0 (silently dropped, treat as unsupported).
+  "gpt-5.3-codex": ["low", "medium", "high"],
+}
+
+export function gpdReasoningEffortsFor(apiId: string): readonly string[] | undefined {
+  return GPD_MODEL_REASONING_EFFORTS[apiId]
+}
+
 // Single source of truth for GPD model display names and capability
 // flags. Keep ids aligned with LiteLLM proxy model_name (not upstream
 // Anthropic/OpenAI names — LiteLLM remaps). Add new entries whenever
@@ -131,6 +186,11 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
   "gpt-5.3-codex": {
     name: "GPT-5.3 Codex",
     tool_call: true,
+    // 2026-04-27 probe: low → reasoning_tokens=9, medium → 81, high → 64.
+    // Original metadata omitted reasoning=true (regression: model is
+    // reasoning-capable; effort picker should appear). xhigh → HTTP 400,
+    // max → silently dropped (rt=0), so cap at high in the effort table.
+    reasoning: true,
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 32_768 },
@@ -146,6 +206,11 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
   "gemini-3.1-flash-lite-preview": {
     name: "Gemini 3.1 Flash-Lite",
     tool_call: true,
+    // 2026-04-27 probe: low/medium/high all return reasoning content
+    // (HTTP 200 with thinking_blocks + reasoning_tokens). Original
+    // metadata omitted reasoning=true. Effort picker should be available.
+    // xhigh/max → 500 (Vertex/Gemini config rejects), capped at high.
+    reasoning: true,
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 65_536 },

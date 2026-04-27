@@ -6,6 +6,7 @@ import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
+import { gpdReasoningEffortsFor } from "./gpd-models"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -367,6 +368,22 @@ export namespace ProviderTransform {
 
   export function variants(model: Provider.Model): Record<string, Record<string, any>> {
     if (!model.capabilities.reasoning) return {}
+
+    // GPD provider: per-model effort tier overrides empirically probed
+    // against the LiteLLM proxy. Keeps the picker honest — never offers
+    // a tier that the upstream model rejects (e.g. gpt-5.4-pro 'low' or
+    // sonnet-4-6 'xhigh'). Falls back to the generic openai-compatible
+    // default below if no override is registered for this id.
+    if (model.providerID === "gpd") {
+      const efforts = gpdReasoningEffortsFor(model.api.id) ?? WIDELY_SUPPORTED_EFFORTS
+      // Anthropic-family GPD models go through LiteLLM's
+      // thinking.type=adaptive + output_config.effort path. OpenAI-family
+      // GPD models accept reasoning_effort as a flat field. The
+      // openai-compatible AI SDK driver maps `reasoningEffort` to the
+      // OpenAI-style param; LiteLLM rewrites server-side per its
+      // adapter, so a uniform `reasoningEffort` here works for both.
+      return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]))
+    }
 
     const id = model.id.toLowerCase()
     const isAnthropicAdaptive = ["opus-4-6", "opus-4.6", "sonnet-4-6", "sonnet-4.6"].some((v) =>

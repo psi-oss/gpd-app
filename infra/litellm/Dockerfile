@@ -16,10 +16,25 @@
 #      and re-run the smoke test (GH Actions `litellm-smoke-test.yml`).
 #   5. Commit.
 #
-# Current pin: v1.83.7-stable (patches GHSA-v4p8-mg3p-g94g,
-# GHSA-r75f-5x8p-qvmc, GHSA-xqmj-j6mv-4862, GHSA-69x8-hrgq-fjj8,
-# GHSA-53mr-6c8q-9789, GHSA-jjhc-v7c2-5hh6).
-FROM ghcr.io/berriai/litellm:v1.83.7-stable
+# Current pin: v1.83.14.rc.1 (release candidate). Bumped from
+# v1.83.7-stable to pick up the GPT-5.5 model registry entry — without
+# this, LiteLLM 1.83.7 doesn't know `gpt-5.5` exists, falls through to
+# the GPT-5 base path's "supported_params" stripping, and rejects
+# `tool_choice` with HTTP 400 ("openai does not support parameters:
+# ['tool_choice']"). PR BerriAI/litellm#26345 (commit 3950f5ea, merged
+# 2026-04-23) added the entry; first tag carrying it is
+# v1.83.11-nightly, first RC is v1.83.14.rc.1 (2026-04-27).
+#
+# RC, not -stable: no stable cut past v1.83.7-stable.patch.1 (CVE-only)
+# exists yet at bump time. The litellm-smoke-test workflow gates ABI
+# regressions to our hooks. Move back to a -stable tag the moment one
+# lands past 04-27.
+#
+# Carries forward all CVE patches from v1.83.7-stable
+# (GHSA-v4p8-mg3p-g94g, GHSA-r75f-5x8p-qvmc, GHSA-xqmj-j6mv-4862,
+# GHSA-69x8-hrgq-fjj8, GHSA-53mr-6c8q-9789, GHSA-jjhc-v7c2-5hh6) plus
+# whatever shipped in the 04-19 → 04-27 window.
+FROM ghcr.io/berriai/litellm:v1.83.14.rc.1
 
 # asyncpg so gpd_tos.hook.ensure_schema() can (re-)create the custom
 # gpd_tos_acceptance table on every worker start. Necessary because
