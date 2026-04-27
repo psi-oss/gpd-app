@@ -1,103 +1,109 @@
-PSI
-Get Physics Done (GPD)
-Software Privacy Policy
+PSI PRIVACY NOTICE
 
-This Privacy Policy (this "Policy") describes how Physical Superintelligence PBC ("Licensor") collects, uses, discloses, and safeguards the Personal Data of Licensees and Authorized Users in connection with the Get Physics Done software application (the "Software"). This Policy supplements, and is incorporated by reference into, the Software End User License Agreement between Licensor and Licensee (the "EULA"). Capitalized terms used but not defined in this Policy have the meanings given to them in the EULA.
+Last Updated: April 27, 2026
+This Privacy Notice explains how Physical Superintelligence PBC ("PSI") collects, uses, discloses, and otherwise processes personal data in connection with any specific product, service, or application that references or links to this Privacy Notice.
+This Privacy Notice does not address our privacy practices relating to PSI job applicants, employees and other employment-related individuals, nor data that is not subject to applicable data protection laws (such as deidentified or publicly available information in certain jurisdictions). This Privacy Notice is also not a contract and does not create any legal rights or obligations not otherwise provided by law.
 
-LICENSEE ACKNOWLEDGES THAT ITS USE OF THE SOFTWARE IS CONDITIONED UPON LICENSEE'S REVIEW OF, AND AUTHORIZED USERS' AGREEMENT TO, THE TERMS OF THIS POLICY. BY CLICKING A BUTTON OR CHECKING A BOX MARKED "I AGREE" (OR SOMETHING SIMILAR) WITH RESPECT TO THIS POLICY, YOU (A) ACKNOWLEDGE THAT YOU HAVE READ THIS POLICY; AND (B) CONSENT, ON BEHALF OF LICENSEE AND EACH OF ITS AUTHORIZED USERS, TO THE PROCESSING OF PERSONAL DATA AS DESCRIBED HEREIN. IF LICENSEE DOES NOT AGREE TO THE TERMS OF THIS POLICY, LICENSEE MUST NOT ACCESS OR USE THE SOFTWARE.
+Our Collection and Use of Personal Data
 
-1. Definitions. In addition to the defined terms in the EULA, the following terms have the following meanings:
+The categories of personal data we collect depend on how you interact with us and our services. For example, you may provide us your personal data directly when you sign up for our mailing list, obtain one of our products or services, or otherwise contact us or interact with us.
+We also collect personal data automatically when you interact with our websites and other services and may also collect personal data from other sources and third parties.
 
-"Data Subject" means an identified or identifiable natural person to whom Personal Data relates, including an Authorized User.
+Personal Data Provided by Individuals
 
-"Personal Data" means any information relating to a Data Subject, including any information defined as "personal data," "personal information," or a similar term under applicable privacy laws.
+We collect the following categories of personal data individuals provide us:
+Contact Information, including first and last name, phone number, email address, and communication preferences. We use this information primarily to fulfill your request or transaction, to communicate with you directly, and to send you communications in accordance with your preferences.
+Account Information, including first and last name, email address, phone number, account credentials, and the products or services you are interested in, obtained, or have otherwise used. We use this information primarily to administer your account, provide you with our products and services, communicate with you regarding your account and your use of our products and services, and for customer support purposes.
+Customer Content, including any files, documents, audio, videos, images, data, or communications you choose to input, upload, or transmit to our products and services. We use this content primarily to provide you with our products and services, to facilitate your requests, and to improve our products and services (including by training or fine-tuning our and our third-party providers' artificial intelligence and machine learning models).
+Feedback and Support Information, including the contents of custom messages sent through the forms, chat platforms, email addresses, or other contact information we make available to customers, as well as recordings of calls with us, where permitted by law (including through the use of automated or artificial intelligence tools provided by us or our third-party providers). We use this information primarily to investigate and respond to your inquiries, to communicate with you via email, phone, text message or social media, and to improve our products and services.
 
-"Processing" means any operation or set of operations performed on Personal Data, whether or not by automated means, including collection, recording, storage, use, disclosure, transmission, and deletion. "Process" and "Processed" have corresponding meanings.
+Personal Data Automatically Collected
 
-"Sub-Processor" means any Third Party engaged by Licensor to Process Personal Data on Licensor's behalf, including hosting providers and AI Technology providers.
+We, and our third-party partners, automatically collect information you provide to us and information about how you access and use our products and services when you engage with us. We typically collect this information through the use of a variety of our own and our third-party partners' automatic data collection technologies, including (i) cookies or small data files that are stored on an individual's computer and (ii) other, related technologies, such as web beacons, pixels, embedded scripts, mobile SDKs, location-identifying technologies and logging technologies. Information we collect automatically about you may be combined with other personal data we collect directly from you or receive from other sources.
+We, and our third-party partners, use automatic data collection technologies to automatically collect the following data when you use our services or otherwise engage with us:
+Information About Your Device and Network, including the device type, manufacturer, and model, operating system, IP address, browser type, Internet service provider, and unique identifiers associated with you, your device, or your network (including, for example, a persistent device identifier). We employ third-party technologies designed to allow us to recognize when two or more devices are likely being used by the same individual and may leverage these technologies (where permitted by law) to link information collected from different devices.
+Information About the Way Individuals Use Our Services and Interact With Us, including the site from which you came, the site to which you are going when you leave our services, how frequently you access our services, whether you open emails or click the links contained in emails, whether you access our services from multiple devices, and other browsing behavior and actions you take on our services (such as the pages you visit, the content you view, the communications you have through our services, and the content and links you interact with).
+Information About Your Location, including general geographic location that we or our third-party providers may derive from your IP address.
+All of the information collected automatically through these tools allows us to improve your experience. For example, we may use this information to enhance and personalize your user experience, to monitor and improve our products and services, to offer communications features, and to improve the effectiveness of our products, services, offers, communications and customer service.  We may also use this information to:  (a) remember information so that you will not have to re-enter it during your visit or the next time you visit the site; (b) provide custom, personalized content and information; (c) identify you across multiple devices; (d) provide and monitor the effectiveness of our services; (e) monitor aggregate metrics such as total number of visitors, traffic, usage, and demographic patterns on our website; (f) diagnose or fix technology problems; and (g) otherwise to plan for and enhance our products and services.
+For information about the choices you may have in relation to our use of automatic data collection technologies, please refer to the Your Privacy Choices section below.
 
-"Supervisory Authority" means a data protection authority or similar regulatory body with jurisdiction over the Processing of Personal Data.
+Personal Data from Other Sources and Third Parties
 
-2. Categories of Personal Data Processed. In connection with Licensee's use of the Software, Licensor Processes the following categories of Personal Data:
+We may receive the same categories of personal data as described above from the following sources and other parties:
+Other Customers: We may receive your personal data from our other customers. For example, a customer may provide us with your contact information as a part of a referral.
+Service Providers: Our service providers that perform services on our behalf, such as analytics and certain marketing providers, collect personal data and often share some or all of this information with us.
+Other Sources: We may also collect personal data about you from other sources, including through transactions such as mergers and acquisitions.
+Inferences: We may generate inferences or predictions about you and your interests and preferences based on the other personal data we collect and the interactions we have with you.
 
-(a) AI Input and AI Output, including prompts, attachments, code snippets, tool invocations, tool outputs, and the contents of files read by the Software during a session, which may incidentally contain Personal Data despite the Licensee warranty set forth in Section 10(a)(ii) of the EULA;
+Additional Uses of Personal Data
 
-(b) session metadata, including session identifiers, timestamps, the AI Technology model selected, token counts, and error events;
+In addition to the primary purposes for using personal data described above, we may also use personal data we collect to:
+Fulfill or meet the reason the information was provided, such as to fulfill our contractual obligations, to facilitate your access to our products and services, or to deliver the products and services requested;
+Manage our organization and its day-to-day operations;
+Communicate with you, including via email, text message, social media and/or telephone calls;
+Facilitate the relationship we have with you and, where applicable, the company you represent;
+Request you provide us feedback about our product and service offerings;
+Address inquiries or complaints made by or about an individual in connection with our products or services;
+Create and maintain accounts for our users;
+Verify your identity and entitlement to our products and services;
+Administer, improve, and personalize our products and services, including by recognizing you and remembering your information when you return to our products and services;
+Develop, operate, improve, maintain, protect, and provide the features and functionality of our products and services (including by training or fine-tuning our and our third-party providers' artificial intelligence and machine learning models);
+Identify and analyze how you use our products and services;
+Create aggregated or de-identified information that cannot reasonably be used to identify you, which information we may use for purposes outside the scope of this Privacy Notice;
+Conduct research and analytics on our user base and our products and services, including to better understand the demographics of our users;
+Improve and customize our products and services to address the needs and interests of our user base and other individuals we interact with;
+Test, enhance, update, and monitor the products and services, or diagnose or fix technology problems;
+Help maintain and enhance the safety, security, and integrity of our property, products, services, technology, assets, and business;
+Defend, protect, or enforce our rights or applicable contracts and agreements (including our Terms of Use), as well as to resolve disputes, to carry out our obligations and enforce our rights, and to protect our business interests and the interests and rights of third parties;
+Detect, prevent, investigate, or provide notice of security incidents or other malicious, deceptive, fraudulent, or illegal activity and protect the rights and property of PSI and others;
+Facilitate business transactions and reorganizations impacting the structure of our business;
+Comply with contractual and legal obligations and requirements;
+Fulfill any other purpose for which you provide your personal data, or for which you have otherwise consented.
+As noted above, we may use your personal data to improve our services and train or fine-tune the artificial intelligence and machine learning models that power our platform and services.
 
-(c) Account Credentials and associated identifiers used to authenticate the Authorized User to the Software;
+Our Disclosure of Personal Data
 
-(d) device and connection data, including operating system, Software version, and the internet-protocol address from which requests originate; and
+We disclose or otherwise make available personal data in the following ways:
+To Service Providers: We engage other third parties to perform certain services on our behalf in connection with the uses of personal data described in the sections above. Depending on the applicable services, these service providers may process personal data on our behalf or have access to personal data while performing services on our behalf.
+In Connection with a Business Transaction or Reorganization: We may take part in or be involved with a business transaction or reorganization, such as a merger, acquisition, joint venture, or financing or sale of company assets. We may disclose, transfer, or assign personal data to a third party during negotiation of, in connection with, or as an asset in such a business transaction or reorganization. Also, in the unlikely event of our bankruptcy, receivership, or insolvency, your personal data may be disclosed, transferred, or assigned to third parties in connection with the proceedings or disposition of our assets.
+To Facilitate Legal Obligations and Rights: We may disclose personal data to third parties, such as legal advisors and law enforcement:
+in connection with the establishment, exercise, or defense of legal claims;
+to comply with laws or to respond to lawful requests and legal process;
+to protect our rights and property and the rights and property of our agents, customers, and others, including to enforce our agreements, policies, and terms of use;
+to detect, suppress, or prevent fraud;
+to reduce credit risk and collect debts owed to us;
+to protect the health and safety of us, our customers, or any person; or
+as otherwise required by applicable law.
+With Your Consent or Direction: We may disclose your personal data to certain other third parties or publicly with your consent or direction. For example, with your permission, we may post your testimonial on our websites.
 
-(e) consent records, including the version of this Policy and the EULA accepted, a cryptographic hash of the text presented, the date and time of acceptance, and the internet-protocol address from which acceptance was submitted.
+Your Privacy Choices
 
-Licensor does not solicit, and does not intentionally Process, government identifiers, financial-account numbers, precise geolocation, biometric identifiers, or health records. Licensee represents and warrants that no AI Input will contain any Personal Data beyond that which is strictly necessary for Licensee's use of the Software.
+Email Communication Preferences
 
-3. Purposes and Legal Basis of Processing. Licensor Processes Personal Data for the purposes, and on the legal bases, set forth in this Section 3:
+You can stop receiving promotional email communications from us by clicking on the "unsubscribe" link provided in any of our email communications. Please note you cannot opt-out of service-related email communications (such as, account verification, transaction confirmation, or service update emails).
 
-(a) to operate the Software and fulfill Licensor's obligations under the EULA, including routing AI Input to the applicable AI Technology provider and returning AI Output to the Authorized User, on the basis of contract performance (or, for Data Subjects located in the European Union or the United Kingdom, Article 6(1)(b) of the General Data Protection Regulation ("GDPR"));
+Withdrawing Your Consent
 
-(b) to provide support, to reproduce reported defects, and to investigate errors, on the basis of Licensor's legitimate interest in maintaining the reliability and security of the Software (GDPR Article 6(1)(f));
+Where we have your consent for the processing of your personal data, you may withdraw your consent by following the instructions provided when your consent was requested or by contacting us as set forth in the Contact Us section below.
 
-(c) to enforce the EULA, to detect and prevent fraud and abuse, and to protect Licensor's rights, on the basis of Licensor's legitimate interest in protecting its property and in complying with law (GDPR Article 6(1)(f));
+Automatic Data Collection Preferences
 
-(d) to measure performance, to develop Updates, and to improve the Software, on the basis of Licensor's legitimate interest in improving its products (GDPR Article 6(1)(f));
+You may be able to utilize third-party tools and features to restrict our use of automatic data collection technologies. For example, (i) most browsers allow you to change browser settings to limit automatic data collection technologies on websites, (ii) most email providers allow you to prevent the automatic downloading of images in emails that may contain automatic data collection technologies, and (iii) many devices allow you to change your device settings to limit automatic data collection technologies for device applications. Please note that blocking automatic data collection technologies through third-party tools and features may negatively impact your experience using our services, as some features and offerings may not work properly or at all. Depending on the third-party tool or feature you use, you may not be able to block all automatic data collection technologies or you may need to update your preferences on multiple devices or browsers. We do not have any control over these third-party tools and features and are not responsible if they do not function as intended.
+Children's Personal Data
+Our services are not directed to, and we do not intend to, or knowingly, collect or solicit personal data from children under the age of 13. If an individual is under the age of 13, they should not use our services or otherwise provide us with any personal data either directly or by other means. If a child under the age of 13 has provided personal data to us, we encourage the child's parent or guardian to contact us to request that we remove the personal data from our systems. If we learn that any personal data we collect has been provided by a child under the age of 13, we will promptly delete that personal data.
 
-(e) to comply with legal obligations to which Licensor is subject, on the basis of GDPR Article 6(1)(c); and
+Security of Personal Data
 
-(f) to record Licensee's acceptance of this Policy and the EULA, on the basis of Licensee's explicit consent (GDPR Article 6(1)(a)), which consent may be withdrawn at any time as set forth in Section 7.
+We have implemented reasonable physical, technical, and organizational safeguards that are designed to protect your personal data. In addition, we take steps designed to ensure any third party with whom we share personal data provides a similar level of protection. However, despite these controls, we cannot completely ensure or warrant the security of your personal data.
 
-4. Recipients and Sub-Processors. Licensor discloses Personal Data only to the categories of recipients set forth in this Section 4:
+Third-Party Websites and Services
 
-(a) AI Technology providers, including Anthropic, OpenAI, Google LLC, and Moonshot AI (each, an "AI Provider"), to whom AI Input is transmitted for the sole purpose of generating AI Output. Licensor has entered into written agreements with each AI Provider pursuant to which such AI Provider (i) may not retain AI Input or AI Output beyond the period strictly necessary to return the AI Output, and (ii) may not use AI Input or AI Output to train, validate, fine-tune, or otherwise improve any AI Technology. Licensor does not rely on consumer-default terms of any AI Provider;
+Our websites and other services may include links to or redirect you to third-party websites, plug-ins, applications, or other services. Third-party websites and other services may also reference or link to our websites and services. This Privacy Notice does not apply to any personal data practices of these third-party websites, plug-ins, applications, or other services. To learn about these third parties' personal data practices, please visit their respective privacy notices.
 
-(b) hosting, storage, and infrastructure providers, including Google Cloud Platform (Google Cloud Storage and BigQuery), and Railway Corp., each of which Processes Personal Data solely on Licensor's documented instructions and under a written data-processing agreement;
+Updates to This Privacy Notice
 
-(c) governmental authorities, law-enforcement agencies, and courts, where disclosure is required by valid legal process or is reasonably necessary to protect the rights, property, or safety of Licensor, an Authorized User, or a Third Party; and
+We may update this Privacy Notice from time to time. When we make changes to this Privacy Notice, we will change the date at the beginning of this Privacy Notice. If we make material changes to this Privacy Notice, we will notify individuals by email to their registered email address, by prominent posting on this website or our other platforms, or through other appropriate communication channels. All changes shall be effective from the date of publication unless otherwise provided.
 
-(d) a successor entity, in the event of a merger, acquisition, reorganization, or sale of all or substantially all of the assets to which this Policy relates, provided that such successor entity is bound to comply with terms at least as protective as those of this Policy.
+Contact Us
 
-Licensor does not sell Personal Data and does not Process Personal Data for the purpose of cross-contextual behavioral advertising. For purposes of the California Consumer Privacy Act, as amended by the California Privacy Rights Act (collectively, the "CCPA"), the disclosures described in Section 4(a) and Section 4(b) are made under written contractual restrictions that prohibit retention, use, or disclosure for any purpose other than the performance of the services specified in the applicable agreement.
-
-5. International Transfers. Licensor's Processing of Personal Data occurs primarily in the United States. Where Personal Data is transferred from the European Economic Area, the United Kingdom, or Switzerland to the United States or to any other jurisdiction not recognized by the relevant Supervisory Authority as providing an adequate level of protection for Personal Data, Licensor relies on the Standard Contractual Clauses approved by the European Commission, the UK International Data Transfer Agreement, or an equivalent lawful transfer mechanism, as applicable. A copy of the applicable transfer mechanism is available on written request to the address set forth in Section 11.
-
-6. Retention. Licensor retains Personal Data only for so long as is necessary for the purposes for which it was Processed, in accordance with the following retention periods:
-
-(a) AI Input, AI Output, and session metadata are retained for a period of up to twenty-four (24) months from the date of the session, after which such data is deleted from Licensor's production systems;
-
-(b) Account Credentials and associated identifiers are retained for so long as the associated account is active and for a period thereafter not to exceed that required by applicable law or by Licensor's legitimate interest in defending against legal claims;
-
-(c) consent records are retained for the period required to demonstrate compliance with applicable privacy laws and to establish, exercise, or defend legal claims, consistent with GDPR Article 17(3)(e); and
-
-(d) aggregate or pseudonymized data that no longer identifies any Data Subject may be retained indefinitely.
-
-7. Data Subject Rights. Subject to the conditions and limitations set forth in applicable law, each Data Subject has the rights set forth in this Section 7:
-
-(a) the right to access the Personal Data that Licensor Processes concerning the Data Subject and to obtain a copy thereof;
-
-(b) the right to rectification of inaccurate or incomplete Personal Data;
-
-(c) the right to erasure of Personal Data, subject to the retention obligations set forth in Section 6 and to the exceptions provided in GDPR Article 17(3) and equivalent provisions of other applicable laws;
-
-(d) the right to data portability, including the right to receive Personal Data in a structured, commonly used, and machine-readable format;
-
-(e) the right to restrict or object to Processing conducted on the basis of Licensor's legitimate interest, subject to Licensor's right to demonstrate compelling legitimate grounds;
-
-(f) the right to withdraw consent to Processing conducted on the basis of consent, without affecting the lawfulness of Processing carried out prior to such withdrawal, exercisable at any time from within the Software or by written notice to Licensor; and
-
-(g) the right to lodge a complaint with a Supervisory Authority.
-
-Where the CCPA applies, a Data Subject also has the right to know, to delete, to correct, to limit the use and disclosure of sensitive personal information, and to opt out of "sharing" as that term is defined in the CCPA. Licensor does not sell Personal Data.
-
-To exercise any right set forth in this Section 7, a Data Subject shall submit a written request to ted@psi.inc. Licensor shall verify the identity of the requestor before acting and shall respond within the period required by applicable law.
-
-8. Security. Licensor implements and maintains administrative, technical, and physical safeguards designed to protect Personal Data against unauthorized or unlawful Processing and against accidental loss, destruction, or damage, including encryption in transit, access controls limited to personnel with a legitimate need, audit logging of access to stored data, and prompt revocation of access upon termination of engagement. No method of electronic transmission or storage is perfectly secure; Licensor does not warrant the absolute security of any Personal Data. In the event of a Personal Data breach that is reasonably likely to result in a risk to the rights and freedoms of Data Subjects, Licensor shall notify affected Data Subjects and the relevant Supervisory Authority without undue delay, as required by applicable law.
-
-9. Children. The Software is not directed to, and Licensor does not knowingly Process Personal Data of, any individual under the age of thirteen (13), or such greater age as is required by the jurisdiction in which the individual resides. If Licensor becomes aware that Personal Data of a child has been Processed, Licensor shall delete such Personal Data without undue delay.
-
-10. Changes to This Policy. Licensor may modify this Policy from time to time. If Licensor determines in its reasonable discretion that a modification is material, Licensor shall prompt Licensee, through the Software, to review and accept the modified Policy before further use. Non-material modifications become effective upon posting. Licensee's continued use of the Software after the effective date of any modification constitutes acceptance of the modified Policy.
-
-11. Contact. All notices, requests, inquiries, and complaints under this Policy shall be addressed to:
-
-Physical Superintelligence PBC
-Email: ted@psi.inc
-Website: https://www.psi.inc
+If you have any questions or requests in connection with this Privacy Notice or other privacy-related matters, please contact us at: ted@psi.inc.
