@@ -6,7 +6,26 @@ A physics research workspace by [PSI](https://psi.inc). Fork of [OpenCode](https
 
 ## Install
 
-Download the latest desktop build from [download.gpd.psi.inc](https://download.gpd.psi.inc).
+```bash
+# macOS / Linux
+curl -fsSL https://download.gpd.psi.inc/install | bash
+```
+
+```powershell
+# Windows 11 (non-admin PowerShell)
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://download.gpd.psi.inc/install.ps1 -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+```
+
+Each one-liner installs the GPD desktop app, the `gpd` CLI, an app-local
+Python venv, LaTeX (`pdflatex` + `latexmk`), and `git` if missing — all
+into `~/.gpd/` (or `%USERPROFILE%\.gpd` on Windows). No admin / `sudo`
+required on Windows; the macOS / Linux one-liner uses `sudo` only when
+installing system LaTeX or the Ubuntu `.deb`.
+
+Prefer to read before piping? See the verify-then-run flow in
+[`install-gpd/README.md`](install-gpd/README.md#verify-the-installer-before-executing-optional-recommended)
+or grab the desktop bundle directly from
+[download.gpd.psi.inc](https://download.gpd.psi.inc).
 
 ## For professors / post-docs
 
