@@ -392,9 +392,13 @@ jobs:
           fi
           curl -fsSL "$URL" -o "$ARCHIVE"
           # Verify BEFORE extract so a bad archive never touches the
-          # build tree. shasum is available on macOS + Git Bash +
-          # Ubuntu-latest runners; no extra installs required.
-          ACTUAL_SHA=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
+          # build tree. openssl is the only sha256 tool present on all
+          # three GH-hosted runners — macOS-latest has /usr/bin/openssl,
+          # ubuntu-latest has openssl, and windows-latest's Git-Bash
+          # bundles it (where shasum / sha256sum are NOT present, which
+          # broke the v1.1.15 release with `shasum: command not found`).
+          # Output shape: "SHA256(file)= abc..."; last field is the hash.
+          ACTUAL_SHA=$(openssl dgst -sha256 "$ARCHIVE" | awk '{print $NF}')
           if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::uv binary hash mismatch for $UV_PLATFORM"
             echo "::error::expected: $EXPECTED_SHA"
