@@ -26,6 +26,19 @@ import { TosSection } from "./tos-section"
  * We deliberately save nothing client-side until assent is recorded server-
  * side, so a declined/crashed flow leaves zero residue.
  */
+
+/**
+ * LiteLLM virtual keys always start with `sk-`. Reject anything else
+ * BEFORE moving to the TOS step so a user with the wrong key doesn't
+ * read + accept legal text only to get a 401 from /gpd/tos-accept after
+ * the fact (server-side rejection message: "Authentication Error,
+ * LiteLLM Virtual Key expected. Received=****, expected to start with
+ * 'sk-'."). The minimum length is conservative — real virtual keys are
+ * ~50+ chars; we just guard against `sk-` followed by nothing useful.
+ */
+function isPlausibleGpdKey(key: string): boolean {
+  return /^sk-[A-Za-z0-9_-]{6,}$/.test(key)
+}
 export function WelcomeScreen(props: { onComplete: (apiKey: string) => void | Promise<void> }) {
   const language = useLanguage()
   const platform = usePlatform()
@@ -39,6 +52,10 @@ export function WelcomeScreen(props: { onComplete: (apiKey: string) => void | Pr
     const key = apiKey().trim()
     if (!key) {
       setError(language.t("welcome.apiKey.required"))
+      return
+    }
+    if (!isPlausibleGpdKey(key)) {
+      setError(language.t("welcome.apiKey.invalidFormat"))
       return
     }
     setError(undefined)
@@ -79,6 +96,15 @@ export function WelcomeScreen(props: { onComplete: (apiKey: string) => void | Pr
     if (!key) {
       // Defensive: should never land in tos step without a key, but fall back.
       setError(language.t("welcome.apiKey.required"))
+      setStep("key")
+      return
+    }
+    if (!isPlausibleGpdKey(key)) {
+      // Defensive: handleKeySubmit already guards this. Only fires if
+      // the user reaches step="tos" via some bypass (devtools, future
+      // refactor). Bounce them back to the key step rather than
+      // burning the server-side TOS POST on a malformed key.
+      setError(language.t("welcome.apiKey.invalidFormat"))
       setStep("key")
       return
     }

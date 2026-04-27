@@ -4,6 +4,8 @@ export const dict = {
   "welcome.apiKey.label": "GPD API key",
   "welcome.apiKey.placeholder": "Paste your GPD API key",
   "welcome.apiKey.required": "An API key is required to get started",
+  "welcome.apiKey.invalidFormat":
+    "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask your lab administrator for a GPD virtual key.",
   "welcome.getStarted": "Get Started",
   "welcome.continue": "Continue",
   "welcome.tos.title": "Terms of Service",
