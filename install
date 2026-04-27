@@ -25,21 +25,30 @@ OPENCODE_REPO="opencode"
 OPENCODE_FALLBACK_ORG="anomalyco"
 OPENCODE_FALLBACK_REPO="opencode"
 
-# PyPI source: the published get-physics-done wheel. Pinning the version
-# means every installer run pulls the same artifact (PyPI is immutable
-# per-version once published). Bump when cutting a new release after
-# verifying the version is live at https://pypi.org/project/get-physics-done/.
+# PyPI source: the published get-physics-done wheel. We track latest
+# rather than pin so pilot users always get the newest agent + MCP
+# server set without waiting for an installer release. PyPI's
+# resolver picks the highest version compatible with the installed
+# Python (currently 3.13 from PBS).
 #
-# We pull from PyPI rather than the GitHub source tarball or the npm
-# bootstrap (`npx -y get-physics-done`):
+# Tradeoff: install reproducibility drops (the same install command
+# on different days may yield different versions). Acceptable for
+# pilot; if reproducibility becomes a hard requirement, pin via
+# `GPD_PACKAGE_VERSION="X.Y.Z"` env var (consumed below) and bump on
+# release.
+#
+# Why PyPI over the GitHub source tarball or the npm bootstrap
+# (`npx -y get-physics-done`):
 #   * PyPI: pre-built wheel, no GitHub dependency at install time, no
-#     Node.js needed. Smaller download.
+#     Node.js needed.
 #   * GitHub tarball: requires running setup.py / building from source.
 #     Slow; needs build deps that may not be present.
-#   * npm bootstrap: would add a Node.js prerequisite to the GPD installer
-#     just to delegate the venv + pip step we already do natively.
+#   * npm bootstrap: would add a Node.js prerequisite just to delegate
+#     the venv + pip step we already do natively.
 GPD_PACKAGE_NAME="get-physics-done"
-GPD_PACKAGE_VERSION="1.2.0"
+# Optional pin override. Empty / unset = install whatever PyPI says is
+# latest. Set to "X.Y.Z" to pin a specific release.
+GPD_PACKAGE_VERSION="${GPD_PACKAGE_VERSION:-}"
 
 LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 
@@ -91,6 +100,10 @@ Options:
     -v, --version <version> Install a specific OpenCode version
         --no-modify-path    Don't modify shell config files
         --skip-key          Skip PSI API key prompt
+        --no-launch         Don't auto-launch the GPD desktop app at end
+                            (auto-launch fires only when stdin is a TTY +
+                            the desktop bundle is installed; useful for
+                            CI / scripted installs)
         --export-key        Also write GPD_API_KEY into your login profile
                             (off by default: the gpd wrapper sources the key
                             from ~/.gpd/config/litellm.env; this flag is only
@@ -107,6 +120,7 @@ EOF
 requested_version=""
 no_modify_path=false
 skip_key=false
+no_launch=false
 # Off by default: the `gpd` wrapper at ~/.gpd/bin/gpd sources the key from
 # ~/.gpd/config/litellm.env (chmod 600 umask 077). The legacy login-profile
 # export is a third copy of the secret that dotfile-sync tools, backups, and
@@ -129,6 +143,7 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --no-modify-path) no_modify_path=true; shift ;;
         --skip-key)       skip_key=true; shift ;;
+        --no-launch)      no_launch=true; shift ;;
         --export-key)     export_key=true; shift ;;
         --no-export-key)  no_export_key=true; shift ;;  # legacy no-op (default)
         *)  warn "Unknown option: $1"; shift ;;
@@ -897,8 +912,13 @@ install_gpd_package() {
 
     "$venv_python" -m pip install --upgrade --quiet pip
 
-    log "Installing ${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION} from PyPI..."
-    "$venv_pip" install --upgrade --quiet "${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION}"
+    if [[ -n "$GPD_PACKAGE_VERSION" ]]; then
+        log "Installing ${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION} from PyPI..."
+        "$venv_pip" install --upgrade --quiet "${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION}"
+    else
+        log "Installing ${GPD_PACKAGE_NAME} (latest) from PyPI..."
+        "$venv_pip" install --upgrade --quiet "${GPD_PACKAGE_NAME}"
+    fi
 
     [[ -x "$GPD_VENV_DIR/bin/gpd" ]] || die "GPD installation failed — gpd command not found"
     success "GPD package installed"
@@ -1351,6 +1371,55 @@ print_success() {
     printf "\n"
     printf "  ${DIM}Installed to: %s${RESET}\n" "$GPD_HOME"
     printf "\n"
+}
+
+# Auto-launch the desktop bundle so the user lands in the welcome
+# screen / TOS gate without going hunting for the icon. Mirrors the
+# Windows installer's Start-Process behavior (which is opt-out via
+# -SkipLaunch). Gates:
+#
+#   * --no-launch flag set:     skip (CI / scripted installs).
+#   * stdin not a TTY:          skip (curl|bash where stdout was piped
+#                               through tee or similar; user may not be
+#                               at the keyboard).
+#   * desktop bundle missing:   nothing to launch.
+#
+# Failure of the launch command itself is non-fatal — we already told
+# the user where to find the app in print_success.
+maybe_launch_app() {
+    if [[ "$no_launch" == true ]]; then
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        # Pipe form (curl | bash) — stdin is the curl pipe, not a
+        # terminal. Could still be an interactive session at the
+        # keyboard, but conservatively skip auto-launch here so CI
+        # runners that pipe the installer don't end up spawning a GUI.
+        return 0
+    fi
+    case "$os" in
+        darwin)
+            if [[ -d "/Applications/GPD.app" ]]; then
+                log "Launching GPD..."
+                open "/Applications/GPD.app" 2>/dev/null || \
+                    warn "Couldn't auto-launch (open exit non-zero). Open GPD from Applications."
+            fi
+            ;;
+        linux)
+            if [[ -x "/usr/bin/GPD" ]]; then
+                log "Launching GPD..."
+                # gtk-launch reads .desktop entries (Ubuntu .deb installs
+                # one). Background + nohup so the install script doesn't
+                # block waiting for the GUI process.
+                if command -v gtk-launch &>/dev/null; then
+                    nohup gtk-launch GPD >/dev/null 2>&1 &
+                else
+                    nohup /usr/bin/GPD >/dev/null 2>&1 &
+                fi
+                disown 2>/dev/null || true
+            fi
+            ;;
+    esac
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────

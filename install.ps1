@@ -50,16 +50,22 @@ $OpenCodeRepo        = "opencode"
 $OpenCodeFallbackOrg = "anomalyco"
 $OpenCodeFallbackRepo = "opencode"
 
-# PyPI source: the published get-physics-done wheel. Bump when cutting
-# a new release. We pull from PyPI rather than the GitHub source tarball
-# or the npm bootstrap (`npx -y get-physics-done`):
+# PyPI source: the published get-physics-done wheel. We track latest
+# rather than pin so pilot users always get the newest agent + MCP
+# server set without waiting for an installer release. Tradeoff:
+# install reproducibility drops; set $env:GPD_PACKAGE_VERSION="X.Y.Z"
+# before running to pin a specific release if needed.
+#
+# Why PyPI over the GitHub source tarball or the npm bootstrap
+# (`npx -y get-physics-done`):
 #   * PyPI: pre-built wheel, no GitHub dependency at install time, no
 #     Node.js needed.
 #   * GitHub tarball: requires running setup.py / building from source.
 #   * npm bootstrap: would add a Node.js prereq just to delegate the
 #     venv + pip step we already do natively.
 $GpdPackageName    = "get-physics-done"
-$GpdPackageVersion = "1.2.0"
+# Optional pin override via env. Empty = install latest from PyPI.
+$GpdPackageVersion = if ($env:GPD_PACKAGE_VERSION) { $env:GPD_PACKAGE_VERSION } else { "" }
 
 $LiteLlmProxyUrl = "https://litellm-production-46bb.up.railway.app"
 
@@ -752,8 +758,13 @@ function Install-Gpd {
         Write-Warn "pip upgrade returned non-zero exit code, continuing..."
     }
 
-    Write-Log "Installing ${GpdPackageName}==${GpdPackageVersion} from PyPI..."
-    & $venvPip install --upgrade --quiet "${GpdPackageName}==${GpdPackageVersion}"
+    if ($GpdPackageVersion) {
+        Write-Log "Installing ${GpdPackageName}==${GpdPackageVersion} from PyPI..."
+        & $venvPip install --upgrade --quiet "${GpdPackageName}==${GpdPackageVersion}"
+    } else {
+        Write-Log "Installing ${GpdPackageName} (latest) from PyPI..."
+        & $venvPip install --upgrade --quiet "${GpdPackageName}"
+    }
     if ($LASTEXITCODE -ne 0) {
         Stop-WithError "Failed to install GPD package"
     }
