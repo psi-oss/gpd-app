@@ -34,7 +34,22 @@
 # (GHSA-v4p8-mg3p-g94g, GHSA-r75f-5x8p-qvmc, GHSA-xqmj-j6mv-4862,
 # GHSA-69x8-hrgq-fjj8, GHSA-53mr-6c8q-9789, GHSA-jjhc-v7c2-5hh6) plus
 # whatever shipped in the 04-19 → 04-27 window.
+# Bring our own `uv` binary. LiteLLM v1.83.14.rc.1's runtime image is
+# Chainguard Wolfi-base with a uv-managed venv at /app/.venv but neither
+# `pip` (no pip module in the venv) nor `uv` (kept only in the discarded
+# builder stage) are available at runtime. We need uv to install our
+# extra dep into the venv that prod_entrypoint.sh actually runs.
+#
+# Pin uv to the SAME tag (0.11.7) LiteLLM uses for its own build (see
+# their Dockerfile ARG UV_IMAGE) so behaviour matches the bundled venv's
+# expectations. Sha256 pin protects against ghcr tag rewrite.
+FROM ghcr.io/astral-sh/uv:0.11.7@sha256:733b4042187702f832f7fdecb3aff14a61b288c4ca37af188bb5715c1caebaf8 AS uvbin
+
 FROM ghcr.io/berriai/litellm:v1.83.14.rc.1
+
+# Stage uv into the runtime image at the same path LiteLLM's builder
+# uses, so `uv pip install` resolves without PATH gymnastics.
+COPY --from=uvbin /uv /usr/local/bin/uv
 
 # asyncpg so gpd_tos.hook.ensure_schema() can (re-)create the custom
 # gpd_tos_acceptance table on every worker start. Necessary because
@@ -42,14 +57,9 @@ FROM ghcr.io/berriai/litellm:v1.83.14.rc.1
 # AND LiteLLM's startup `prisma migrate` step drops unmanaged tables.
 # Without this bootstrap, the table disappears on every redeploy.
 #
-# Install via `uv` not pip: LiteLLM v1.83.14.rc.1's image switched to a
-# uv-managed venv at /app/.venv with no pip module bundled inside
-# (`python -m pip` returns "No module named pip"). uv ships in the image
-# (LiteLLM uses it for its own build) so `uv pip install` is the right
-# entry point. Targets the active venv at /app/.venv via VIRTUAL_ENV
-# semantics; --system avoids "no virtualenv detected" inside RUN.
-# Bare `pip` worked on v1.83.7-stable; required this swap from rc.1.
-RUN uv pip install --system --no-cache-dir asyncpg==0.31.0
+# Target the LiteLLM venv directly via --python: --system would fall
+# back to the Wolfi system python which doesn't have litellm's stack.
+RUN uv pip install --python /app/.venv/bin/python --no-cache-dir asyncpg==0.31.0
 
 # Our hook modules.
 #   gpd_log     → POST /gpd/log (session-event ingest to GCS). See
