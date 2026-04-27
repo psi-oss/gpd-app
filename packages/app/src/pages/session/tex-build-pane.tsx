@@ -1,5 +1,6 @@
-import { Match, Show, Switch, createMemo } from "solid-js"
+import { Match, Show, Switch, createMemo, createSignal } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
+import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { showToast } from "@opencode-ai/ui/toast"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
@@ -144,6 +145,11 @@ export function TexBuildPane(props: {
   const recompileDisabled = () => running()
   const hasPdf = () => !!entry()?.result.pdfPath
 
+  // Errors panel height (px) when a PDF is rendered above. Default sized so
+  // the user sees a couple of error rows without dominating the pane; a
+  // ResizeHandle at the top of the panel lets them drag it taller/shorter.
+  const [errorsHeight, setErrorsHeight] = createSignal(220)
+
   return (
     <div class="flex flex-col h-full overflow-hidden" data-component="tex-build-pane">
       <div class="flex items-center justify-between shrink-0 px-3 py-2 border-b border-border-weaker-base">
@@ -211,10 +217,19 @@ export function TexBuildPane(props: {
                 <div class="flex-1 min-h-0">
                   <TexPdfViewer pdfPath={e().result.pdfPath!} />
                 </div>
+                <ResizeHandle
+                  direction="vertical"
+                  edge="start"
+                  size={errorsHeight()}
+                  min={48}
+                  max={2000}
+                  onResize={setErrorsHeight}
+                  class="cursor-row-resize"
+                />
               </Show>
               <div
                 class="shrink-0 border-t border-border-weaker-base overflow-auto"
-                style={{ "max-height": hasPdf() ? "33%" : "100%" }}
+                style={hasPdf() ? { height: `${errorsHeight()}px` } : { "max-height": "100%" }}
               >
                 <TexErrorList
                   errors={e().result.errors}

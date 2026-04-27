@@ -148,9 +148,17 @@ export function FileEditor(props: Props) {
 
   const replace = (content: string) => {
     if (!view) return
+    // Preserve the user's cursor + selection across content swaps so a
+    // post-save reload (or external-edit reload) does not jerk them back
+    // to (1, 1). Clamp to the new doc length to avoid out-of-range
+    // anchors when the new content is shorter.
+    const prev = view.state.selection.main
+    const len = content.length
+    const anchor = Math.min(prev.anchor, len)
+    const head = Math.min(prev.head, len)
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: content },
-      selection: { anchor: 0 },
+      selection: { anchor, head },
     })
     setRev((value) => value + 1)
   }
