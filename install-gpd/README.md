@@ -199,29 +199,34 @@ Safe to re-run after updates or if a step previously failed.
 
 ## Uninstalling
 
-### Linux
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/psi-oss/opencode/gpd/install-gpd/uninstall.sh)
-```
-
-Add `--yes` to skip the confirmation prompt.
+Served from `download.gpd.psi.inc` — same gh-pages workflow that
+publishes the install scripts also republishes these on every push to
+`gpd` that touches `install-gpd/`.
 
 ### macOS
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/psi-oss/opencode/gpd/install-gpd/uninstall_macos.sh)
+curl -fsSL https://download.gpd.psi.inc/uninstall | bash -s -- --yes
+```
+
+### Linux
+
+```bash
+curl -fsSL https://download.gpd.psi.inc/uninstall.sh | bash -s -- --yes
 ```
 
 ### Windows
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-irm https://raw.githubusercontent.com/psi-oss/opencode/gpd/install-gpd/windows_11/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
-& $env:TEMP\uninstall.ps1
+irm https://download.gpd.psi.inc/uninstall.ps1 | iex
 ```
 
-Add `-Yes` to skip confirmation.
+Drop `--yes` (or `-Yes` on Windows) for an interactive confirm prompt
+before deletion.
+
+The same `SHA256SUMS.txt` manifest at
+<https://download.gpd.psi.inc/SHA256SUMS.txt> covers the uninstall
+scripts too — use the same verify-then-run flow as the installer.
 
 ### What uninstall removes
 

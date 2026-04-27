@@ -1,8 +1,19 @@
 name: GPD Sync Installer Scripts to Pages
 
-# Publishes install-gpd/install and install-gpd/windows_11/install.ps1
-# to the gh-pages branch served at download.gpd.psi.inc, alongside a
-# SHA256SUMS.txt manifest users can verify before execution.
+# Publishes the install + uninstall scripts to the gh-pages branch
+# served at download.gpd.psi.inc, alongside a SHA256SUMS.txt manifest
+# users can verify before execution.
+#
+# Published files (URL → source):
+#   /install              ← install-gpd/install              (mac + linux installer)
+#   /install.ps1          ← install-gpd/windows_11/install.ps1 (windows installer)
+#   /uninstall            ← install-gpd/uninstall_macos.sh   (macOS uninstaller)
+#   /uninstall.sh         ← install-gpd/uninstall.sh         (linux uninstaller)
+#   /uninstall.ps1        ← install-gpd/windows_11/uninstall.ps1 (windows uninstaller)
+#
+# /uninstall (no extension) targets macOS to mirror the no-extension
+# /install path users already type. /uninstall.sh stays available for
+# linux + script-style invocation. SHA256SUMS.txt covers all five.
 #
 # Trust anchor: once this workflow runs, users who install via
 # `curl | bash` / `irm | iex` can verify the installer content they're
@@ -31,7 +42,10 @@ on:
     branches: [gpd]
     paths:
       - "install-gpd/install"
+      - "install-gpd/uninstall.sh"
+      - "install-gpd/uninstall_macos.sh"
       - "install-gpd/windows_11/install.ps1"
+      - "install-gpd/windows_11/uninstall.ps1"
       - ".github/workflows/gpd-sync-installer-to-pages.yml"
   workflow_dispatch:
 
@@ -65,13 +79,19 @@ jobs:
         working-directory: pages
         run: |
           set -euo pipefail
-          # Copy installer scripts from source into the gh-pages tree.
-          # Target names match the URL paths users are instructed to
-          # fetch:
-          #   https://download.gpd.psi.inc/install
-          #   https://download.gpd.psi.inc/install.ps1
-          install -m 0755 ../src/install-gpd/install ./install
+          # Copy installer + uninstaller scripts from source into the
+          # gh-pages tree. Target names match URL paths users are
+          # instructed to fetch:
+          #   https://download.gpd.psi.inc/install     (mac+linux installer)
+          #   https://download.gpd.psi.inc/install.ps1 (windows installer)
+          #   https://download.gpd.psi.inc/uninstall   (macOS uninstaller, mirrors /install path)
+          #   https://download.gpd.psi.inc/uninstall.sh   (linux uninstaller)
+          #   https://download.gpd.psi.inc/uninstall.ps1  (windows uninstaller)
+          install -m 0755 ../src/install-gpd/install              ./install
           install -m 0644 ../src/install-gpd/windows_11/install.ps1 ./install.ps1
+          install -m 0755 ../src/install-gpd/uninstall_macos.sh   ./uninstall
+          install -m 0755 ../src/install-gpd/uninstall.sh         ./uninstall.sh
+          install -m 0644 ../src/install-gpd/windows_11/uninstall.ps1 ./uninstall.ps1
 
           # Generate SHA256SUMS.txt with deterministic (sorted) ordering
           # so the file is stable across runs when only one entry
@@ -80,6 +100,9 @@ jobs:
           {
             sha256sum install
             sha256sum install.ps1
+            sha256sum uninstall
+            sha256sum uninstall.sh
+            sha256sum uninstall.ps1
           } | sort -k2 > SHA256SUMS.txt
 
           # Record the source commit so users / auditors can reproduce
@@ -100,7 +123,7 @@ jobs:
           GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
         run: |
           set -euo pipefail
-          git add install install.ps1 SHA256SUMS.txt SHA256SUMS.meta
+          git add install install.ps1 uninstall uninstall.sh uninstall.ps1 SHA256SUMS.txt SHA256SUMS.meta
           if git diff --cached --quiet; then
             echo "No installer changes; nothing to publish."
             exit 0
