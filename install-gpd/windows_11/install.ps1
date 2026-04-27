@@ -765,6 +765,17 @@ function Install-Gpd {
     else {
         Stop-WithError "GPD package installation failed -- gpd.exe not found in venv"
     }
+
+    # Physics-research scratchpad libraries. Not strict dependencies of
+    # get-physics-done, but every research session ends up wanting them
+    # within 5 minutes (numerical integration, ODE solvers, plotting,
+    # symbolic math). ~120 MB extra; one-time download.
+    Write-Log "Installing physics scratchpad libs (numpy, scipy, matplotlib, sympy)..."
+    & $venvPip install --upgrade --quiet "numpy>=2" "scipy>=1.13" "matplotlib>=3.8" "sympy>=1.13"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Physics libs install failed -- agent code that imports scipy/numpy may break. Retry: ~\.gpd\venv\Scripts\pip.exe install scipy numpy matplotlib sympy"
+    }
+
 }
 
 function Test-GpdInstall {
