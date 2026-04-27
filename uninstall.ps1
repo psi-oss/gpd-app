@@ -380,7 +380,28 @@ function Invoke-GpdManifestRemoval {
     param([string]$ManifestPath)
 
     if (-not (Test-Path $ManifestPath)) {
-        Write-Skip "No gpd-file-manifest.json at $ManifestPath"
+        # Fallback: a partial install (or a user who manually wiped
+        # %USERPROFILE%\.gpd) can leave GPD-managed marker files in the
+        # opencode config dir without a manifest. Sweep the well-known
+        # managed paths from the gpd runtime catalog
+        # (`flat_command_globs: ["command/gpd-*.md"]` for opencode,
+        # plus the conventional agents\ + hooks\ patterns) so a future
+        # fresh install isn't blocked by orphan markers.
+        $baseDir = Split-Path -Parent $ManifestPath
+        $swept = 0
+        foreach ($pat in @("command\gpd-*.md", "agents\gpd-*.md", "hooks\gpd-*")) {
+            $matches = Get-ChildItem -Path (Join-Path $baseDir $pat) -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.PSIsContainer }
+            if ($matches) {
+                $matches | Remove-Item -Force -ErrorAction SilentlyContinue
+                $swept += $matches.Count
+            }
+        }
+        if ($swept -gt 0) {
+            Write-Success "Removed $swept orphan GPD marker file(s) from $baseDir (no manifest)"
+        } else {
+            Write-Skip "No gpd-file-manifest.json at $ManifestPath"
+        }
         return
     }
 
