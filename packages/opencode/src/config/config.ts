@@ -1054,7 +1054,22 @@ export namespace Config {
         })
         .optional(),
     })
-    .strict()
+    // Top-level config is INTENTIONALLY permissive (.passthrough not
+    // .strict). The GPD desktop wrapper points opencode at
+    // OPENCODE_CONFIG_DIR=$HOME/.gpd, where `gpd install opencode
+    // --global` (from get-physics-done) writes config.json carrying
+    // its own top-level keys: autonomy, execution, research_mode,
+    // commit_docs, parallelization, model_profile, model_overrides,
+    // workflow, git. These are GPD-CLI metadata, NOT opencode config —
+    // opencode doesn't read them, but with .strict() they crashed the
+    // sidecar with ConfigInvalidError "unrecognized_keys" → Tauri saw
+    // "Sidecar terminated code=1" → user saw "Could not reach This
+    // computer. Retrying automatically...".
+    //
+    // Sub-schemas (Mcp, Provider, Agent, ...) keep .strict() because
+    // unknown keys inside THOSE shapes are real config bugs the user
+    // should see surfaced. Only the top-level shape is permissive.
+    .passthrough()
     .meta({
       ref: "Config",
     })
