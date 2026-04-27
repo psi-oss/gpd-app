@@ -39,6 +39,18 @@ const DEFAULT_SIDEBAR_WIDTH = 344
 const DEFAULT_FILE_TREE_WIDTH = 200
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
+// Default tab for the file-tree panel on a fresh install (no persisted
+// state). "all" shows the worktree filesystem; "changes" shows only
+// VCS-modified files. Researchers want to navigate the project tree
+// from launch — show the full tree by default. Existing users keep
+// whatever tab they last selected because the migration only rebuilds
+// state when the persisted value is malformed.
+//
+// Explicit union type so TypeScript widens to "changes" | "all" instead
+// of narrowing to the literal "all" — call sites elsewhere compare
+// against both string literals.
+type FileTreeTab = "changes" | "all"
+const DEFAULT_FILE_TREE_TAB: FileTreeTab = "all"
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
 
 export function getAvatarColors(key?: string) {
@@ -189,7 +201,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           ...fileTree,
           opened: true,
           width: width === 260 ? DEFAULT_FILE_TREE_WIDTH : width,
-          tab: "changes",
+          tab: DEFAULT_FILE_TREE_TAB,
         }
       })()
 
@@ -268,7 +280,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         fileTree: {
           opened: false,
           width: DEFAULT_FILE_TREE_WIDTH,
-          tab: "changes" as "changes" | "all",
+          tab: DEFAULT_FILE_TREE_TAB as FileTreeTab,
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
@@ -798,7 +810,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       fileTree: {
         opened: createMemo(() => store.fileTree?.opened ?? true),
         width: createMemo(() => store.fileTree?.width ?? DEFAULT_FILE_TREE_WIDTH),
-        tab: createMemo(() => store.fileTree?.tab ?? "changes"),
+        tab: createMemo(() => store.fileTree?.tab ?? DEFAULT_FILE_TREE_TAB),
         setTab(tab: "changes" | "all") {
           if (!store.fileTree) {
             setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab })
@@ -808,28 +820,28 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
         open() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: DEFAULT_FILE_TREE_TAB })
             return
           }
           setStore("fileTree", "opened", true)
         },
         close() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: false, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: false, width: DEFAULT_FILE_TREE_WIDTH, tab: DEFAULT_FILE_TREE_TAB })
             return
           }
           setStore("fileTree", "opened", false)
         },
         toggle() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: DEFAULT_FILE_TREE_TAB })
             return
           }
           setStore("fileTree", "opened", (x) => !x)
         },
         resize(width: number) {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width, tab: "changes" })
+            setStore("fileTree", { opened: true, width, tab: DEFAULT_FILE_TREE_TAB })
             return
           }
           setStore("fileTree", "width", width)
