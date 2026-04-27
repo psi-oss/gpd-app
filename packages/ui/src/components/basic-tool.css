@@ -240,7 +240,12 @@
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-large);
     letter-spacing: var(--letter-spacing-normal);
-    text-transform: capitalize;
+    /* No `text-transform: capitalize` here. CSS capitalize treats
+       hyphen-minus as a word boundary on WebKit/Blink, which would
+       turn agent ids like `gpd-roadmapper` (lowercase on disk) into
+       `Gpd-Roadmapper` — mangling the three-letter GPD acronym. Title
+       casing is done in TS via formatAgentTitle() so we can preserve
+       known acronyms (GPD) while still capitalizing the rest. */
   }
 
   [data-slot="basic-tool-tool-subtitle"] {

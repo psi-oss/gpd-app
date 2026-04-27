@@ -35,6 +35,7 @@ import { useFileComponent } from "../context/file"
 import { useDialog } from "../context/dialog"
 import { type UiI18n, useI18n } from "../context/i18n"
 import { BasicTool, GenericTool } from "./basic-tool"
+import { formatAgentTitle } from "./format-agent-title"
 import { Accordion } from "./accordion"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
 import { Card } from "./card"
@@ -1749,7 +1750,13 @@ ToolRegistry.register({
       return taskSession(props.input, location.pathname, data.store.session, data.store.agent)
     })
     const agent = createMemo(() => taskAgent(props.input.subagent_type, data.store.agent))
-    const title = createMemo(() => agent().name ?? i18n.t("ui.tool.agent.default"))
+    // formatAgentTitle preserves the GPD acronym (gpd-roadmapper ->
+    // GPD-Roadmapper) instead of letting CSS `capitalize` mangle it.
+    // See packages/ui/src/components/format-agent-title.ts for rules.
+    const title = createMemo(() => {
+      const raw = agent().name ?? i18n.t("ui.tool.agent.default")
+      return formatAgentTitle(raw)
+    })
     const tone = createMemo(() => agent().color)
     const subtitle = createMemo(() => {
       const value = props.input.description
@@ -2306,7 +2313,12 @@ ToolRegistry.register({
   name: "skill",
   render(props) {
     const i18n = useI18n()
-    const title = createMemo(() => props.input.name || i18n.t("ui.tool.skill"))
+    // Skills ship with lowercase-hyphen ids (`gpd-bibliographer`,
+    // `dimensional-analysis`, etc.). formatAgentTitle preserves the
+    // GPD acronym + title-cases the rest, so the CSS `capitalize`
+    // class is no longer needed (it would have rendered
+    // "Gpd-Bibliographer").
+    const title = createMemo(() => formatAgentTitle(props.input.name || i18n.t("ui.tool.skill")))
     const running = createMemo(() => props.status === "pending" || props.status === "running")
 
     const titleContent = () => <TextShimmer text={title()} active={running()} />
@@ -2314,7 +2326,7 @@ ToolRegistry.register({
     const trigger = () => (
       <div data-slot="basic-tool-tool-info-structured">
         <div data-slot="basic-tool-tool-info-main">
-          <span data-slot="basic-tool-tool-title" class="capitalize agent-title">
+          <span data-slot="basic-tool-tool-title" class="agent-title">
             {titleContent()}
           </span>
         </div>
