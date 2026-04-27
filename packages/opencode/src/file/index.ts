@@ -389,10 +389,20 @@ export namespace File {
 
       const scan = Effect.fn("File.scan")(function* () {
         if (Instance.directory === path.parse(Instance.directory).root) return
-        const isGlobalHome = Instance.directory === Global.Path.home && Instance.project.id === "global"
+        // Apply the Protected-aware enumeration whenever the scan is rooted
+        // at $HOME, NOT only when the special "global" project is in play.
+        // A `git init` in the user's $HOME (e.g. dotfile management) makes
+        // Project.fromDirectory register a non-global project with
+        // worktree=$HOME — without this guard the else branch below runs
+        // `rg.files({cwd: $HOME})` which walks ~/Music, ~/Pictures,
+        // ~/Desktop, ~/Documents and triggers macOS TCC prompts on first
+        // launch (especially on Sequoia/Tahoe where Music Library /
+        // Photos Library files are gated). Reproduced on macOS 26.3.1 with
+        // ~/Music/Music/Music Library.musiclibrary present.
+        const isHomeScan = Instance.directory === Global.Path.home
         const next: Entry = { files: [], dirs: [] }
 
-        if (isGlobalHome) {
+        if (isHomeScan) {
           const dirs = new Set<string>()
           const protectedNames = Protected.names()
           const ignoreNested = new Set(["node_modules", "dist", "build", "target", "vendor"])
