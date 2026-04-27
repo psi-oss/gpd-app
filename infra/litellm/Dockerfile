@@ -41,7 +41,14 @@ FROM ghcr.io/berriai/litellm:v1.83.14.rc.1
 # LiteLLM's bundled PrismaClient silently rolls DDL back on disconnect,
 # AND LiteLLM's startup `prisma migrate` step drops unmanaged tables.
 # Without this bootstrap, the table disappears on every redeploy.
-RUN pip install --no-cache-dir asyncpg==0.31.0
+#
+# Use `python -m pip` not bare `pip`: LiteLLM v1.83.14.rc.1's image base
+# moved off the stock python:slim layer that put `pip` on PATH. Bare
+# `pip` exits 127 ("pip: not found") on rc.1 even though pip is bundled
+# inside the venv. `python -m pip` reaches the bundled installer
+# regardless of how PATH gets carved up. Worked on v1.83.7-stable
+# either way; required from v1.83.14.rc.1 onward.
+RUN python -m pip install --no-cache-dir asyncpg==0.31.0
 
 # Our hook modules.
 #   gpd_log     → POST /gpd/log (session-event ingest to GCS). See
