@@ -295,8 +295,79 @@ jobs:
           name: opencode-cli
           path: packages/opencode/dist/opencode-*
 
+  create-draft:
+    # Pre-create the draft release ONCE so all build-desktop matrix jobs
+    # upload to the same release ID. Without this, each matrix job calls
+    # tauri-action's "find draft by tag, else create" and races: the
+    # GitHub releases list endpoint has indexing lag (>30s observed) so
+    # parallel jobs that finish their Tauri build within ~30s of each
+    # other all see "no draft yet" and create separate drafts. This is
+    # what produced 3-4 duplicate v1.1.15 / v1.1.16 drafts each owning
+    # only one platform's assets. Historic releases avoided it by
+    # accident: build-time variance from cold Cargo caches spread
+    # uploads across ~20min, large enough for the API to index between
+    # finishes. Cargo cache hits compressed that window and exposed
+    # the race.
+    #
+    # The job is idempotent: a re-dispatched workflow finds the existing
+    # draft for this tag and re-uses its ID (matches resolve-version's
+    # auto-join-draft path).
+    needs: [tos-guard, resolve-version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: gpd-desktop-v${{ needs.resolve-version.outputs.version }}
+          NAME: GPD v${{ needs.resolve-version.outputs.version }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          SIDECAR_VERSION: ${{ needs.resolve-version.outputs.sidecar_version }}
+          COMMITISH: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Reuse if a draft for this tag already exists (resolve-version
+          # may have selected auto-join-draft, OR a prior dispatch was
+          # cancelled mid-run leaving a draft behind).
+          EXISTING_ID=$(gh api graphql -f query='
+            query($owner:String!,$repo:String!) {
+              repository(owner:$owner, name:$repo) {
+                releases(first:50, orderBy:{field:CREATED_AT, direction:DESC}) {
+                  nodes { databaseId tagName isDraft }
+                }
+              }
+            }' -F owner="${REPO%/*}" -F repo="${REPO#*/}" \
+            --jq ".data.repository.releases.nodes[] | select(.tagName == \"$TAG\" and .isDraft) | .databaseId" \
+            | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Reusing existing draft id=$EXISTING_ID for tag $TAG"
+            echo "release_id=$EXISTING_ID" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Create a fresh draft. Use REST to get the JSON response with
+          # the ID directly; gh release create only emits the URL.
+          BODY=$(printf 'GPD Desktop App v%s — Physics Research Workspace by PSI\n\n**Bundled sidecar:** get-physics-done v%s' "$VERSION" "$SIDECAR_VERSION")
+          NEW_ID=$(gh api -X POST "repos/$REPO/releases" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$COMMITISH" \
+            -f name="$NAME" \
+            -f body="$BODY" \
+            -F draft=true \
+            -F prerelease=false \
+            --jq '.id')
+          if [ -z "$NEW_ID" ] || [ "$NEW_ID" = "null" ]; then
+            echo "::error::Failed to create draft release for $TAG"
+            exit 1
+          fi
+          echo "Created draft id=$NEW_ID for tag $TAG"
+          echo "release_id=$NEW_ID" >> "$GITHUB_OUTPUT"
+
   build-desktop:
-    needs: [resolve-version, build-cli]
+    needs: [resolve-version, build-cli, create-draft]
     strategy:
       fail-fast: false
       matrix:
@@ -435,14 +506,12 @@ jobs:
           projectPath: packages/desktop
           tauriScript: ${{ (runner.os == 'Linux' && 'cargo tauri') || '' }}
           args: --target ${{ matrix.target }} --config ./src-tauri/tauri.prod.conf.json
-          tagName: gpd-desktop-v${{ needs.resolve-version.outputs.version }}
-          releaseName: "GPD v${{ needs.resolve-version.outputs.version }}"
-          releaseBody: |
-            GPD Desktop App v${{ needs.resolve-version.outputs.version }} — Physics Research Workspace by PSI
-
-            **Bundled sidecar:** get-physics-done v${{ needs.resolve-version.outputs.sidecar_version }}
-          releaseDraft: true
-          prerelease: false
+          # releaseId is set by the upstream create-draft job so all
+          # parallel matrix entries upload to the same draft. tagName /
+          # releaseName / releaseBody / releaseDraft / prerelease are
+          # ignored when releaseId is provided. See create-draft job
+          # comment for the parallel-create race this prevents.
+          releaseId: ${{ needs.create-draft.outputs.release_id }}
           updaterJsonPreferNsis: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
