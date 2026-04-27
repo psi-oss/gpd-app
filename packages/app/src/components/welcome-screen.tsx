@@ -3,6 +3,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
+import { validateGpdKey } from "@/lib/gpd-key-validate"
 import { postTosAccept } from "@/lib/tos-accept"
 import {
   CURRENT_TOS_VERSION,
@@ -28,13 +29,14 @@ import { TosSection } from "./tos-section"
  */
 
 /**
- * LiteLLM virtual keys always start with `sk-`. Reject anything else
- * BEFORE moving to the TOS step so a user with the wrong key doesn't
- * read + accept legal text only to get a 401 from /gpd/tos-accept after
- * the fact (server-side rejection message: "Authentication Error,
- * LiteLLM Virtual Key expected. Received=****, expected to start with
- * 'sk-'."). The minimum length is conservative — real virtual keys are
- * ~50+ chars; we just guard against `sk-` followed by nothing useful.
+ * Cheap pre-flight format check so we don't burn a network round-trip
+ * on obviously-wrong input (empty, "test", "PSI key here"). Real
+ * validation happens server-side via {@link validateGpdKey} below.
+ *
+ * LiteLLM virtual keys always start with `sk-` per the proxy's auth
+ * dependency: rejection message is literally "LiteLLM Virtual Key
+ * expected. Received=****, expected to start with 'sk-'." The min
+ * length is conservative — real virtual keys are ~50+ chars.
  */
 function isPlausibleGpdKey(key: string): boolean {
   return /^sk-[A-Za-z0-9_-]{6,}$/.test(key)
@@ -54,18 +56,62 @@ export function WelcomeScreen(props: { onComplete: (apiKey: string) => void | Pr
       setError(language.t("welcome.apiKey.required"))
       return
     }
+    // Cheap regex pre-flight: skip the network round-trip for obviously
+    // malformed input. Server-side validation below is the authoritative
+    // gate.
     if (!isPlausibleGpdKey(key)) {
       setError(language.t("welcome.apiKey.invalidFormat"))
       return
     }
+
+    // Verify with LiteLLM BEFORE moving to TOS or POSTing acceptance.
+    // The previous behavior accepted any non-empty string and only
+    // discovered the key was bogus when /gpd/tos-accept returned 401,
+    // by which point the user had already agreed to legal text under a
+    // key the proxy will reject. Three failure modes to surface
+    // separately so the user knows whether to retype or check wifi:
+    //   - invalid_key: proxy rejected (wrong key, revoked, no models)
+    //   - network_error: proxy unreachable (offline, DNS, 5xx)
+    //   - timeout: handled by validateGpdKey as network_error
+    setSubmitting(true)
     setError(undefined)
-    // If this device already accepted the current TOS version (e.g. user
-    // is just rotating their key), skip the TOS step and auto-POST a
-    // fresh acceptance row server-side for the new key's user_id. Keeps
-    // per-user_id compliance row intact without forcing a re-click.
+    let validation
+    try {
+      validation = await validateGpdKey(key)
+    } catch (err) {
+      // validateGpdKey shouldn't throw — it catches everything itself.
+      // Defensive fallback in case of a programming error.
+      setSubmitting(false)
+      setError(
+        err instanceof Error
+          ? `${language.t("welcome.apiKey.networkError")} (${err.message})`
+          : language.t("welcome.apiKey.networkError"),
+      )
+      return
+    }
+    if (!validation.ok) {
+      setSubmitting(false)
+      const i18nKey =
+        validation.reason === "invalid_key"
+          ? "welcome.apiKey.rejectedByServer"
+          : "welcome.apiKey.networkError"
+      setError(
+        validation.detail
+          ? `${language.t(i18nKey)} (${validation.detail})`
+          : language.t(i18nKey),
+      )
+      return
+    }
+
+    // Key is real + has at least one model. Safe to advance.
+    //
+    // If this device already accepted the current TOS version (e.g.
+    // user is just rotating their key), skip the TOS step and auto-POST
+    // a fresh acceptance row server-side for the new key's user_id.
+    // Keeps per-user_id compliance row intact without forcing a
+    // re-click.
     const cachedVersion = localStorage.getItem(TOS_ACCEPTED_VERSION_STORAGE_KEY)
     if (cachedVersion === CURRENT_TOS_VERSION) {
-      setSubmitting(true)
       try {
         await postTosAccept({
           key,
@@ -88,6 +134,7 @@ export function WelcomeScreen(props: { onComplete: (apiKey: string) => void | Pr
         setSubmitting(false)
       }
     }
+    setSubmitting(false)
     setStep("tos")
   }
 

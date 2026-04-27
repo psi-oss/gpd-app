@@ -6,6 +6,10 @@ export const dict = {
   "welcome.apiKey.required": "An API key is required to get started",
   "welcome.apiKey.invalidFormat":
     "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask your lab administrator for a GPD virtual key.",
+  "welcome.apiKey.rejectedByServer":
+    "GPD's server rejected this key. Double-check it, or ask your lab administrator for a fresh GPD virtual key.",
+  "welcome.apiKey.networkError":
+    "Couldn't reach the GPD server to verify your key. Check your internet connection and try again.",
   "welcome.getStarted": "Get Started",
   "welcome.continue": "Continue",
   "welcome.tos.title": "Terms of Service",
