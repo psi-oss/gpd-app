@@ -25,12 +25,21 @@ OPENCODE_REPO="opencode"
 OPENCODE_FALLBACK_ORG="anomalyco"
 OPENCODE_FALLBACK_REPO="opencode"
 
-GPD_PACKAGE_REPO="psi-oss/get-physics-done"
-# Pin to a specific tag rather than a moving branch so installs are
-# reproducible: every v1.1.8 installer run fetches the exact same tarball.
-# Bump this constant (and verify the tag exists on the psi-oss remote)
-# when cutting a new get-physics-done release.
-GPD_PACKAGE_VERSION="v1.1.0"
+# PyPI source: the published get-physics-done wheel. Pinning the version
+# means every installer run pulls the same artifact (PyPI is immutable
+# per-version once published). Bump when cutting a new release after
+# verifying the version is live at https://pypi.org/project/get-physics-done/.
+#
+# We pull from PyPI rather than the GitHub source tarball or the npm
+# bootstrap (`npx -y get-physics-done`):
+#   * PyPI: pre-built wheel, no GitHub dependency at install time, no
+#     Node.js needed. Smaller download.
+#   * GitHub tarball: requires running setup.py / building from source.
+#     Slow; needs build deps that may not be present.
+#   * npm bootstrap: would add a Node.js prerequisite to the GPD installer
+#     just to delegate the venv + pip step we already do natively.
+GPD_PACKAGE_NAME="get-physics-done"
+GPD_PACKAGE_VERSION="1.2.0"
 
 LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 
@@ -888,18 +897,8 @@ install_gpd_package() {
 
     "$venv_python" -m pip install --upgrade --quiet pip
 
-    # Pinned to a concrete tag (not `main`) so every install of this
-    # installer version grabs the exact same source tree.
-    local source_url="https://github.com/${GPD_PACKAGE_REPO}/archive/refs/tags/${GPD_PACKAGE_VERSION}.tar.gz"
-
-    # Pre-flight check: if the tag was deleted upstream, fail loudly
-    # before pip swallows the 404 as a generic "no matching distribution".
-    if ! url_exists "$source_url"; then
-        die "GPD package tag ${GPD_PACKAGE_VERSION} not found — aborting."
-    fi
-
-    log "Installing get-physics-done ${GPD_PACKAGE_VERSION} from GitHub..."
-    "$venv_pip" install --upgrade --quiet "$source_url"
+    log "Installing ${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION} from PyPI..."
+    "$venv_pip" install --upgrade --quiet "${GPD_PACKAGE_NAME}==${GPD_PACKAGE_VERSION}"
 
     [[ -x "$GPD_VENV_DIR/bin/gpd" ]] || die "GPD installation failed — gpd command not found"
     success "GPD package installed"
@@ -1275,14 +1274,22 @@ configure_gpd_runtime() {
     # needs containment.
     if [[ -x "$GPD_VENV_DIR/bin/python" ]]; then
         log "Configuring GPD for OpenCode..."
-        # NB: the --skip-readiness-check flag was added to gpd.cli on `main`
-        # after the v1.1.0 tag — which is what $GPD_PACKAGE_VERSION pins to.
-        # Don't pass it here; bump the flag back in once get-physics-done
-        # cuts v1.2.0 or later.
-        if ! ( cd "$HOME" && "$GPD_VENV_DIR/bin/python" -m gpd.cli install opencode --global ); then
-            warn "GPD runtime configuration failed. Run manually from your home dir:"
+        # Suppress stdout (rich-formatted summary table + "/gpd-help" hint
+        # that confuses desktop-first users) but keep stderr so we still
+        # see real errors. On failure, surface the runtime-config gap and
+        # the manual recovery command, but continue — the rest of the
+        # install (venv, wrapper, marker) is still useful.
+        local runtime_log
+        runtime_log="$(mktemp -t gpd-runtime.XXXXXX)"
+        if ( cd "$HOME" && "$GPD_VENV_DIR/bin/python" -m gpd.cli install opencode --global ) >"$runtime_log" 2>&1; then
+            success "GPD runtime configured for OpenCode"
+        else
+            warn "GPD runtime configuration failed. Last lines:"
+            tail -n 20 "$runtime_log" >&2
+            warn "Re-run manually from your home dir:"
             warn "  cd ~ && ~/.gpd/venv/bin/gpd install opencode --global"
         fi
+        rm -f "$runtime_log"
     fi
 
     # Write the .gpd-initialized marker so the GPD desktop app's first-run
@@ -1306,28 +1313,29 @@ configure_gpd_runtime() {
 # ── Success ──────────────────────────────────────────────────────────────
 
 print_success() {
+    # Detect a working desktop bundle so the success message can point at
+    # it instead of the CLI. The desktop app is the primary surface for
+    # PSI professors; the `gpd` CLI is a power-user shortcut. Linux's
+    # .deb lands GPD at /usr/bin/GPD; macOS's .dmg at /Applications/GPD.app.
     local has_desktop=false
-    [[ -x "/usr/bin/GPD" ]] && has_desktop=true
+    if [[ "$os" == "darwin" && -d "/Applications/GPD.app" ]]; then
+        has_desktop=true
+    elif [[ "$os" == "linux" && -x "/usr/bin/GPD" ]]; then
+        has_desktop=true
+    fi
 
     printf "\n"
     success "GPD installed successfully!"
     printf "\n"
 
     if [[ "$has_desktop" == true ]]; then
-        printf "  ${BOLD}Desktop app${RESET} ${DIM}(recommended)${RESET}\n"
-        printf "    Launch ${BOLD}GPD${RESET} from your applications menu.\n"
-        printf "    ${DIM}You may be asked for your PSI key again on first launch —${RESET}\n"
-        printf "    ${DIM}use the same key you entered here.${RESET}\n"
-        printf "\n"
-        printf "  ${BOLD}CLI${RESET}\n"
-        printf "    Open a ${BOLD}new terminal${RESET}, then run: ${BOLD}gpd${RESET}\n"
+        printf "  Open the ${BOLD}GPD${RESET} app from your applications menu to get started.\n"
+        printf "  ${DIM}First launch will walk you through TOS acceptance + your PSI key.${RESET}\n"
     else
         printf "  Run GPD: open a ${BOLD}new terminal${RESET}, then type ${BOLD}gpd${RESET}\n"
     fi
     printf "\n"
     printf "  ${DIM}Installed to: %s${RESET}\n" "$GPD_HOME"
-    printf "\n"
-    warn "PATH changes don't apply to THIS terminal — open a new one to use 'gpd'."
     printf "\n"
 }
 
