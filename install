@@ -902,6 +902,20 @@ install_gpd_package() {
 
     [[ -x "$GPD_VENV_DIR/bin/gpd" ]] || die "GPD installation failed — gpd command not found"
     success "GPD package installed"
+
+    # Physics-research scratchpad libraries. These are not strict
+    # dependencies of get-physics-done, but every research session
+    # spawned by the agent ends up wanting them within 5 minutes
+    # (numerical integration, ODE solvers, plotting, symbolic math).
+    # Pinned via "package>=major" rather than exact pin so security
+    # patches flow through; the upper bounds the agent cares about
+    # (matplotlib 3.x, scipy 1.x, numpy 2.x, sympy 1.x) are stable.
+    # ~120 MB additional install, one-time. Already on disk if a
+    # previous installer run pulled them.
+    log "Installing physics scratchpad libs (numpy, scipy, matplotlib, sympy)..."
+    "$venv_pip" install --upgrade --quiet \
+        "numpy>=2" "scipy>=1.13" "matplotlib>=3.8" "sympy>=1.13" \
+        || warn "Physics libs install failed — agent code that imports scipy/numpy may break. Retry: ~/.gpd/venv/bin/pip install scipy numpy matplotlib sympy"
 }
 
 # Two-step liveness probe run after install. Split into two calls so the
