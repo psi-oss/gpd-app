@@ -842,9 +842,24 @@ ensure_python() {
 # ── Step 3: Venv & GPD package ────────────────────────────────────────────
 
 install_gpd_package() {
+    # Existing-venv reuse must verify pip is actually present. The desktop
+    # app's first-run flow creates the venv via `uv venv`, which produces
+    # a pip-less venv (uv manages installs without pip). The next step
+    # below shells out to `python -m pip` — that immediately blows up
+    # with "No module named pip" against a uv-created venv. Detect the
+    # uv-shape by probing pip and recreate via stdlib venv (which DOES
+    # bundle pip via ensurepip) if missing.
+    local needs_create=true
     if [[ -f "$GPD_VENV_DIR/bin/python" || -f "$GPD_VENV_DIR/bin/python3" ]]; then
-        success "Python venv already exists"
-    else
+        if "$GPD_VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+            success "Python venv already exists"
+            needs_create=false
+        else
+            warn "Existing venv has no pip (uv-managed?) — recreating with stdlib venv..."
+            rm -rf "$GPD_VENV_DIR"
+        fi
+    fi
+    if [[ "$needs_create" == true ]]; then
         log "Creating virtual environment..."
         "$PYTHON" -m venv "$GPD_VENV_DIR"
     fi
