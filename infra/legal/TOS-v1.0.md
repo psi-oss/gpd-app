@@ -1,12 +1,3 @@
-<!--
-  NOTE FOR DOWNSTREAM FORKS: this is PSI's product-specific End User
-  License Agreement, approved by PSI's legal counsel for the PSI-operated
-  GPD product. Do NOT reuse this text verbatim for another product —
-  the legal entity, brand, and contact addresses are PSI-specific, and
-  a downstream fork's obligations may differ materially. Draft your own
-  EULA with your own counsel.
--->
-
 PSI
 Get Physics Done (GPD)
 Software End User License Agreement

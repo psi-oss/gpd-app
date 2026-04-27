@@ -1,16 +1,5 @@
-<!--
-  NOTE FOR DOWNSTREAM FORKS: this is PSI's product-specific Privacy
-  Policy for the PSI-operated GPD product. It describes data PSI
-  collects, PSI's retention, and PSI's contact points. A downstream
-  fork running its own instance collects different data through
-  different infrastructure — draft your own policy with your own
-  counsel.
--->
-
 PSI
-
 Get Physics Done (GPD)
-
 Software Privacy Policy
 
 This Privacy Policy (this "Policy") describes how Physical Superintelligence PBC ("Licensor") collects, uses, discloses, and safeguards the Personal Data of Licensees and Authorized Users in connection with the Get Physics Done software application (the "Software"). This Policy supplements, and is incorporated by reference into, the Software End User License Agreement between Licensor and Licensee (the "EULA"). Capitalized terms used but not defined in this Policy have the meanings given to them in the EULA.
@@ -110,7 +99,5 @@ To exercise any right set forth in this Section 7, a Data Subject shall submit a
 11. Contact. All notices, requests, inquiries, and complaints under this Policy shall be addressed to:
 
 Physical Superintelligence PBC
-
 Email: ted@psi.inc
-
 Website: https://www.psi.inc
