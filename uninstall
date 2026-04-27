@@ -538,7 +538,27 @@ if (( ${#opencode_manifest_paths[@]} > 0 )); then
         process_gpd_manifest "$m"
     done
 else
-    skip "No gpd-file-manifest.json to process"
+    # No manifest, but a partial/manual prior install (e.g. user ran
+    # `rm -rf ~/.gpd` without our uninstaller) can leave GPD-managed
+    # marker files behind in $OPENCODE_CONFIG_DIR that block a future
+    # `gpd install` ("untrusted GPD manifest"). Sweep the well-known
+    # managed paths from the gpd runtime catalog
+    # (`flat_command_globs: ["command/gpd-*.md"]` for opencode + the
+    # conventional agents/ + hooks/ patterns) so the next fresh install
+    # sees a clean target.
+    swept=0
+    for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
+        matched=$(find "$OPENCODE_CONFIG_DIR" -maxdepth 2 -path "$OPENCODE_CONFIG_DIR/$pat" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$matched" != "0" ]]; then
+            find "$OPENCODE_CONFIG_DIR" -maxdepth 2 -path "$OPENCODE_CONFIG_DIR/$pat" -type f -delete 2>/dev/null || true
+            swept=$((swept + matched))
+        fi
+    done
+    if (( swept > 0 )); then
+        success "Removed $swept orphan GPD marker file(s) from $OPENCODE_CONFIG_DIR (no manifest)"
+    else
+        skip "No gpd-file-manifest.json to process"
+    fi
 fi
 
 # Clean up get-physics-done/ subdir. The earlier "remove only if empty
