@@ -51,11 +51,46 @@ export function TexPdfViewer(props: {
 
   const [page, setPage] = createSignal<number>(1)
 
-  // Query the iframe's current page if possible. WebKit exposes
-  // `document.location.hash = "#page=N"` as the standard way to navigate,
-  // but there's no read-back API. We approximate by letting the user tell
-  // us which page they are on via the header control.
+  // Track the current page two ways:
+  //   1. User clicks the prev/next arrows -> we set the iframe src to
+  //      `<url>#page=N` and update our signal.
+  //   2. User scrolls inside the iframe -> WebKit's native PDF renderer
+  //      auto-updates `iframe.contentWindow.location.hash` to `#page=N`.
+  //      No read-back event exists, so poll the hash on a short interval
+  //      and resync the header label. Cross-origin reads on data: URL
+  //      iframes can throw in some Tauri builds; swallow + give up
+  //      gracefully so the manual arrows still work.
   let iframeRef: HTMLIFrameElement | undefined
+  let pollHandle: ReturnType<typeof setInterval> | undefined
+
+  const readHashPage = (): number | undefined => {
+    const el = iframeRef
+    if (!el) return undefined
+    try {
+      const hash = el.contentWindow?.location.hash ?? ""
+      const match = /[#&]page=(\d+)/.exec(hash)
+      if (!match) return undefined
+      const value = parseInt(match[1], 10)
+      return Number.isFinite(value) && value > 0 ? value : undefined
+    } catch {
+      // Cross-origin block — abandon polling on first throw.
+      if (pollHandle) {
+        clearInterval(pollHandle)
+        pollHandle = undefined
+      }
+      return undefined
+    }
+  }
+
+  const startPolling = () => {
+    if (pollHandle) return
+    pollHandle = setInterval(() => {
+      const next = readHashPage()
+      if (next === undefined) return
+      if (next === page()) return
+      setPage(next)
+    }, 200)
+  }
 
   const navigateTo = (nextPage: number) => {
     setPage(nextPage)
@@ -63,12 +98,14 @@ export function TexPdfViewer(props: {
     const url = dataUrl()
     if (!el || !url) return
     // Re-point the iframe at `#page=N` to scroll the WebView renderer.
-    // We append the fragment to the data URL.
     el.src = `${url}#page=${nextPage}`
   }
 
   onCleanup(() => {
-    // Nothing to dispose; the iframe garbage-collects when the node unmounts.
+    if (pollHandle) {
+      clearInterval(pollHandle)
+      pollHandle = undefined
+    }
   })
 
   return (
@@ -131,6 +168,7 @@ export function TexPdfViewer(props: {
               src={url()}
               class="w-full h-full border-0 bg-white"
               title={language.t("tex.pdf.title")}
+              onLoad={() => startPolling()}
             />
           )}
         </Show>
