@@ -13,14 +13,16 @@ curl -fsSL https://download.gpd.psi.inc/install | bash
 
 ```powershell
 # Windows 11 (non-admin PowerShell)
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://download.gpd.psi.inc/install.ps1 -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+irm https://download.gpd.psi.inc/install.ps1 | iex
 ```
 
 Each one-liner installs the GPD desktop app, the `gpd` CLI, an app-local
 Python venv, LaTeX (`pdflatex` + `latexmk`), and `git` if missing — all
 into `~/.gpd/` (or `%USERPROFILE%\.gpd` on Windows). No admin / `sudo`
 required on Windows; the macOS / Linux one-liner uses `sudo` only when
-installing system LaTeX or the Ubuntu `.deb`.
+installing system LaTeX or the Ubuntu `.deb`. The PSI access key gets
+entered through the desktop app's welcome screen on first launch — no
+install-time prompt needed.
 
 Prefer to read before piping? See the verify-then-run flow in
 [`install-gpd/README.md`](install-gpd/README.md#verify-the-installer-before-executing-optional-recommended)

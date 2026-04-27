@@ -16,18 +16,28 @@ content they're about to execute against a hash under PSI's DNS.
 ### Ubuntu / macOS (recommended)
 
 ```bash
-bash <(curl -fsSL https://download.gpd.psi.inc/install)
+curl -fsSL https://download.gpd.psi.inc/install | bash
 ```
 
-Process substitution keeps stdin connected to your terminal so the sudo
-password and PSI key prompts work. On **Ubuntu** this installs the GPD
-desktop `.deb` (GUI + CLI); on **other Linux** and **macOS** it installs
-the standalone CLI.
+Stdin is the curl pipe rather than the terminal, so the install-time
+PSI-key prompt is skipped — the key gets entered through the desktop
+app's welcome screen on first launch instead, which is the expected
+GPD flow. On **Ubuntu** this installs the GPD desktop `.deb` (GUI +
+CLI); on **other Linux** and **macOS** it installs the standalone CLI.
 
-For fully non-interactive installs (CI / scripted), preset the key:
+`sudo` is invoked only on Ubuntu (for `apt-get install -y` of git +
+LaTeX + the `.deb`). Re-running the installer is idempotent.
 
+If you want to enter the PSI key at install time (rare; CI / scripted
+onboarding only), preset the env var:
 ```bash
 curl -fsSL https://download.gpd.psi.inc/install | GPD_API_KEY=sk-... bash
+```
+
+Or use process substitution to keep an interactive prompt connected to
+your terminal:
+```bash
+bash <(curl -fsSL https://download.gpd.psi.inc/install)
 ```
 
 Flags: `--skip-key`, `--no-modify-path`, `--version <v>`.
@@ -38,21 +48,29 @@ Run in **non-admin** PowerShell (admin is not required — all installs
 are per-user):
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://download.gpd.psi.inc/install.ps1 -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+irm https://download.gpd.psi.inc/install.ps1 | iex
 ```
 
-Or as three separate lines if you prefer:
+`irm | iex` runs the script in the current PowerShell session, so it
+bypasses ExecutionPolicy without needing a `Set-ExecutionPolicy` line
+(no `.ps1` file is being executed). Stdin is the irm pipe rather than
+the terminal, so the install-time PSI-key prompt is skipped — the key
+gets entered through the desktop app's welcome screen on first launch
+instead, which is the expected GPD flow.
+
+If you want to enter the key at install time (rare; CI / scripted
+onboarding only), preset the env var first:
+```powershell
+$env:GPD_API_KEY = "sk-your-key"
+irm https://download.gpd.psi.inc/install.ps1 | iex
+```
+
+Or download-then-run for an interactive prompt connected to your
+terminal:
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 irm https://download.gpd.psi.inc/install.ps1 -OutFile $env:TEMP\install.ps1
 & $env:TEMP\install.ps1
-```
-
-Download-then-run (instead of `irm | iex`) keeps stdin connected so the
-PSI key prompt works. For fully non-interactive installs:
-```powershell
-$env:GPD_API_KEY = "sk-your-key"
-irm https://download.gpd.psi.inc/install.ps1 | iex
 ```
 
 Windows-specific flags: `-SkipLaunch` (suppress auto-launching GPD at the
