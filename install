@@ -842,21 +842,40 @@ ensure_python() {
 # ── Step 3: Venv & GPD package ────────────────────────────────────────────
 
 install_gpd_package() {
-    # Existing-venv reuse must verify pip is actually present. The desktop
-    # app's first-run flow creates the venv via `uv venv`, which produces
-    # a pip-less venv (uv manages installs without pip). The next step
-    # below shells out to `python -m pip` — that immediately blows up
-    # with "No module named pip" against a uv-created venv. Detect the
-    # uv-shape by probing pip and recreate via stdlib venv (which DOES
-    # bundle pip via ensurepip) if missing.
+    # Existing-venv reuse must verify the venv is actually USABLE before
+    # we trust it. Three failure modes the script has to recover from:
+    #
+    #   1. uv-managed venv: the desktop app's first-run flow creates the
+    #      venv via `uv venv`, which produces a pip-less venv (uv manages
+    #      installs without pip). Step 3 below shells out to `python -m
+    #      pip` — fails immediately with "No module named pip".
+    #
+    #   2. Broken interpreter: the venv's `bin/python` is a symlink to a
+    #      Python that no longer exists (e.g. user deleted `~/.gpd/python/`
+    #      manually, or upgraded the PBS Python and the symlink is stale,
+    #      or system Python was uninstalled). The interpreter fails to
+    #      start at all.
+    #
+    #   3. Half-finished previous install: the venv exists but pip-install
+    #      of get-physics-done bailed, leaving `bin/python` but no
+    #      `bin/gpd`. Detected later by verify_gpd_install; here we just
+    #      need to make sure the interpreter + pip both work so the
+    #      package install itself can succeed.
+    #
+    # All three are recoverable by rm -rf'ing the venv and recreating
+    # with the stdlib `venv` module (which bundles pip via ensurepip).
+    # Cost: ~10s for the next pip install. Cheap.
     local needs_create=true
     if [[ -f "$GPD_VENV_DIR/bin/python" || -f "$GPD_VENV_DIR/bin/python3" ]]; then
-        if "$GPD_VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
-            success "Python venv already exists"
-            needs_create=false
-        else
+        if ! "$GPD_VENV_DIR/bin/python" -c "pass" >/dev/null 2>&1; then
+            warn "Existing venv interpreter is broken — recreating..."
+            rm -rf "$GPD_VENV_DIR"
+        elif ! "$GPD_VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
             warn "Existing venv has no pip (uv-managed?) — recreating with stdlib venv..."
             rm -rf "$GPD_VENV_DIR"
+        else
+            success "Python venv already exists"
+            needs_create=false
         fi
     fi
     if [[ "$needs_create" == true ]]; then

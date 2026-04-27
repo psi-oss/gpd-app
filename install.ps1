@@ -685,10 +685,38 @@ function Get-Python {
 function New-GpdVenv {
     param([string]$PythonPath)
 
+    # Existing-venv reuse must verify the venv is actually USABLE before
+    # we trust it. Three failure modes the script has to recover from:
+    #
+    #   1. uv-managed venv: the desktop app's first-run flow creates the
+    #      venv via `uv venv`, which produces a pip-less venv. Install-Gpd
+    #      shells out to `python -m pip` and fails immediately.
+    #
+    #   2. Broken interpreter: the venv's Scripts\python.exe is stranded
+    #      (e.g. user deleted ~\.gpd\python\ manually, upgraded the PBS
+    #      Python, or system Python was uninstalled). The interpreter
+    #      fails to start at all.
+    #
+    #   3. Half-finished previous install: pip-install of get-physics-done
+    #      bailed mid-run, leaving python.exe but no gpd.exe.
+    #
+    # All three are recoverable by removing the venv and recreating with
+    # the stdlib `venv` module (which bundles pip via ensurepip).
     $venvPython = Join-Path $GpdVenvDir "Scripts\python.exe"
     if (Test-Path $venvPython) {
-        Write-Success "Python venv already exists at $GpdVenvDir"
-        return
+        & $venvPython -c "pass" 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Existing venv interpreter is broken -- recreating..."
+            Remove-Item -Recurse -Force $GpdVenvDir -ErrorAction SilentlyContinue
+        } else {
+            & $venvPython -m pip --version 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Python venv already exists at $GpdVenvDir"
+                return
+            }
+            Write-Warn "Existing venv has no pip (uv-managed?) -- recreating with stdlib venv..."
+            Remove-Item -Recurse -Force $GpdVenvDir -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Log "Creating Python virtual environment..."
