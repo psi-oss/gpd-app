@@ -42,13 +42,14 @@ FROM ghcr.io/berriai/litellm:v1.83.14.rc.1
 # AND LiteLLM's startup `prisma migrate` step drops unmanaged tables.
 # Without this bootstrap, the table disappears on every redeploy.
 #
-# Use `python -m pip` not bare `pip`: LiteLLM v1.83.14.rc.1's image base
-# moved off the stock python:slim layer that put `pip` on PATH. Bare
-# `pip` exits 127 ("pip: not found") on rc.1 even though pip is bundled
-# inside the venv. `python -m pip` reaches the bundled installer
-# regardless of how PATH gets carved up. Worked on v1.83.7-stable
-# either way; required from v1.83.14.rc.1 onward.
-RUN python -m pip install --no-cache-dir asyncpg==0.31.0
+# Install via `uv` not pip: LiteLLM v1.83.14.rc.1's image switched to a
+# uv-managed venv at /app/.venv with no pip module bundled inside
+# (`python -m pip` returns "No module named pip"). uv ships in the image
+# (LiteLLM uses it for its own build) so `uv pip install` is the right
+# entry point. Targets the active venv at /app/.venv via VIRTUAL_ENV
+# semantics; --system avoids "no virtualenv detected" inside RUN.
+# Bare `pip` worked on v1.83.7-stable; required this swap from rc.1.
+RUN uv pip install --system --no-cache-dir asyncpg==0.31.0
 
 # Our hook modules.
 #   gpd_log     → POST /gpd/log (session-event ingest to GCS). See
