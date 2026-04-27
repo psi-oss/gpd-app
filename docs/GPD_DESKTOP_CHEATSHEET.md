@@ -212,8 +212,16 @@ cd /tmp && curl -sL -o GPD_aarch64.app.tar.gz \
 ```
 
 ### Test CLI Install Script
+
+Pipe form — non-interactive (skips key prompt; set the key via the desktop
+app's welcome screen after install completes):
 ```bash
-rm -rf ~/.gpd && curl -fsSL https://download.gpd.psi.inc/install | bash
+rm -rf ~/.gpd && curl -fsSL https://download.gpd.psi.inc/install | bash -s -- --skip-key
+```
+
+Or process-substitution if you want the interactive key prompt to work:
+```bash
+rm -rf ~/.gpd && bash <(curl -fsSL https://download.gpd.psi.inc/install)
 ```
 
 ### Update Download Page

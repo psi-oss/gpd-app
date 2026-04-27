@@ -433,12 +433,21 @@ migrate_legacy_rc_block() {
 check_no_running_gpd() {
     local detected=false
 
-    # Fast path: process whose cmdline mentions an absolute $GPD_HOME
-    # path. Catches the venv-wrapper invocation on both platforms.
+    # Fast path: process whose cmdline mentions an absolute path under
+    # $GPD_HOME's known child subtrees. Catches the venv-wrapper
+    # invocation on both platforms.
+    #
+    # Important: the substring must be anchored to a CHILD path. An
+    # earlier version of this fell back to `pgrep -f "$GPD_HOME"` plain,
+    # which substring-matched the parent shell's argv whenever the user
+    # piped the installer through `tee "$GPD_HOME/install.log"` — the
+    # path appeared in `bash`'s own argv via shell-expanded `tee`
+    # arguments, the installer self-detected as a running GPD process,
+    # and aborted with a misleading error. The PATH-invoked case (no
+    # GPD_HOME in argv) is covered by the /proc walk on Linux + lsof
+    # on macOS below; we don't need a too-loose fallback here.
     if command -v pgrep &>/dev/null; then
-        if pgrep -f "$GPD_HOME/(venv|python)/bin" >/dev/null 2>&1; then
-            detected=true
-        elif pgrep -f "$GPD_HOME" >/dev/null 2>&1; then
+        if pgrep -f "$GPD_HOME/(venv|python|bin)/" >/dev/null 2>&1; then
             detected=true
         fi
     fi
@@ -1220,6 +1229,16 @@ configure_path() {
 configure_gpd_runtime() {
     # Run from $HOME so gpd's checkout-root detection doesn't try to read
     # an unreadable cwd (e.g. /root when script is run via sudo).
+    #
+    # `gpd install opencode --global` writes to $HOME/.config/opencode/...
+    # which is the standard XDG location opencode reads at runtime. This
+    # path is INTENTIONAL — opencode's config discovery is hardcoded to
+    # XDG_CONFIG_HOME (default $HOME/.config), not GPD_HOME, so writing
+    # the agent definitions here is correct for production users. Test
+    # harnesses with custom GPD_HOME=/tmp/... will still see the global
+    # config land in the user's real $HOME — that's not a leak, it's the
+    # opencode contract. Override XDG_CONFIG_HOME if a sandboxed test
+    # needs containment.
     if [[ -x "$GPD_VENV_DIR/bin/python" ]]; then
         log "Configuring GPD for OpenCode..."
         # NB: the --skip-readiness-check flag was added to gpd.cli on `main`

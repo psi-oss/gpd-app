@@ -349,95 +349,69 @@ done < professors.csv > keys.csv
 
 ---
 
-## Future: CLI Install Script
+## CLI Install Script
 
-**Not yet built.** This would be the terminal-based alternative to the desktop app, hosted at `download.gpd.psi.inc/install.sh`.
+**Shipped.** Hosted at `https://download.gpd.psi.inc/install` (no `.sh` suffix
+— the URL maps to a script the gh-pages workflow republishes on every push to
+`gpd` that touches `install-gpd/install`). SHA256 of the served bytes is
+published alongside at `https://download.gpd.psi.inc/SHA256SUMS.txt`.
+
+Recommended forms (from `install-gpd/README.md`):
 
 ```bash
-curl -fsSL https://download.gpd.psi.inc/install.sh | bash
+# Interactive (handles the PSI key prompt + sudo password):
+bash <(curl -fsSL https://download.gpd.psi.inc/install)
+
+# Non-interactive — skip the install-time key prompt; key entered via
+# the desktop app's welcome screen instead:
+curl -fsSL https://download.gpd.psi.inc/install | bash -s -- --skip-key
+
+# CI / fully scripted:
+curl -fsSL https://download.gpd.psi.inc/install | GPD_API_KEY=sk-... bash
 ```
 
-### What the script does
+What it actually does today (single source of truth =
+`install-gpd/install`; this list summarises):
 
-1. **Install our OpenCode fork binary** (not stock OpenCode)
-   - Download the GPD-branded CLI binary from our GitHub releases
-   - Same binary that's inside the desktop app (`opencode-cli` sidecar)
-   - Detect OS/arch (macOS ARM/Intel, Linux x64/ARM)
-   - Install to `~/.gpd/bin/opencode`
-   - This is a fork of OpenCode's install script (`https://opencode.ai/install`) with the download URL changed to `psi-oss/gpd-app` releases
+1. **System dependencies** — git, LaTeX (BasicTeX on macOS, `texlive-*` on
+   apt-based Linux), Python 3.11+ (or app-local PBS Python 3.13.3 on
+   macOS / when system Python is missing). All idempotent — skipped if
+   already present.
+2. **GPD desktop app + CLI runtime** — Tauri bundle: `.deb` on
+   Debian/Ubuntu, `.dmg` on macOS, NSIS `.exe` on Windows. Skipped if
+   `/Applications/GPD.app` (or platform equivalent) already installed.
+3. **Python venv** — `~/.gpd/venv/` with `get-physics-done@v1.1.0` from
+   PyPI. Provides 8 MCP servers + `gpd` CLI.
+4. **PSI key** — interactive prompt with TTY detection (the
+   `[[ ! -t 0 ]]` guard at install:913 means non-TTY stdin warns +
+   skips, doesn't hang). `GPD_API_KEY` env var preset path for CI.
+5. **`gpd` wrapper** — `~/.gpd/bin/gpd` that re-resolves `GPD_HOME` at
+   runtime via `${GPD_HOME:-$HOME/.gpd}`.
+6. **PATH** — appends `~/.gpd/bin` to the user's shell rc, gated by
+   `--no-modify-path` opt-out for users who want to wire their own.
+7. **Runtime config** — `gpd install opencode --global` writes opencode
+   agent + command definitions to `~/.config/opencode/`. Standard XDG
+   path; opencode reads from there at runtime regardless of `GPD_HOME`.
+8. **First-run marker** — `~/.gpd/.gpd-initialized` so the desktop app
+   skips its own first-run setup.
 
-2. **Check for Python 3.11+**
-   - Required for GPD's MCP servers
-   - If missing, tell the user to install it (`brew install python3` / `apt install python3`)
-   - Professors are physicists — they almost certainly have Python
-
-3. **Install GPD Python package**
-   - `pip3 install --user get-physics-done`
-   - Provides 8 MCP servers + `gpd` CLI
-
-4. **Run `gpd install opencode --global`**
-   - Places 69 commands, 26 agents, MCP config in `~/.config/gpd/`
-   - Uses `OPENCODE_CONFIG_DIR=~/.config/gpd`
-
-5. **Inject LiteLLM provider config**
-   - Run `scripts/gpd/inject-litellm-provider.py --config-dir ~/.config/gpd/`
-   - Adds the GPD provider with all 14 models to opencode.json
-   - Sets `enabled_providers: ["gpd"]` and default model
-
-6. **Prompt for LiteLLM key**
-   - `read -sp "Enter your GPD API key: " api_key`
-   - Write to `~/.local/share/opencode/auth.json` with 0600 permissions
-
-7. **Install `gpd` wrapper to PATH**
-   ```bash
-   mkdir -p ~/.gpd/bin
-   cat > ~/.gpd/bin/gpd << 'EOF'
-   #!/bin/bash
-   export OPENCODE_CONFIG_DIR="$HOME/.config/gpd"
-   export OPENCODE_CONFIG_CONTENT='<provider JSON>'
-   if [[ "$1" == "--cli" ]]; then
-     shift
-     exec "$HOME/.gpd/bin/opencode" "$@"
-   else
-     exec "$HOME/.gpd/bin/opencode" web "$@"
-   fi
-   EOF
-   chmod +x ~/.gpd/bin/gpd
-   echo 'export PATH="$HOME/.gpd/bin:$PATH"' >> ~/.zshrc  # or detect shell
-   ```
-
-8. **Print success**
-   ```
-   ✓ OpenCode (GPD) installed
-   ✓ GPD tools installed (8 MCP servers, 69 commands)
-   ✓ API key saved
-   ✓ 'gpd' command added to PATH
-
-   Run 'gpd' to open the web UI.
-   Run 'gpd --cli' for the terminal TUI.
-   ```
-
-### Implementation notes
-
-- Fork OpenCode's install script at `https://opencode.ai/install` (~200 lines of bash)
-- Change the download URL from `github.com/anomalyco/opencode/releases` to `github.com/psi-oss/gpd-app/releases`
-- Change branding strings ("OpenCode" → "GPD")
-- Add the GPD-specific steps (3-7) after the binary install
-- Host at `download.gpd.psi.inc/install.sh` (add to gh-pages branch)
-- The `OPENCODE_CONFIG_CONTENT` env var in the wrapper ensures the GPD provider is always available (same fix as the desktop app)
-- The wrapper script calls our fork's binary, not stock `opencode`
+For the canonical user-facing instructions + uninstall steps + flag
+reference, see `install-gpd/README.md`. For the install logic itself,
+read `install-gpd/install` directly — it's a self-contained ~1300-line
+bash script.
 
 ### CLI vs Desktop comparison
 
-| Feature | Desktop App | CLI Install |
-|---------|------------|-------------|
-| Terminal required | No | Yes |
-| Python required | No (PyInstaller sidecar) | Yes |
-| Welcome screen | GUI | Terminal prompt |
-| `gpd` command | N/A (launches app) | `gpd` opens web, `gpd --cli` opens TUI |
-| Auto-update | Not yet | Manual (`gpd update` or re-run install) |
-| MCP servers | Via bundled sidecar | Via Python (`pip install get-physics-done`) |
-| Gatekeeper/SmartScreen | Needs `xattr -cr` | N/A (no app bundle) |
+The CLI install script and desktop app share the same Python venv +
+get-physics-done package. Differences are in entry-point only:
+
+| Surface | Desktop App | `gpd` CLI |
+|---|---|---|
+| Welcome / TOS gate | GUI dialog at first launch | n/a (CLI doesn't enforce TOS today; pilot users hit the GUI flow first) |
+| `gpd` command | Wrapper at `~/.gpd/bin/gpd` | Same wrapper |
+| MCP servers | Via bundled sidecar's venv | Via `~/.gpd/venv/bin/gpd-mcp-*` console scripts |
+| Auto-update | `tauri-plugin-updater` | Manual `bash <(curl ...)` re-run |
+| Gatekeeper/SmartScreen | First-launch quarantine strip via installer's `xattr -dr` | n/a (no app bundle) |
 
 ---
 
