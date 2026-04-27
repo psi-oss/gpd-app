@@ -50,10 +50,16 @@ $OpenCodeRepo        = "opencode"
 $OpenCodeFallbackOrg = "anomalyco"
 $OpenCodeFallbackRepo = "opencode"
 
-$GpdPackageRepo    = "psi-oss/get-physics-done"
-# Pin to a specific tag rather than a moving branch so installs are
-# reproducible: every v1.1.8 installer run fetches the exact same tarball.
-$GpdPackageVersion = "v1.1.0"
+# PyPI source: the published get-physics-done wheel. Bump when cutting
+# a new release. We pull from PyPI rather than the GitHub source tarball
+# or the npm bootstrap (`npx -y get-physics-done`):
+#   * PyPI: pre-built wheel, no GitHub dependency at install time, no
+#     Node.js needed.
+#   * GitHub tarball: requires running setup.py / building from source.
+#   * npm bootstrap: would add a Node.js prereq just to delegate the
+#     venv + pip step we already do natively.
+$GpdPackageName    = "get-physics-done"
+$GpdPackageVersion = "1.2.0"
 
 $LiteLlmProxyUrl = "https://litellm-production-46bb.up.railway.app"
 
@@ -136,17 +142,26 @@ function Write-Banner {
 }
 
 function Write-SuccessBanner {
+    # Detect the desktop bundle so the message points at the GUI rather
+    # than the CLI. The NSIS installer drops GPD.exe under
+    # %LOCALAPPDATA%\GPD\GPD.exe (per-user install).
+    $gpdExePath = Join-Path $env:LOCALAPPDATA "GPD\GPD.exe"
+    $hasDesktop = Test-Path $gpdExePath
+
     Write-Host ""
     Write-Success "GPD installed successfully!"
     Write-Host ""
-    Write-Host "  Start a new session:  " -NoNewline
-    Write-Host "gpd" -ForegroundColor White
-    Write-Host "  Show help:            " -NoNewline
-    Write-Host "gpd --help" -ForegroundColor White
+    if ($hasDesktop) {
+        Write-Host "  Open the " -NoNewline
+        Write-Host "GPD" -NoNewline -ForegroundColor White
+        Write-Host " app from the Start menu to get started."
+        Write-Host "  First launch walks you through TOS acceptance + your PSI key." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Start a new session:  " -NoNewline
+        Write-Host "gpd" -ForegroundColor White
+    }
     Write-Host ""
     Write-Host "  Installation directory: $GpdHome" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Warn "Open a new terminal (or run 'refreshenv') to use the gpd command."
     Write-Host ""
 }
 
@@ -737,18 +752,8 @@ function Install-Gpd {
         Write-Warn "pip upgrade returned non-zero exit code, continuing..."
     }
 
-    # Pinned to a tagged release so every installer run fetches the same
-    # tarball. Bump $GpdPackageVersion when cutting a new release.
-    $sourceUrl = "https://github.com/${GpdPackageRepo}/archive/refs/tags/${GpdPackageVersion}.tar.gz"
-
-    # Pre-flight: fail loudly with a GPD-specific message if the tag was
-    # deleted upstream, rather than letting pip swallow the 404.
-    if (-not (Test-UrlExists $sourceUrl)) {
-        Stop-WithError "GPD package tag $GpdPackageVersion not found -- aborting."
-    }
-
-    Write-Log "Installing get-physics-done $GpdPackageVersion from GitHub..."
-    & $venvPip install --upgrade --quiet $sourceUrl
+    Write-Log "Installing ${GpdPackageName}==${GpdPackageVersion} from PyPI..."
+    & $venvPip install --upgrade --quiet "${GpdPackageName}==${GpdPackageVersion}"
     if ($LASTEXITCODE -ne 0) {
         Stop-WithError "Failed to install GPD package"
     }
@@ -1142,13 +1147,22 @@ function Invoke-GpdInstall {
         Write-Log "Configuring GPD for OpenCode runtime..."
         Push-Location $HOME
         try {
-            # --skip-readiness-check was added to gpd.cli on main AFTER the
-            # v1.1.0 tag our installer pins to. Don't pass it; bump back in
-            # once get-physics-done cuts v1.2.0+.
-            & $gpdExe install opencode --global
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn "GPD runtime configuration failed. Run manually from your home dir:"
-                Write-Warn "  cd ~ && ~\.gpd\venv\Scripts\gpd.exe install opencode --global"
+            # Suppress stdout (rich-formatted summary table + "/gpd-help"
+            # hint that confuses desktop-first users) but capture both
+            # streams so a real failure surfaces last-N lines for debug.
+            $runtimeLog = [System.IO.Path]::GetTempFileName()
+            try {
+                & $gpdExe install opencode --global *> $runtimeLog
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "GPD runtime configured for OpenCode"
+                } else {
+                    Write-Warn "GPD runtime configuration failed. Last lines:"
+                    Get-Content $runtimeLog -Tail 20 | ForEach-Object { Write-Host $_ }
+                    Write-Warn "Re-run manually from your home dir:"
+                    Write-Warn "  cd ~ ; ~\.gpd\venv\Scripts\gpd.exe install opencode --global"
+                }
+            } finally {
+                Remove-Item -Force $runtimeLog -ErrorAction SilentlyContinue
             }
         }
         catch {
