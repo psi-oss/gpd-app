@@ -1166,6 +1166,56 @@ function Invoke-GpdInstall {
     # runtime arg, not a --opencode flag.
     $gpdExe = Join-Path $GpdVenvDir "Scripts\gpd.exe"
     if (Test-Path $gpdExe) {
+        # Recover from "untrusted GPD manifest" state. gpd 1.2.x refuses
+        # to install into a config dir that has GPD-managed markers but
+        # no `gpd-file-manifest.json`. That state is reached when an
+        # earlier GPD install left files behind without writing a
+        # manifest, OR when a user wiped %USERPROFILE%\.gpd without
+        # running the uninstall script (markers in opencode's config
+        # dir survive).
+        #
+        # The marker policy for opencode is declared in the gpd runtime
+        # catalog (`adapters/runtime_catalog.json` ->
+        # `runtime_name: "opencode"` ->
+        # `managed_install_surface.flat_command_globs:
+        # ["command/gpd-*.md"]`). On Windows opencode lives under
+        # `$HOME\.config\opencode` per the catalog's `home_subpath`,
+        # but `xdg_app` strategy can also resolve to
+        # `$HOME\.local\share\opencode` depending on env vars; sweep
+        # both candidate paths so whichever is in use is cleaned. Files
+        # that don't match these patterns are user-owned and untouched.
+        $opencodeCandidates = @(
+            (Join-Path $HOME ".config\opencode"),
+            (Join-Path $HOME ".local\share\opencode")
+        )
+        if ($env:OPENCODE_CONFIG_DIR) {
+            $opencodeCandidates = @($env:OPENCODE_CONFIG_DIR) + $opencodeCandidates
+        }
+        foreach ($oc in $opencodeCandidates) {
+            if (-not (Test-Path $oc)) { continue }
+            $manifest = Join-Path $oc "gpd-file-manifest.json"
+            if (Test-Path $manifest) { continue }
+            $hasMarker = $false
+            foreach ($pat in @("command\gpd-*.md", "agents\gpd-*.md", "hooks\gpd-*")) {
+                if (Get-ChildItem -Path (Join-Path $oc $pat) -ErrorAction SilentlyContinue | Select-Object -First 1) {
+                    $hasMarker = $true
+                    break
+                }
+            }
+            if ($hasMarker -or (Test-Path (Join-Path $oc "get-physics-done"))) {
+                Write-Log "Cleaning stale GPD markers in $oc (no manifest, prior install or partial uninstall)..."
+                # Patterns mirror runtime_catalog.json + the opencode
+                # adapter's deploy paths. If gpd's catalog grows new
+                # globs, this list needs updating in lockstep.
+                foreach ($pat in @("command\gpd-*.md", "agents\gpd-*.md", "hooks\gpd-*")) {
+                    Get-ChildItem -Path (Join-Path $oc $pat) -ErrorAction SilentlyContinue |
+                        Where-Object { -not $_.PSIsContainer } |
+                        Remove-Item -Force -ErrorAction SilentlyContinue
+                }
+                Remove-Item -Recurse -Force (Join-Path $oc "get-physics-done") -ErrorAction SilentlyContinue
+            }
+        }
+
         Write-Log "Configuring GPD for OpenCode runtime..."
         Push-Location $HOME
         try {
