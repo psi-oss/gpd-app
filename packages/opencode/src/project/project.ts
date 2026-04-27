@@ -1,4 +1,6 @@
 import z from "zod"
+import os from "os"
+import nodepath from "path"
 import { and, Database, eq } from "../storage/db"
 import { ProjectTable } from "./project.sql"
 import { SessionTable } from "../session/session.sql"
@@ -13,6 +15,57 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { NodePath } from "@effect/platform-node"
 import { AppFileSystem } from "@/filesystem"
 import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
+
+// Worktrees that must NEVER be registered as a non-global project.
+// Computed once at module load.
+//
+// Why: a `.git` directory placed at the user's $HOME (or any ancestor:
+// /Users/<other-user>, /Users, /home, /, system dirs) makes
+// Project.fromDirectory adopt that path as the project worktree. Any
+// File.Service.scan, FileWatcher subscribe, or rg.files at that root
+// recursively touches every TCC-protected sibling (~/Music,
+// ~/Pictures, ~/Desktop, ~/Documents) and provokes 5+ macOS permission
+// dialogs on first launch — a UX failure observed on macOS 26.x with
+// a `git init` accidentally placed in $HOME.
+//
+// File.Service.scan also has a Protected-aware fallback for
+// directory === $HOME, but blocking creation here is the primary
+// defense: a project rooted at $HOME pollutes opencode.db with a
+// hash-id that survives across launches and other services
+// (FileWatcher, Snapshot, rg) may follow worktree without applying
+// the Protected filter.
+//
+// The blocked set:
+//   - filesystem root ("/" on POSIX, "C:\" etc. on Windows)
+//   - the user's $HOME
+//   - parent of $HOME (e.g. /Users, /home) — covers other-user scans
+//   - all ancestors between root and $HOME's parent
+const BLOCKED_PROJECT_WORKTREES: ReadonlySet<string> = (() => {
+  const blocked = new Set<string>()
+  const home = os.homedir()
+  if (home) {
+    let cur = nodepath.resolve(home)
+    while (true) {
+      blocked.add(cur)
+      const parent = nodepath.dirname(cur)
+      if (parent === cur) break
+      cur = parent
+    }
+  }
+  // POSIX root + common system dirs that should never host a project.
+  blocked.add("/")
+  if (process.platform === "darwin") {
+    for (const d of ["/private", "/private/tmp", "/private/var", "/tmp", "/var", "/etc", "/usr", "/Volumes"]) {
+      blocked.add(d)
+    }
+  }
+  if (process.platform === "linux") {
+    for (const d of ["/tmp", "/var", "/etc", "/usr", "/opt", "/srv", "/root"]) {
+      blocked.add(d)
+    }
+  }
+  return blocked
+})()
 
 export namespace Project {
   const log = Log.create({ service: "project" })
@@ -194,6 +247,23 @@ export namespace Project {
           }
 
           let sandbox = pathSvc.dirname(dotgit)
+
+          // Refuse to adopt a worktree that lives at or above $HOME.
+          // A stray `.git` at $HOME or any ancestor (e.g. /Users, /)
+          // would otherwise become the project root and trigger
+          // unbounded fs scans across TCC-protected siblings. Treat as
+          // global so File.Service.scan() short-circuits on the
+          // root-equals-directory check.
+          const sandboxResolved = nodepath.resolve(sandbox)
+          if (BLOCKED_PROJECT_WORKTREES.has(sandboxResolved)) {
+            log.warn("blocked-worktree-fallback", { sandbox: sandboxResolved })
+            return {
+              id: ProjectID.global,
+              worktree: "/",
+              sandbox: "/",
+              vcs: fakeVcs,
+            }
+          }
           const gitBinary = yield* Effect.sync(() => which("git"))
           let id = yield* readCachedProjectId(dotgit)
 
@@ -219,6 +289,19 @@ export namespace Project {
             const common = resolveGitPath(sandbox, commonDir.text.trim())
             return common === sandbox ? sandbox : pathSvc.dirname(common)
           })()
+
+          // Re-check after worktree-from-common-dir: a `git worktree`
+          // setup or `core.worktree` config can lift the effective
+          // worktree above $HOME even when sandbox itself was safe.
+          if (BLOCKED_PROJECT_WORKTREES.has(nodepath.resolve(worktree))) {
+            log.warn("blocked-worktree-fallback", { worktree })
+            return {
+              id: ProjectID.global,
+              worktree: "/",
+              sandbox: "/",
+              vcs: fakeVcs,
+            }
+          }
 
           if (id == null) {
             id = yield* readCachedProjectId(pathSvc.join(worktree, ".git"))
