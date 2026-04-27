@@ -1,5 +1,19 @@
 # GPD Desktop App — Changes Log
 
+## GPD Home Path Unification + LiteLLM Pin Bump (2026-04-27)
+
+**Date:** 2026-04-27
+**Changes:**
+- Unified GPD home directory across platforms: `~/.gpd/` on Linux/macOS, `%USERPROFILE%\.gpd\` on Windows. Legacy `~/.config/gpd/` location removed.
+- Canonical managed venv now lives at `~/.gpd/venv/` (no leading dot). Earlier paths `~/.gpd/.venv/` and `~/.config/gpd/.venv/` are historical only.
+- Sidecar launched with `OPENCODE_CONFIG_DIR=~/.gpd` (see `packages/desktop/src-tauri/src/lib.rs`); `inject_provider_config` writes MCP entries pointing at `~/.gpd/venv/bin/python`.
+- `infra/litellm/Dockerfile` LiteLLM pin bumped from `v1.83.7-stable` → `v1.83.14.rc.1` (deployed to Railway 2026-04-27, commit `b0de8c0f1b`). Picks up `gpt-5.5` model registry entry and `_is_claude_4_7_model` reasoning-effort branch — both missing in 1.83.7 caused HTTP 400 on opus-4-7 reasoning and `gpt-5.5` `tool_choice`. RC base image is Chainguard Wolfi without runtime `pip`/`uv`, so the Dockerfile now COPYs `uv` from `ghcr.io/astral-sh/uv:0.11.7` to install `asyncpg` into LiteLLM's bundled venv.
+**Bugs fixed:**
+- Two GPD homes (`~/.gpd/` and `~/.config/gpd/`) on Linux drifted apart — venv lived in one, opencode.json in the other, MCP server paths picked the wrong one. Single home eliminates the split.
+- `claude-opus-4-7` reasoning calls returned HTTP 400 from LiteLLM 1.83.7 (`_map_reasoning_effort` lacked the 4.7 branch). Fixed by pin bump.
+- `gpt-5.5` requests returned HTTP 400 (`openai does not support parameters: ['tool_choice']`) — 1.83.7's registry had no entry, fell through to gpt-5 base path's `tool_choice` strip. Fixed by pin bump.
+**Rebuilds triggered:** yes (Rust path changes + Docker image redeploy)
+
 ## PR-Review Root-Cause Fix Batch (2026-04-22)
 
 **Date:** 2026-04-22

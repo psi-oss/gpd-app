@@ -9,7 +9,7 @@
 
 ## Problem
 
-GPD ships a managed config to the OpenCode sidecar via the `OPENCODE_CONFIG_CONTENT` environment variable. It also sets `OPENCODE_CONFIG_DIR` to `~/.config/gpd/`, expecting PATCH operations to persist user edits there. Neither assumption holds in the current codebase.
+GPD ships a managed config to the OpenCode sidecar via the `OPENCODE_CONFIG_CONTENT` environment variable. It also sets `OPENCODE_CONFIG_DIR` to `~/.gpd/`, expecting PATCH operations to persist user edits there. Neither assumption holds in the current codebase.
 
 **Current state (verified on `gpd` HEAD, 2026-04-22):**
 
@@ -21,7 +21,7 @@ GPD ships a managed config to the OpenCode sidecar via the `OPENCODE_CONFIG_CONT
 | Write — `/config` | `server/instance/config.ts:57` → `Config.update` → `config.ts:1593-1601` | Writes `${InstanceState.directory}/config.json` — per-instance, NOT `opencode.json`. |
 | Write — `/global/config` | `server/instance/global.ts:159-183` → `Config.updateGlobal` → `config.ts:1620-1639` | Writes `globalConfigFile()` = first existing of `~/.config/opencode/{opencode.jsonc,opencode.json,config.json}`. |
 
-**Consequence.** The user's model choice in the UI flows through `/config` (project-local) or `/global/config` (`~/.config/opencode/`). Neither writes `~/.config/gpd/opencode.json`. On next startup, `OPENCODE_CONFIG_CONTENT` reinjects the hardcoded model from `packages/desktop/src-tauri/src/gpd_setup.rs::build_config_json` — overriding both targets because env-tier beats global-tier and project-tier.
+**Consequence.** The user's model choice in the UI flows through `/config` (project-local) or `/global/config` (`~/.config/opencode/`). Neither writes `~/.gpd/opencode.json`. On next startup, `OPENCODE_CONFIG_CONTENT` reinjects the hardcoded model from `packages/desktop/src-tauri/src/gpd_setup.rs::build_config_json` — overriding both targets because env-tier beats global-tier and project-tier.
 
 PR #14 attempts to fix this by repointing `globalConfigFile()` to `OPENCODE_CONFIG_DIR` AND rerouting PATCH `/config` to `updateGlobal`. Both changes are scope creep and create read/write asymmetry: the writer would target `$OPENCODE_CONFIG_DIR/opencode.json` while `loadGlobal` still reads `~/.config/opencode/`.
 
@@ -46,7 +46,7 @@ First-run code in `gpd_setup.rs` writes `$OPENCODE_CONFIG_DIR/opencode.json` on 
 
 **Pros:**
 - One config source. No env-var override trap.
-- User-editable (they can open `~/.config/gpd/opencode.json` in a text editor).
+- User-editable (they can open `~/.gpd/opencode.json` in a text editor).
 - Re-uses the existing loader without modifications.
 - Repair paths can check `if !file.exists()` and skip, preserving user edits.
 
@@ -118,7 +118,7 @@ Split `OPENCODE_CONFIG_CONTENT` responsibilities: keep it for strictly-GPD-manag
 1. Clean install: sidecar starts → `/v1/models` lists `gpd/claude-sonnet-4-6` as default.
 2. Change model via UI → restart app → UI shows saved model.
 3. Trigger repair (delete `.venv`, relaunch) → saved model survives.
-4. Edit `~/.config/gpd/opencode.json` manually, set `"theme": "foo"` → relaunch → theme applied.
+4. Edit `~/.gpd/opencode.json` manually, set `"theme": "foo"` → relaunch → theme applied.
 5. `OPENCODE_CONFIG_CONTENT` override still wins for `"permission"` — user cannot disable it by editing their file.
 
 ### Out of scope for this decision

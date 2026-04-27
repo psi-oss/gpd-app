@@ -1,3 +1,4 @@
+mod auth_lock;
 mod cli;
 mod constants;
 mod dependencies;
@@ -363,52 +364,71 @@ fn read_gpd_key() -> Result<Option<String>, String> {
 #[specta::specta]
 fn remove_gpd_key() -> Result<(), String> {
     let auth_path = opencode_data_dir()?.join("auth.json");
-    let bytes = match std::fs::read(&auth_path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("read auth.json: {e}")),
-    };
-    let mut json: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => serde_json::json!({}),
-    };
-    if let Some(obj) = json.as_object_mut() {
-        obj.remove("gpd");
-    } else {
-        json = serde_json::json!({});
-    }
-    let serialized =
-        serde_json::to_vec_pretty(&json).map_err(|e| format!("serialize auth.json: {e}"))?;
     if let Some(parent) = auth_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
-    // Atomic tmp+rename so a crash between open and write leaves the
-    // PREVIOUS auth.json intact rather than a truncated / 0-byte file.
-    // Same contract the Node side holds via writeJsonAtomic
-    // (packages/opencode/src/filesystem/index.ts). POSIX rename is
-    // atomic; Windows std::fs::rename (fs_rename.rs) uses
-    // MoveFileExW(REPLACE_EXISTING) under the hood.
+    // Cross-process advisory lock around the read-modify-write so a
+    // sidecar `Auth.set` / `Auth.remove` cannot interleave with this
+    // revoke and silently drop a provider key. The sidecar holds the
+    // same lock via proper-lockfile in
+    // packages/opencode/src/auth/index.ts (`withAuthLock`); the Rust
+    // implementation in src/auth_lock.rs reproduces proper-lockfile's
+    // mkdir-as-mutex protocol so both sides converge on the same
+    // sentinel directory (`<auth.json>.lock`).
     //
-    // KNOWN GAP: this path does NOT coordinate with the Node-side
-    // proper-lockfile around Auth.set/remove. Node uses directory-based
-    // locking (`.auth.json.lock/` mkdir-atomicity) incompatible with
-    // Rust's flock primitives. A sidecar Auth.set racing with this
-    // revoke-triggered remove_gpd_key can still drop the sidecar's
-    // write. Probability: low (revoke is one user click, sidecars don't
-    // auto-write auth.json during steady-state). Tracked as a follow-up
-    // — port the proper-lockfile directory-lock protocol to Rust so
-    // both sides take the same sentinel.
-    let tmp_path = auth_path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp_path, &serialized).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("write auth.json.tmp: {e}")
-    })?;
-    std::fs::rename(&tmp_path, &auth_path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("rename auth.json.tmp -> auth.json: {e}")
-    })?;
-    Ok(())
+    // Lock parameters (retries: 20 @ 50–500 ms exponential backoff,
+    // stale: 10 s) match the Node call site exactly. Rust's native
+    // flock primitives are deliberately not used: flock is advisory
+    // POSIX-only and incompatible with proper-lockfile's directory
+    // semantics, so a Rust flock holder would not block a sidecar
+    // mkdir and vice versa.
+    auth_lock::with_lock(
+        &auth_path,
+        auth_lock::LockOptions::default(),
+        || -> Result<(), String> {
+            let bytes = match std::fs::read(&auth_path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(format!("read auth.json: {e}")),
+            };
+            let mut json: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(v) => v,
+                Err(_) => serde_json::json!({}),
+            };
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove("gpd");
+            } else {
+                json = serde_json::json!({});
+            }
+            let serialized = serde_json::to_vec_pretty(&json)
+                .map_err(|e| format!("serialize auth.json: {e}"))?;
+
+            // Atomic tmp+rename so a crash between open and write
+            // leaves the PREVIOUS auth.json intact rather than a
+            // truncated / 0-byte file. Same contract the Node side
+            // holds via writeJsonAtomic
+            // (packages/opencode/src/filesystem/index.ts). POSIX
+            // rename is atomic; Windows std::fs::rename
+            // (fs_rename.rs) uses MoveFileExW(REPLACE_EXISTING)
+            // under the hood.
+            let tmp_path = auth_path.with_extension(format!("tmp.{}", std::process::id()));
+            std::fs::write(&tmp_path, &serialized).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("write auth.json.tmp: {e}")
+            })?;
+            std::fs::rename(&tmp_path, &auth_path).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("rename auth.json.tmp -> auth.json: {e}")
+            })?;
+            Ok(())
+        },
+    )
+    .map_err(|e| match e {
+        auth_lock::LockError::Acquire(io) => format!("acquire auth.json lock: {io}"),
+        auth_lock::LockError::Body(msg) => msg,
+        auth_lock::LockError::Release(io) => format!("release auth.json lock: {io}"),
+    })
 }
 
 fn opencode_data_dir() -> Result<std::path::PathBuf, String> {
@@ -698,8 +718,17 @@ async fn initialize(app: AppHandle) {
 
     // Prepend GPD bin and venv bin to PATH so the agent can find `uv` (for
     // per-project venv management) and the GPD venv Python.
+    //
+    // Path note: the venv lives at `~/.gpd/venv/` (no leading dot), to
+    // match the CLI installer's layout (`install-gpd/install` →
+    // `GPD_VENV_DIR="$GPD_HOME/venv"`) and gpd_setup::gpd_venv_dir().
+    // An earlier `~/.gpd/.venv/bin` here was a typo from when the dir
+    // briefly lived under `~/.config/gpd/.venv/`; sidecar/agent
+    // subprocesses that resolved `python` or `uv` via PATH silently
+    // missed the bundled interpreter and fell through to system
+    // python or 127.
     let gpd_bin = gpd_config.join("bin");
-    let gpd_venv_bin = gpd_config.join(".venv").join("bin");
+    let gpd_venv_bin = gpd_config.join("venv").join("bin");
     let current_path = std::env::var("PATH").unwrap_or_default();
     let augmented_path = format!(
         "{}:{}:{}",

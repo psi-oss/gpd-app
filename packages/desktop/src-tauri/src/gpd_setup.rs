@@ -27,14 +27,23 @@ const GPD_INIT_MARKER: &str = ".gpd-initialized";
 const LITELLM_URL: &str = "https://litellm-production-46bb.up.railway.app/v1";
 
 /// Pinned PyPI version of the `get-physics-done` package that the GPD
-/// venv is seeded with. Kept in sync with `install-gpd/install:33`
-/// (`GPD_PACKAGE_VERSION`) and `packages/desktop/src-tauri/src/gpd_setup.rs`
-/// so every entry point that materializes the venv produces the same
-/// bits. Must be bumped every time a new `get-physics-done` release is
-/// cut. Pinning to an exact PyPI version (not `@main`) prevents the
-/// venv from silently pulling whichever commit happens to be on the
-/// branch at repair time — a reproducibility and supply-chain bar.
-const GPD_PACKAGE_VERSION: &str = "1.1.0";
+/// venv is seeded with. Empty string = install the latest version PyPI
+/// resolves at first-run time. Mirrors `install-gpd/install`'s
+/// `GPD_PACKAGE_VERSION` (also empty by default since 2026-04-27) so
+/// installer-first and desktop-first onboarding produce equivalent
+/// venvs. Set to `"X.Y.Z"` to pin a specific release for
+/// reproducibility (e.g. for a frozen pilot cohort); leave empty to
+/// track latest. The pip command builds either `get-physics-done` or
+/// `get-physics-done==X.Y.Z` based on whether this is empty.
+///
+/// Why latest instead of pinned: PyPI's resolver picks the highest
+/// version compatible with our PBS Python (3.13). Pilot users get new
+/// agent + MCP server fixes without waiting for a desktop release.
+/// Tradeoff: install reproducibility drops — same desktop binary on
+/// different days may bootstrap to different `get-physics-done`
+/// versions. Acceptable for pilot; bump to a real pin when a hard
+/// reproducibility requirement appears.
+const GPD_PACKAGE_VERSION: &str = "";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -358,7 +367,15 @@ async fn ensure_gpd_installed(uv: &Path, python: &Path) -> Result<(), String> {
 
     tracing::info!("Installing get-physics-done[arxiv] into GPD venv");
 
-    let pypi_spec = format!("get-physics-done[arxiv]=={GPD_PACKAGE_VERSION}");
+    // Empty GPD_PACKAGE_VERSION = track latest from PyPI (matches the
+    // CLI installer's behaviour). When set to "X.Y.Z" we pin via the
+    // PEP 508 `==X.Y.Z` form. Pip with the bare name resolves to the
+    // newest wheel compatible with our PBS Python at install time.
+    let pypi_spec = if GPD_PACKAGE_VERSION.is_empty() {
+        "get-physics-done[arxiv]".to_string()
+    } else {
+        format!("get-physics-done[arxiv]=={GPD_PACKAGE_VERSION}")
+    };
     let output = timeout(
         Duration::from_secs(300),
         Command::new(uv)

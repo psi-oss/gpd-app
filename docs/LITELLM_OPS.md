@@ -10,9 +10,15 @@ literal-key workaround we apply on top.
 > Downstream forks running their own GPD will substitute their own
 > Railway project, version pin, and operational cadence.
 
+> **Current pin: `v1.83.14.rc.1`** (deployed to Railway 2026-04-27,
+> commit `b0de8c0f1b`). RC, not `-stable`, because no stable cut past
+> `v1.83.7-stable.patch.1` exists yet — see `infra/litellm/Dockerfile`
+> for the full rationale. Carries forward every CVE patch listed below
+> from `v1.83.7-stable` plus whatever shipped in the 04-19 → 04-27 window.
+
 ## Why the pin
 
-`infra/litellm/Dockerfile` pins `FROM ghcr.io/berriai/litellm:v1.83.7-stable`
+`infra/litellm/Dockerfile` pins `FROM ghcr.io/berriai/litellm:v1.83.14.rc.1`
 (not rolling `main-stable`). Reasons:
 
 1. **Monkey-patch stability.** `infra/litellm/gpd_log/hook.py` appends
@@ -20,8 +26,9 @@ literal-key workaround we apply on top.
    virtual keys can POST to it. That's reaching into LiteLLM's internal
    route-classification table; a rename upstream silently breaks the
    route.
-2. **Security patch coverage.** v1.83.7-stable patches every open
-   advisory as of the 2026-04-21 pin date:
+2. **Security patch coverage.** v1.83.14.rc.1 carries forward every
+   advisory patched in v1.83.7-stable (the previous pin) plus whatever
+   shipped in the 04-19 → 04-27 window:
    - GHSA-r75f-5x8p-qvmc (critical) — SQL injection in virtual-key
      verification. **Exploitable from any valid key**, reachable on
      every LLM call.
@@ -43,10 +50,11 @@ catches ABI breakage in the monkey-patch whenever we bump the pin.
 
 ## The regression introduced by the pin
 
-LiteLLM v1.83.7-stable stops resolving the `os.environ/<VAR>` reference
-syntax in `litellm_params.api_key` on DB-backed model deployments. The
-string is forwarded verbatim to the upstream provider as the API key,
-which rejects it (`Incorrect API key provided: os.envir*...`).
+LiteLLM v1.83.14.rc.1 (and v1.83.7-stable before it) stops resolving the
+`os.environ/<VAR>` reference syntax in `litellm_params.api_key` on
+DB-backed model deployments. The string is forwarded verbatim to the
+upstream provider as the API key, which rejects it (`Incorrect API key
+provided: os.envir*...`).
 
 Symptom in the UI: every chat turn fails with
 `Sign-in failed. Check your API key in Settings.` (the frontend's
@@ -156,9 +164,10 @@ curl -s https://api.github.com/repos/BerriAI/litellm/releases?per_page=20 \
   | jq -r '.[] | select(.tag_name | endswith("-stable")) | .tag_name'
 ```
 
-For each candidate tag newer than 1.83.7-stable, verify against the
+For each candidate tag newer than v1.83.14.rc.1, verify against the
 advisory list (<https://github.com/BerriAI/litellm/security/advisories>):
-the candidate must list all six patches. Then:
+the candidate must list all six patches carried forward from
+v1.83.7-stable. Then:
 
 1. Bump `FROM ghcr.io/berriai/litellm:<new-tag>` in `infra/litellm/Dockerfile`.
 2. `railway up infra/litellm --path-as-root --service litellm --detach`.
@@ -175,7 +184,7 @@ the candidate must list all six patches. Then:
 
 File: `https://github.com/BerriAI/litellm/issues/<number>` — repro
 posted by us. To be filed when Approach A is applied. Include:
-- LiteLLM version: `v1.83.7-stable`.
+- LiteLLM version: `v1.83.14.rc.1` (regression carried forward from `v1.83.7-stable`).
 - Our deploy shape: DB-backed model list (`LITELLM_STORE_MODEL_IN_DB=true`),
   `api_key` stored as `os.environ/<VAR>` string, no `config.yaml` file.
 - Expected: LiteLLM resolves the env reference at router init.
