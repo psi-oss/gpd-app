@@ -19,13 +19,8 @@ irm https://download.gpd.psi.inc/install.ps1 | iex
 ## Uninstall
 
 ```bash
-# macOS
+# macOS / Linux
 curl -fsSL https://download.gpd.psi.inc/uninstall | bash -s -- --yes
-```
-
-```bash
-# Linux
-curl -fsSL https://download.gpd.psi.inc/uninstall.sh | bash -s -- --yes
 ```
 
 ```powershell

@@ -936,6 +936,17 @@ install_gpd_package() {
     "$venv_pip" install --upgrade --quiet \
         "numpy>=2" "scipy>=1.13" "matplotlib>=3.8" "sympy>=1.13" \
         || warn "Physics libs install failed — agent code that imports scipy/numpy may break. Retry: ~/.gpd/venv/bin/pip install scipy numpy matplotlib sympy"
+
+    # arxiv-mcp-server is the upstream package the gpd-arxiv MCP bridge
+    # imports at process startup. Without it, gpd.mcp.servers.arxiv_bridge
+    # raises ModuleNotFoundError on first run and the desktop app shows a
+    # red dot next to gpd-arxiv in the Tools panel ("MCP error -32000:
+    # Connection closed local mcp startup failed"). Pinned with the
+    # other PyPI deps so a fresh install lands all 8 MCP servers in
+    # green-dot state.
+    log "Installing arxiv-mcp-server (powers the gpd-arxiv MCP bridge)..."
+    "$venv_pip" install --upgrade --quiet "arxiv-mcp-server>=0.4" \
+        || warn "arxiv-mcp-server install failed — gpd-arxiv MCP will show red-dot/disconnected in the Tools panel. Retry: ~/.gpd/venv/bin/pip install arxiv-mcp-server"
 }
 
 # Two-step liveness probe run after install. Split into two calls so the

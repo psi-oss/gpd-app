@@ -42,8 +42,7 @@ on:
     branches: [gpd]
     paths:
       - "install-gpd/install"
-      - "install-gpd/uninstall.sh"
-      - "install-gpd/uninstall_macos.sh"
+      - "install-gpd/uninstall"
       - "install-gpd/windows_11/install.ps1"
       - "install-gpd/windows_11/uninstall.ps1"
       - ".github/workflows/gpd-sync-installer-to-pages.yml"
@@ -84,13 +83,18 @@ jobs:
           # instructed to fetch:
           #   https://download.gpd.psi.inc/install     (mac+linux installer)
           #   https://download.gpd.psi.inc/install.ps1 (windows installer)
-          #   https://download.gpd.psi.inc/uninstall   (macOS uninstaller, mirrors /install path)
-          #   https://download.gpd.psi.inc/uninstall.sh   (linux uninstaller)
+          #   https://download.gpd.psi.inc/uninstall   (mac+linux uninstaller, unified)
+          #   https://download.gpd.psi.inc/uninstall.sh   (alias of /uninstall for backwards-compat)
           #   https://download.gpd.psi.inc/uninstall.ps1  (windows uninstaller)
-          install -m 0755 ../src/install-gpd/install              ./install
+          #
+          # uninstall is a single source file that auto-detects darwin
+          # vs linux at runtime, mirroring `install`. /uninstall.sh is
+          # kept as an alias of /uninstall so older READMEs / scripts
+          # that reference the .sh URL continue to work.
+          install -m 0755 ../src/install-gpd/install                ./install
           install -m 0644 ../src/install-gpd/windows_11/install.ps1 ./install.ps1
-          install -m 0755 ../src/install-gpd/uninstall_macos.sh   ./uninstall
-          install -m 0755 ../src/install-gpd/uninstall.sh         ./uninstall.sh
+          install -m 0755 ../src/install-gpd/uninstall              ./uninstall
+          install -m 0755 ../src/install-gpd/uninstall              ./uninstall.sh
           install -m 0644 ../src/install-gpd/windows_11/uninstall.ps1 ./uninstall.ps1
 
           # Generate SHA256SUMS.txt with deterministic (sorted) ordering

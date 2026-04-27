@@ -1,28 +1,46 @@
 #!/usr/bin/env bash
-# GPD — Get Physics Done: macOS uninstaller
+# GPD — Get Physics Done: unified uninstaller (macOS + Linux)
+#
+# Detects platform at runtime + branches the OS-specific cleanup.
+# Replaces the previous split between `uninstall.sh` (Linux) and
+# `uninstall_macos.sh` (macOS). Mirrors the unified `install` script
+# layout so users see a single cross-platform UX.
 #
 # Usage:
-#   bash uninstall_macos.sh
-#   bash uninstall_macos.sh --yes    # skip confirmation prompt
+#   bash uninstall
+#   bash uninstall --yes        # skip confirmation prompt
 #
-# Removes everything created by the GPD installer on macOS:
-#   - ~/.gpd/ directory (bin, config, python, venv)
-#   - PATH entries + GPD_API_KEY exports from shell rc / login profiles
-#     (sentinel-bracketed block only; see remove_gpd_block)
+# Removes (both platforms):
+#   - ~/.gpd/ (bin, config, python, venv)
+#   - PATH entries + GPD_API_KEY exports from sentinel-bracketed shell rc
+#     blocks (open `# >>> GPD CLI >>>` / close `# <<< GPD CLI <<<`)
 #   - "gpd" entry from opencode auth.json
-#   - GPD-specific entries in opencode.json
+#   - GPD-specific entries in opencode.json (provider.gpd, model gpd/*,
+#     enabled_providers list)
 #   - Files listed in gpd-file-manifest.json + the manifest itself
-#   - /Applications/GPD.app (desktop app)
-#   - ~/Library/Application Support/GPD/
-#   - ~/Library/Application Support/inc.psi.gpd/
-#   - Tauri WebView caches under ~/Library/Caches and ~/Library/WebKit
+#   - `~/.config/opencode/get-physics-done/` subdir (GPD-owned, blocking
+#     fresh installs if left behind)
+#   - Orphan GPD-managed marker files in opencode/{command,agents,hooks}
+#     when no manifest is present
+#
+# macOS-only:
+#   - /Applications/GPD.app
+#   - ~/Library/Application Support/{GPD,inc.psi.gpd}/
+#   - ~/Library/Caches/inc.psi.gpd/
+#   - ~/Library/WebKit/inc.psi.gpd/
+#
+# Linux-only:
+#   - GPD .deb package via dpkg --remove (Ubuntu/Debian)
+#   - ~/.config/{gpd,inc.psi.gpd}/
+#   - ~/.local/share/inc.psi.gpd/
+#   - ~/.cache/inc.psi.gpd/
 #
 # Does NOT remove:
 #   - The rest of opencode's config/data dir (preserves other providers,
 #     chat history, custom prompts).
-#   - BasicTeX / MacTeX (detected and reported for manual cleanup)
-#   - Homebrew itself
-#   - Xcode Command Line Tools
+#   - LaTeX (BasicTeX / MacTeX / texlive-*) — detected and reported for
+#     manual cleanup.
+#   - Homebrew / apt / Xcode CLT / system Python.
 
 set -euo pipefail
 
@@ -41,6 +59,18 @@ success() { printf " ${GREEN}+${RESET} %s\n" "$*"; }
 warn()    { printf " ${YELLOW}!${RESET} %s\n" "$*"; }
 skip()    { printf " ${DIM}-${RESET} %s\n" "$*"; }
 
+# ── Platform detection ────────────────────────────────────────────────────
+
+case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    Linux)  os="linux"  ;;
+    *)
+        printf "${RED}Unsupported platform: $(uname -s).${RESET}\n" >&2
+        printf "This uninstaller targets macOS + Linux. For Windows, use uninstall.ps1.\n" >&2
+        exit 1
+        ;;
+esac
+
 # ── Arguments ─────────────────────────────────────────────────────────────
 
 auto_yes=false
@@ -48,7 +78,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes) auto_yes=true; shift ;;
         -h|--help)
-            printf "Usage: uninstall_macos.sh [--yes]\n"
+            printf "Usage: uninstall [--yes]\n"
             printf "  --yes, -y   Skip confirmation prompt\n"
             exit 0
             ;;
@@ -60,35 +90,60 @@ done
 
 GPD_HOME="${GPD_HOME:-$HOME/.gpd}"
 GPD_BIN_DIR="$GPD_HOME/bin"
-APP_SUPPORT="$HOME/Library/Application Support"
-# opencode uses xdg-basedir v5, which ignores platform and always resolves
-# xdgData to $HOME/.local/share — so on macOS the real auth.json lives
-# there, NOT in Application Support/opencode. The installer writes to
-# $XDG_DATA_HOME or $HOME/.local/share to match.
+
+# opencode uses xdg-basedir v5 which always resolves xdgData to
+# $HOME/.local/share regardless of platform; the installer matches that.
 XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-OPENCODE_AUTH="$XDG_DATA/opencode/auth.json"
-# opencode's config dir (not data). xdg-basedir v5 resolves xdgConfig to
-# $HOME/.config on all platforms — but the installer also drops
-# opencode.json alongside auth.json for convenience. We check both.
-OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 OPENCODE_DATA_DIR="$XDG_DATA/opencode"
-GPD_APP_SUPPORT="$APP_SUPPORT/GPD"
-GPD_APP_SUPPORT_BUNDLE="$APP_SUPPORT/inc.psi.gpd"
-GPD_APP="/Applications/GPD.app"
+OPENCODE_AUTH="$OPENCODE_DATA_DIR/auth.json"
+OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 
-# Tauri WebView data on macOS — stores localStorage (including the
-# "gpd.key.saved" flag the welcome screen keys off of), cookies,
-# WebKit cache, and IndexedDB. Wiping these ensures a reinstall
-# doesn't inherit the previous install's "already-onboarded" signal.
-GPD_CACHES_BUNDLE="$HOME/Library/Caches/inc.psi.gpd"
-GPD_WEBKIT_BUNDLE="$HOME/Library/WebKit/inc.psi.gpd"
+# get-physics-done/ subdir inside opencode config — populated by
+# `gpd install opencode --global`. Wholly GPD-owned; remove
+# unconditionally because re-running the installer against a stale dir
+# trips gpd 1.2.x's preflight with "untrusted GPD manifest".
+opencode_gpd_subdir="$OPENCODE_CONFIG_DIR/get-physics-done"
 
-# Prefer the GPD-managed Python over the system `python3` stub. On a fresh
-# macOS without Xcode Command Line Tools, `/usr/bin/python3` is a stub that
-# pops a GUI "install developer tools" dialog when invoked — even from an
-# SSH session — which is poor UX for an uninstaller. The installer always
-# creates a venv at $GPD_VENV_DIR/bin/python, so we can reach for that
-# first and fall back to the system python only if the venv is gone.
+# Platform-specific app/state dirs.
+gpd_app=""
+app_support_dirs=()
+deb_package=""
+case "$os" in
+    darwin)
+        gpd_app="/Applications/GPD.app"
+        # Tauri WebView data on macOS — stores localStorage (incl. the
+        # "gpd.key.saved" flag the welcome screen keys off of), cookies,
+        # WebKit cache, IndexedDB. Wiping these ensures a reinstall
+        # doesn't inherit the previous install's "already-onboarded"
+        # signal.
+        app_support_dirs=(
+            "$HOME/Library/Application Support/GPD"
+            "$HOME/Library/Application Support/inc.psi.gpd"
+            "$HOME/Library/Caches/inc.psi.gpd"
+            "$HOME/Library/WebKit/inc.psi.gpd"
+        )
+        ;;
+    linux)
+        # Linux GUI config / cache dirs. Tauri uses XDG paths under
+        # ~/.config and ~/.local/share.
+        app_support_dirs=(
+            "$HOME/.config/gpd"
+            "$HOME/.config/inc.psi.gpd"
+            "$HOME/.local/share/inc.psi.gpd"
+            "$HOME/.cache/inc.psi.gpd"
+        )
+        if command -v dpkg &>/dev/null && dpkg -l gpd 2>/dev/null | grep -q "^ii"; then
+            deb_package="gpd"
+        fi
+        ;;
+esac
+
+# Prefer the GPD-managed Python over the system stub. On a fresh macOS
+# without Xcode CLT, /usr/bin/python3 pops a GUI install dialog when
+# invoked — even from a non-GUI session — which is poor UX for an
+# uninstaller. The installer always creates a venv at $GPD_HOME/venv,
+# so we reach for that first and fall back to the system python only
+# if the venv is gone.
 PY=""
 if [[ -x "$GPD_HOME/venv/bin/python" ]]; then
     PY="$GPD_HOME/venv/bin/python"
@@ -101,7 +156,10 @@ fi
 # ── Discovery: show what will be removed ──────────────────────────────────
 
 printf "\n"
-printf "${BOLD} GPD Uninstaller (macOS)${RESET}\n"
+case "$os" in
+    darwin) printf "${BOLD} GPD Uninstaller (macOS)${RESET}\n" ;;
+    linux)  printf "${BOLD} GPD Uninstaller (Linux)${RESET}\n"  ;;
+esac
 printf "\n"
 
 found_anything=false
@@ -111,51 +169,31 @@ if [[ -d "$GPD_HOME" ]]; then
     found_anything=true
 fi
 
-# Check for /Applications/GPD.app
+# Desktop app / .deb package (per-OS).
 remove_gpd_app=false
-if [[ -d "$GPD_APP" ]]; then
-    log "Found GPD desktop app: $GPD_APP"
+if [[ -n "$gpd_app" && -d "$gpd_app" ]]; then
+    log "Found GPD desktop app: $gpd_app"
     remove_gpd_app=true
     found_anything=true
 fi
-
-# Check for GUI config directories
-remove_gpd_app_support=false
-if [[ -d "$GPD_APP_SUPPORT" ]]; then
-    log "Found GPD app support dir: $GPD_APP_SUPPORT"
-    remove_gpd_app_support=true
+if [[ -n "$deb_package" ]]; then
+    log "Found GPD .deb package: $deb_package"
     found_anything=true
 fi
 
-remove_gpd_bundle_support=false
-if [[ -d "$GPD_APP_SUPPORT_BUNDLE" ]]; then
-    log "Found GPD bundle support dir: $GPD_APP_SUPPORT_BUNDLE"
-    remove_gpd_bundle_support=true
-    found_anything=true
-fi
+# Per-OS GUI / cache dirs.
+app_support_dirs_found=()
+for d in "${app_support_dirs[@]}"; do
+    if [[ -d "$d" ]]; then
+        log "Found app data dir: $d"
+        app_support_dirs_found+=("$d")
+        found_anything=true
+    fi
+done
 
-# Tauri WebView data (localStorage, cookies, WebKit cache, IndexedDB).
-# These are NOT in Application Support — macOS puts them under Caches
-# and WebKit. Without clearing them, a fresh install inherits the
-# previous run's "already-onboarded" localStorage flag and the GUI
-# welcome screen never shows.
-remove_caches_bundle=false
-if [[ -d "$GPD_CACHES_BUNDLE" ]]; then
-    log "Found GPD WebView cache: $GPD_CACHES_BUNDLE"
-    remove_caches_bundle=true
-    found_anything=true
-fi
-
-remove_webkit_bundle=false
-if [[ -d "$GPD_WEBKIT_BUNDLE" ]]; then
-    log "Found GPD WebKit data: $GPD_WEBKIT_BUNDLE"
-    remove_webkit_bundle=true
-    found_anything=true
-fi
-
-# Check for auth.json with a "gpd" entry. We use $PY if available (prefers
-# the venv Python over the /usr/bin/python3 stub that pops a "install
-# developer tools" dialog on fresh macOS). Fall back to grep otherwise.
+# auth.json with a "gpd" entry. Use $PY when available (avoids the
+# /usr/bin/python3 stub-prompt issue on fresh macOS); fall back to grep
+# when no usable python3 is around.
 strip_auth_gpd=false
 if [[ -f "$OPENCODE_AUTH" && -n "$PY" ]]; then
     if "$PY" -c "
@@ -172,14 +210,12 @@ except Exception:
         found_anything=true
     fi
 elif [[ -f "$OPENCODE_AUTH" ]] && grep -q '"gpd"' "$OPENCODE_AUTH" 2>/dev/null; then
-    # Fallback when no usable python3 is available: crude grep. Good enough
-    # for the common case where the installer wrote the auth entry itself.
     log "Found 'gpd' entry in $OPENCODE_AUTH"
     strip_auth_gpd=true
     found_anything=true
 fi
 
-# Check for GPD-specific artifacts inside opencode's global config dir.
+# GPD-specific artifacts inside opencode's global config dir.
 opencode_json_has_gpd=false
 if [[ -f "$OPENCODE_CONFIG_DIR/opencode.json" ]] \
     && grep -q '"gpd"' "$OPENCODE_CONFIG_DIR/opencode.json" 2>/dev/null; then
@@ -187,8 +223,6 @@ if [[ -f "$OPENCODE_CONFIG_DIR/opencode.json" ]] \
     log "Found GPD entry in: $OPENCODE_CONFIG_DIR/opencode.json"
     found_anything=true
 fi
-# Manifest may live under $OPENCODE_CONFIG_DIR; also check the data dir
-# just in case the installer landed it alongside auth.json historically.
 opencode_manifest_paths=()
 for candidate in \
     "$OPENCODE_CONFIG_DIR/gpd-file-manifest.json" \
@@ -199,18 +233,12 @@ for candidate in \
         found_anything=true
     fi
 done
-# get-physics-done/ subdir inside opencode config — populated by
-# `gpd install opencode --global`. Report only; removal happens after
-# manifest sweep and only if the dir ends up empty.
-opencode_gpd_subdir="$OPENCODE_CONFIG_DIR/get-physics-done"
 if [[ -d "$opencode_gpd_subdir" ]]; then
     log "Found GPD subdir: $opencode_gpd_subdir"
     found_anything=true
 fi
 
-# Check shell rc files and login profiles for the GPD sentinel block.
-# On macOS .zprofile is the primary key location; .bashrc still matters
-# for users who switched shells.
+# Shell rc files / login profiles for the GPD sentinel block.
 rc_and_profile_candidates=(
     "$HOME/.bashrc"
     "$HOME/.zshrc"
@@ -232,27 +260,36 @@ for rc in "${rc_and_profile_candidates[@]}"; do
     fi
 done
 
-# Detect LaTeX (BasicTeX / MacTeX) — do NOT remove, just report
+# LaTeX detection — do NOT remove, just report at the end.
 latex_detected=false
 latex_note=""
-if command -v brew &>/dev/null; then
-    if brew list --cask 2>/dev/null | grep -qx "basictex"; then
-        latex_detected=true
-        latex_note="BasicTeX (Homebrew cask)"
-    elif brew list --cask 2>/dev/null | grep -qx "mactex"; then
-        latex_detected=true
-        latex_note="MacTeX (Homebrew cask)"
-    elif brew list --cask 2>/dev/null | grep -qx "mactex-no-gui"; then
-        latex_detected=true
-        latex_note="MacTeX-no-GUI (Homebrew cask)"
-    fi
-fi
-if [[ "$latex_detected" == false ]]; then
-    if [[ -d "/Library/TeX" ]] || compgen -G "/usr/local/texlive/*" > /dev/null 2>&1; then
-        latex_detected=true
-        latex_note="TeX installation at /Library/TeX or /usr/local/texlive/"
-    fi
-fi
+case "$os" in
+    darwin)
+        if command -v brew &>/dev/null; then
+            if brew list --cask 2>/dev/null | grep -qx "basictex"; then
+                latex_detected=true; latex_note="BasicTeX (Homebrew cask)"
+            elif brew list --cask 2>/dev/null | grep -qx "mactex"; then
+                latex_detected=true; latex_note="MacTeX (Homebrew cask)"
+            elif brew list --cask 2>/dev/null | grep -qx "mactex-no-gui"; then
+                latex_detected=true; latex_note="MacTeX-no-GUI (Homebrew cask)"
+            fi
+        fi
+        if [[ "$latex_detected" == false ]]; then
+            if [[ -d "/Library/TeX" ]] || compgen -G "/usr/local/texlive/*" > /dev/null 2>&1; then
+                latex_detected=true
+                latex_note="TeX installation at /Library/TeX or /usr/local/texlive/"
+            fi
+        fi
+        ;;
+    linux)
+        if command -v dpkg &>/dev/null; then
+            if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /^texlive-/' | grep -q .; then
+                latex_detected=true
+                latex_note="TeX Live packages (apt)"
+            fi
+        fi
+        ;;
+esac
 
 if [[ "$found_anything" == false ]]; then
     printf " ${DIM}Nothing to remove — GPD does not appear to be installed.${RESET}\n\n"
@@ -276,33 +313,33 @@ fi
 
 printf "\n"
 
-# ── Remove /Applications/GPD.app ─────────────────────────────────────────
+# ── Remove desktop app (macOS) / .deb (Linux) ───────────────────────────
 
 if [[ "$remove_gpd_app" == true ]]; then
-    log "Removing $GPD_APP..."
-    # May require sudo if the app is owned by root (e.g. installed via .pkg)
-    if rm -rf "$GPD_APP" 2>/dev/null; then
-        success "Removed $GPD_APP"
-    elif sudo rm -rf "$GPD_APP" 2>/dev/null; then
-        success "Removed $GPD_APP (with sudo)"
+    log "Removing $gpd_app..."
+    if rm -rf "$gpd_app" 2>/dev/null; then
+        success "Removed $gpd_app"
+    elif sudo rm -rf "$gpd_app" 2>/dev/null; then
+        success "Removed $gpd_app (with sudo)"
     else
-        warn "Failed to remove $GPD_APP (try: sudo rm -rf '$GPD_APP')"
+        warn "Failed to remove $gpd_app (try: sudo rm -rf '$gpd_app')"
     fi
-else
-    skip "No /Applications/GPD.app installed"
+fi
+if [[ -n "$deb_package" ]]; then
+    log "Removing GPD .deb package..."
+    if sudo dpkg --remove "$deb_package" 2>/dev/null; then
+        success "Removed .deb package: $deb_package"
+    else
+        warn "Failed to remove .deb package (try: sudo dpkg --remove $deb_package)"
+    fi
 fi
 
 # ── Strip 'gpd' entry from opencode auth.json ────────────────────────────
-# We do this BEFORE removing $GPD_HOME so $PY (venv python) is still
-# available. auth.json itself is preserved — we surgically drop the
-# "gpd" key so other providers' auth stays intact.
+# Done BEFORE removing $GPD_HOME so $PY (venv python) is still available.
+# auth.json itself is preserved — surgically drop the "gpd" key so other
+# providers' auth stays intact.
 
 if [[ "$strip_auth_gpd" == true && -n "$PY" ]]; then
-    # Exit codes:
-    #   0 = stripped 'gpd', file still has other providers
-    #   1 = stripped 'gpd', file now empty -> deleted
-    #   2 = no 'gpd' entry (nothing to do)
-    #   other = genuine failure
     rc=0
     "$PY" - "$OPENCODE_AUTH" <<'PYEOF' || rc=$?
 import json, os, sys
@@ -353,11 +390,6 @@ clean_opencode_json() {
         warn "  Please manually remove \"gpd\" entries from $file"
         return
     fi
-    # Exit codes:
-    #   0 modified, file kept
-    #   1 modified, file reduced to {} and was deleted
-    #   2 nothing to change
-    #   3 JSON parse error
     local rc=0
     "$PY" - "$file" <<'PY' || rc=$?
 import json, os, sys
@@ -410,20 +442,16 @@ else
     skip "No GPD entries in $OPENCODE_CONFIG_DIR/opencode.json"
 fi
 
-# ── AC-9: manifest-driven file removal ───────────────────────────────────
+# ── Manifest-driven file removal ─────────────────────────────────────────
 #
 # gpd-file-manifest.json lists files the installer dropped into the
 # opencode config dir. Accept either {"files": [...]} or a top-level
 # array. Relative paths resolve against the manifest's parent dir.
 
 # Guard against manifest path traversal. The manifest is authored by the
-# installer but we treat it as untrusted input — a corrupted/malicious
+# installer but treated as untrusted input — a corrupted/malicious
 # manifest with entries like "../../../.ssh/authorized_keys" or absolute
 # paths outside the allowlist would let us delete arbitrary user files.
-# Resolves both the candidate and its allowed prefix via realpath -m
-# (accepts non-existent targets so we can still reject them) and requires
-# the resolved target to live under the prefix. `..` segments are refused
-# up-front.
 is_safe_manifest_path() {
     local target="$1"
     local allow_prefix="$2"
@@ -439,18 +467,37 @@ is_safe_manifest_path() {
 
 process_gpd_manifest() {
     local manifest="$1"
-    [[ -f "$manifest" ]] || return
+    local base_dir="$2"
+    if [[ ! -f "$manifest" ]]; then
+        # Fallback: a partial install (or a user who manually wiped
+        # ~/.gpd) can leave GPD-managed files in $base_dir without a
+        # manifest. Sweep the well-known managed paths from the gpd
+        # runtime catalog (`flat_command_globs: ["command/gpd-*.md"]`
+        # for opencode + the conventional agents/ + hooks/ patterns) so
+        # a future fresh install isn't blocked by orphan markers.
+        local swept=0
+        for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
+            local matched
+            matched=$(find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$matched" != "0" ]]; then
+                find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f -delete 2>/dev/null || true
+                swept=$((swept + matched))
+            fi
+        done
+        if (( swept > 0 )); then
+            success "Removed $swept orphan GPD marker file(s) from $base_dir (no manifest)"
+        else
+            skip "No gpd-file-manifest.json to process"
+        fi
+        return
+    fi
+
     if [[ -z "$PY" ]]; then
         warn "python3 not available — cannot parse $manifest; removing manifest only"
         rm -f "$manifest"
         return
     fi
-    local base_dir
-    base_dir="$(dirname "$manifest")"
 
-    # Newline-separated output — bash command substitution strips NULs,
-    # so we reject entries containing newlines rather than trying to
-    # delimit around them.
     local files_list
     files_list="$("$PY" - "$manifest" "$base_dir" 2>/dev/null <<'PY' || true
 import json, os, sys
@@ -493,10 +540,6 @@ PY
         return
     fi
 
-    # Allowlist: every manifest entry must resolve to a path inside one
-    # of these prefixes. Anything outside is treated as a manifest-traversal
-    # attack (or a legitimate but dangerous manifest we won't honor) and
-    # gets skipped with a warning.
     local -a allow_prefixes=("$base_dir" "$GPD_HOME")
     [[ -n "${OPENCODE_CONFIG_DIR:-}" ]] && allow_prefixes+=("$OPENCODE_CONFIG_DIR")
 
@@ -535,46 +578,12 @@ PY
 
 if (( ${#opencode_manifest_paths[@]} > 0 )); then
     for m in "${opencode_manifest_paths[@]}"; do
-        process_gpd_manifest "$m"
+        process_gpd_manifest "$m" "$(dirname "$m")"
     done
 else
-    # No manifest, but a partial/manual prior install (e.g. user ran
-    # `rm -rf ~/.gpd` without our uninstaller) can leave GPD-managed
-    # marker files behind in $OPENCODE_CONFIG_DIR that block a future
-    # `gpd install` ("untrusted GPD manifest"). Sweep the well-known
-    # managed paths from the gpd runtime catalog
-    # (`flat_command_globs: ["command/gpd-*.md"]` for opencode + the
-    # conventional agents/ + hooks/ patterns) so the next fresh install
-    # sees a clean target.
-    swept=0
-    for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
-        matched=$(find "$OPENCODE_CONFIG_DIR" -maxdepth 2 -path "$OPENCODE_CONFIG_DIR/$pat" -type f 2>/dev/null | wc -l | tr -d ' ')
-        if [[ "$matched" != "0" ]]; then
-            find "$OPENCODE_CONFIG_DIR" -maxdepth 2 -path "$OPENCODE_CONFIG_DIR/$pat" -type f -delete 2>/dev/null || true
-            swept=$((swept + matched))
-        fi
-    done
-    if (( swept > 0 )); then
-        success "Removed $swept orphan GPD marker file(s) from $OPENCODE_CONFIG_DIR (no manifest)"
-    else
-        skip "No gpd-file-manifest.json to process"
-    fi
+    process_gpd_manifest "$OPENCODE_CONFIG_DIR/gpd-file-manifest.json" "$OPENCODE_CONFIG_DIR"
 fi
 
-# Clean up get-physics-done/ subdir. The earlier "remove only if empty
-# after manifest sweep" heuristic was wrong — `gpd install opencode
-# --global` writes files (agents, commands, runtime-config) into this
-# subdir that aren't always recorded in gpd-file-manifest.json (manifest
-# tracking was added in a later release; pre-manifest installs leave
-# orphans here forever). The dir is named after the package and is
-# wholly GPD-owned; remove unconditionally. If the user customised
-# templates here, they should back them up before uninstalling.
-#
-# The bug this fixed: re-running the installer against a stale
-# get-physics-done/ dir tripped gpd 1.2.x's preflight with
-# "untrusted GPD manifest" because the new install didn't recognise
-# the old install's signature. Removing the dir on uninstall makes the
-# next install see a clean target.
 if [[ -d "$opencode_gpd_subdir" ]]; then
     rm -rf "$opencode_gpd_subdir"
     success "Removed $opencode_gpd_subdir"
@@ -612,8 +621,6 @@ remove_gpd_block() {
 
     local tmp
     tmp="$(mktemp)"
-    # Pipe through tr -d '\r' so CRLF-terminated dotfiles match. Trailing
-    # whitespace on the sentinel line is tolerated.
     if ! tr -d '\r' < "$file" | awk '
         /^# >>> GPD CLI >>>[[:space:]]*$/ { skip=1; next }
         /^# <<< GPD CLI <<<[[:space:]]*$/ { skip=0; next }
@@ -656,35 +663,16 @@ else
     skip "$GPD_HOME already removed"
 fi
 
-# ── Remove GUI config directories ────────────────────────────────────────
+# ── Remove platform-specific GUI / cache dirs ────────────────────────────
 
-if [[ "$remove_gpd_app_support" == true ]]; then
-    rm -rf "$GPD_APP_SUPPORT"
-    success "Removed $GPD_APP_SUPPORT"
-else
-    skip "No $GPD_APP_SUPPORT to remove"
-fi
-
-if [[ "$remove_gpd_bundle_support" == true ]]; then
-    rm -rf "$GPD_APP_SUPPORT_BUNDLE"
-    success "Removed $GPD_APP_SUPPORT_BUNDLE"
-else
-    skip "No $GPD_APP_SUPPORT_BUNDLE to remove"
-fi
-
-if [[ "$remove_caches_bundle" == true ]]; then
-    rm -rf "$GPD_CACHES_BUNDLE"
-    success "Removed $GPD_CACHES_BUNDLE"
-else
-    skip "No $GPD_CACHES_BUNDLE to remove"
-fi
-
-if [[ "$remove_webkit_bundle" == true ]]; then
-    rm -rf "$GPD_WEBKIT_BUNDLE"
-    success "Removed $GPD_WEBKIT_BUNDLE"
-else
-    skip "No $GPD_WEBKIT_BUNDLE to remove"
-fi
+for d in "${app_support_dirs[@]}"; do
+    if [[ -d "$d" ]]; then
+        rm -rf "$d"
+        success "Removed $d"
+    else
+        skip "No $d to remove"
+    fi
+done
 
 # ── Done ──────────────────────────────────────────────────────────────────
 
@@ -696,8 +684,16 @@ if [[ "$latex_detected" == true ]]; then
     printf "\n"
     printf " ${YELLOW}Manual cleanup:${RESET} $latex_note was installed by the GPD installer\n"
     printf " but is left in place because many other apps may depend on it.\n"
-    printf " To remove it yourself:\n"
-    printf "   ${DIM}brew uninstall --cask basictex${RESET}   ${DIM}# or mactex / mactex-no-gui${RESET}\n"
+    case "$os" in
+        darwin)
+            printf " To remove it yourself:\n"
+            printf "   ${DIM}brew uninstall --cask basictex${RESET}   ${DIM}# or mactex / mactex-no-gui${RESET}\n"
+            ;;
+        linux)
+            printf " To remove it yourself:\n"
+            printf "   ${DIM}sudo apt remove texlive-latex-base texlive-binaries latexmk${RESET}\n"
+            ;;
+    esac
 fi
 
 printf "\n"
