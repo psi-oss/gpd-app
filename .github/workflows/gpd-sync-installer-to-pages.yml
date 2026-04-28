@@ -5,15 +5,25 @@ name: GPD Sync Installer Scripts to Pages
 # users can verify before execution.
 #
 # Published files (URL → source):
-#   /install              ← install-gpd/install              (mac + linux installer)
-#   /install.ps1          ← install-gpd/windows_11/install.ps1 (windows installer)
-#   /uninstall            ← install-gpd/uninstall_macos.sh   (macOS uninstaller)
-#   /uninstall.sh         ← install-gpd/uninstall.sh         (linux uninstaller)
-#   /uninstall.ps1        ← install-gpd/windows_11/uninstall.ps1 (windows uninstaller)
+#   /install              ← install-gpd/install                          (mac + linux installer, unified)
+#   /install.ps1          ← install-gpd/windows_11/install.ps1           (windows bootstrap, ASCII-only)
+#   /install_main.ps1     ← install-gpd/windows_11/install_main.ps1      (windows full installer)
+#   /uninstall            ← install-gpd/uninstall                        (mac + linux uninstaller, unified)
+#   /uninstall.sh         ← install-gpd/uninstall                        (alias of /uninstall for backwards-compat)
+#   /uninstall.ps1        ← install-gpd/windows_11/uninstall.ps1         (windows bootstrap, ASCII-only)
+#   /uninstall_main.ps1   ← install-gpd/windows_11/uninstall_main.ps1    (windows full uninstaller)
 #
-# /uninstall (no extension) targets macOS to mirror the no-extension
-# /install path users already type. /uninstall.sh stays available for
-# linux + script-style invocation. SHA256SUMS.txt covers all five.
+# Windows two-file pattern:
+#   The /install.ps1 + /uninstall.ps1 endpoints serve a tiny ASCII-only
+#   bootstrap that fetches the full *_main.ps1 with explicit UTF-8
+#   decoding (via Net.WebClient, not Invoke-RestMethod) and evaluates
+#   it as a scriptblock. PowerShell 5.1 + irm defaults to ISO-8859-1
+#   when the response Content-Type lacks a charset, which on
+#   non-English locales (PT-BR observed) turned the UTF-8 BOM + the
+#   box-drawing banner + accented comments into mojibake the parser
+#   rejected. The bootstrap avoids `iex`-on-mojibake entirely.
+#
+# SHA256SUMS.txt covers all seven published files.
 #
 # Trust anchor: once this workflow runs, users who install via
 # `curl | bash` / `irm | iex` can verify the installer content they're
@@ -44,7 +54,9 @@ on:
       - "install-gpd/install"
       - "install-gpd/uninstall"
       - "install-gpd/windows_11/install.ps1"
+      - "install-gpd/windows_11/install_main.ps1"
       - "install-gpd/windows_11/uninstall.ps1"
+      - "install-gpd/windows_11/uninstall_main.ps1"
       - ".github/workflows/gpd-sync-installer-to-pages.yml"
   workflow_dispatch:
 
@@ -91,11 +103,21 @@ jobs:
           # vs linux at runtime, mirroring `install`. /uninstall.sh is
           # kept as an alias of /uninstall so older READMEs / scripts
           # that reference the .sh URL continue to work.
-          install -m 0755 ../src/install-gpd/install                ./install
-          install -m 0644 ../src/install-gpd/windows_11/install.ps1 ./install.ps1
-          install -m 0755 ../src/install-gpd/uninstall              ./uninstall
-          install -m 0755 ../src/install-gpd/uninstall              ./uninstall.sh
-          install -m 0644 ../src/install-gpd/windows_11/uninstall.ps1 ./uninstall.ps1
+          # Windows split: /install.ps1 is a tiny ASCII-only bootstrap
+          # that downloads /install_main.ps1 with explicit UTF-8 decoding
+          # and evaluates it as a scriptblock. The bootstrap exists
+          # because PowerShell 5.1 + Invoke-RestMethod defaults to
+          # ISO-8859-1 decoding in non-English locales, which corrupts
+          # UTF-8 BOM + box-drawing chars + accented comments in the
+          # full installer when piped through `iex`. The bootstrap
+          # avoids that by using WebClient with Encoding = UTF8.
+          install -m 0755 ../src/install-gpd/install                     ./install
+          install -m 0644 ../src/install-gpd/windows_11/install.ps1      ./install.ps1
+          install -m 0644 ../src/install-gpd/windows_11/install_main.ps1 ./install_main.ps1
+          install -m 0755 ../src/install-gpd/uninstall                   ./uninstall
+          install -m 0755 ../src/install-gpd/uninstall                   ./uninstall.sh
+          install -m 0644 ../src/install-gpd/windows_11/uninstall.ps1    ./uninstall.ps1
+          install -m 0644 ../src/install-gpd/windows_11/uninstall_main.ps1 ./uninstall_main.ps1
 
           # Generate SHA256SUMS.txt with deterministic (sorted) ordering
           # so the file is stable across runs when only one entry
@@ -104,9 +126,11 @@ jobs:
           {
             sha256sum install
             sha256sum install.ps1
+            sha256sum install_main.ps1
             sha256sum uninstall
             sha256sum uninstall.sh
             sha256sum uninstall.ps1
+            sha256sum uninstall_main.ps1
           } | sort -k2 > SHA256SUMS.txt
 
           # Record the source commit so users / auditors can reproduce
