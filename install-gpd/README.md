@@ -73,8 +73,16 @@ irm https://download.gpd.psi.inc/install.ps1 -OutFile $env:TEMP\install.ps1
 & $env:TEMP\install.ps1
 ```
 
-Windows-specific flags: `-SkipLaunch` (suppress auto-launching GPD at the
-end — useful for CI).
+Windows-specific flags:
+- `-File` mode: pass `-SkipLaunch` (suppress auto-launching GPD at the
+  end — useful for CI) and/or `-NoExportKey` directly.
+- `irm | iex` mode: PowerShell's `iex` doesn't propagate caller args
+  down to the script body, so set the equivalents via env vars before
+  the pipe:
+  ```powershell
+  $env:GPD_SKIP_LAUNCH = "1"; $env:GPD_NO_EXPORT_KEY = "1"
+  irm https://download.gpd.psi.inc/install.ps1 | iex
+  ```
 
 ### Verify the installer before executing (optional, recommended)
 

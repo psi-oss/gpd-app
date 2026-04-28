@@ -26,11 +26,26 @@
 # the bash uninstallers only. Windows stores PATH in the registry, so
 # Remove-GpdFromPath does a direct split-and-filter -- see that function.
 
-#Requires -Version 5.1
-[CmdletBinding()]
-param(
-    [switch]$Yes
-)
+# Why no `[CmdletBinding()]` + `param(...)` block:
+#   See the matching note in install.ps1. `iex` (Invoke-Expression) parses
+#   its input at the current statement scope and rejects CmdletBinding /
+#   param attributes there with
+#       "Atributo 'CmdletBinding' inesperado"
+#       "Token 'param' inesperado na expressão ou instrução"
+#   Switching to $args + env-var parsing keeps both invocation modes
+#   working (`irm | iex` and `-File uninstall.ps1 -Yes`).
+#
+# Flags via env vars (for `irm | iex` since iex drops caller args):
+#   $env:GPD_YES = "1"  → skip the y/N confirmation prompt
+
+$Yes = $false
+foreach ($a in $args) {
+    switch -regex ($a) {
+        '^-{1,2}Yes$|^-y$|^/Yes$' { $Yes = $true }
+    }
+}
+$envTruthy = { param($v) $v -and $v -notmatch '^(0|false|no)$' }
+if (& $envTruthy $env:GPD_YES) { $Yes = $true }
 
 $ErrorActionPreference = "Stop"
 
