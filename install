@@ -99,7 +99,12 @@ Options:
     -h, --help              Display this help message
     -v, --version <version> Install a specific OpenCode version
         --no-modify-path    Don't modify shell config files
-        --skip-key          Skip PSI API key prompt
+        --prompt-key        Prompt for PSI API key during install instead of
+                            deferring to the desktop welcome screen. Default
+                            is to skip — the app handles key entry on first
+                            launch (still honors $GPD_API_KEY env var if set).
+        --skip-key          Legacy alias of the new default behavior. Kept
+                            so existing CI scripts that pass it stay green.
         --no-launch         Don't auto-launch the GPD desktop app at end
                             (auto-launch fires only when stdin is a TTY +
                             the desktop bundle is installed; useful for
@@ -119,7 +124,14 @@ EOF
 
 requested_version=""
 no_modify_path=false
-skip_key=false
+# Default: skip the PSI key prompt entirely. The desktop welcome screen
+# captures + validates the key on first launch and writes it to
+# auth.json + litellm.env via the same code path the installer used to
+# run inline. Pre-setting GPD_API_KEY before invoking the installer
+# still works — it's honored below — and --prompt-key restores the
+# legacy interactive prompt for users who want to provision the CLI
+# wrapper's litellm.env without ever launching the desktop app.
+skip_key=true
 no_launch=false
 # Off by default: the `gpd` wrapper at ~/.gpd/bin/gpd sources the key from
 # ~/.gpd/config/litellm.env (chmod 600 umask 077). The legacy login-profile
@@ -142,7 +154,8 @@ while [[ $# -gt 0 ]]; do
             requested_version="${2#v}"
             shift 2 ;;
         --no-modify-path) no_modify_path=true; shift ;;
-        --skip-key)       skip_key=true; shift ;;
+        --skip-key)       skip_key=true; shift ;;          # default; kept for back-compat
+        --prompt-key)     skip_key=false; shift ;;
         --no-launch)      no_launch=true; shift ;;
         --export-key)     export_key=true; shift ;;
         --no-export-key)  no_export_key=true; shift ;;  # legacy no-op (default)
@@ -973,19 +986,21 @@ configure_litellm_key() {
         return 0
     fi
 
-    if [[ "$skip_key" == true ]]; then
-        warn "Skipping PSI key (use --skip-key or set GPD_API_KEY env var)"
-        return 0
-    fi
-
     # Regex for PSI keys — same contract the interactive loop enforces
     # below. We apply it to the env-var branch too so CI callers that
     # typo the key or pass a truncated value fail fast instead of writing
     # a broken key to litellm.env + auth.json + login profile.
     local key_pattern='^sk-[A-Za-z0-9_-]{10,}$'
 
-    # Check for env var (non-interactive mode)
+    # Env-var preset is honored regardless of skip_key — CI / scripted
+    # installs that already have a key in env shouldn't have to flip a
+    # second flag to get it written. Only the interactive prompt is
+    # gated by skip_key (default true; --prompt-key opts in).
     local key="${GPD_API_KEY:-${GPD_LITELLM_KEY:-}}"
+    if [[ -z "$key" && "$skip_key" == true ]]; then
+        log "Deferring PSI key entry to the desktop welcome screen (set GPD_API_KEY before install or pass --prompt-key to enter it now)."
+        return 0
+    fi
     if [[ -n "$key" ]]; then
         # Env-var preset: normalize the same way we do for interactive
         # input so a stray CR from a pasted file doesn't corrupt the

@@ -35,7 +35,12 @@ param(
     # opencode's auth.json so the CLI wrapper and desktop app both
     # keep working; only the User-scope environment variable is
     # skipped. Mirrors the Unix --no-export-key flag.
-    [switch]$NoExportKey
+    [switch]$NoExportKey,
+
+    # Prompt for the PSI API key during install. Default behavior is to
+    # skip the prompt and let the desktop welcome screen capture the
+    # key on first launch. $env:GPD_API_KEY is still honored if preset.
+    [switch]$PromptKey
 )
 
 # Env-var fallback for the `irm | iex` -> bootstrap -> scriptblock path.
@@ -45,6 +50,7 @@ param(
 $envTruthy = { param($v) $v -and $v -notmatch '^(0|false|no)$' }
 if (& $envTruthy $env:GPD_SKIP_LAUNCH)   { $SkipLaunch  = $true }
 if (& $envTruthy $env:GPD_NO_EXPORT_KEY) { $NoExportKey = $true }
+if (& $envTruthy $env:GPD_PROMPT_KEY)    { $PromptKey   = $true }
 
 $ErrorActionPreference = "Stop"
 
@@ -847,11 +853,6 @@ function Read-LiteLlmKey {
         return
     }
 
-    Write-Host ""
-    Write-Host "  PSI API Key Configuration" -ForegroundColor White
-    Write-Host "  Your PSI key connects GPD to AI models." -ForegroundColor DarkGray
-    Write-Host ""
-
     # Key validation regex: matches the Unix installer so the same keys
     # are accepted on both platforms. sk-<>=10 chars from [A-Za-z0-9_-].
     $keyPattern = '^sk-[A-Za-z0-9_-]{10,}$'
@@ -869,11 +870,24 @@ function Read-LiteLlmKey {
         }
     }
     if ([string]::IsNullOrWhiteSpace($key)) {
+        # Default behavior: defer to the desktop welcome screen, which
+        # captures + validates the key on first launch. Pass -PromptKey
+        # (or set $env:GPD_PROMPT_KEY=1) to opt back into the inline
+        # interactive prompt for users who want litellm.env populated
+        # before ever opening the desktop app.
+        if (-not $PromptKey) {
+            Write-Log "Deferring PSI key entry to the desktop welcome screen (set `$env:GPD_API_KEY before install or pass -PromptKey to enter it now)."
+            return
+        }
         if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
             Write-Warn "Non-interactive session and GPD_API_KEY not set -- skipping key configuration."
             Write-Warn "Set `$env:GPD_API_KEY and re-run, or run interactively to be prompted."
             return
         }
+        Write-Host ""
+        Write-Host "  PSI API Key Configuration" -ForegroundColor White
+        Write-Host "  Your PSI key connects GPD to AI models." -ForegroundColor DarkGray
+        Write-Host ""
         # Up to 3 attempts. Echo the key as the user types so they can
         # verify what they pasted (per user request; users generally
         # want to confirm a sk-... key is intact before hitting Enter).
