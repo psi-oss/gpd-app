@@ -66,6 +66,47 @@ try {
     # Non-fatal if the console doesn't let us change encoding (rare)
 }
 
+# Disable QuickEdit / Insert mode on the console input handle for the
+# duration of the install. Default Windows powershell.exe consoles ship
+# with QuickEdit ON, which means a single accidental click anywhere in
+# the window enters "mark/select" mode and freezes ALL stdout until the
+# user presses a key — visible to users as "the installer hangs until
+# I press the down arrow". The clear-QuickEdit pattern requires also
+# setting ENABLE_EXTENDED_FLAGS (0x0080) in the same SetConsoleMode
+# call; without that flag the input-mode change is silently ignored.
+# Best-effort — failures (Windows Terminal in conpty, redirected
+# stdin, sandboxed contexts) are non-fatal.
+try {
+    if (-not ('GpdInstall.ConsoleMode' -as [type])) {
+        Add-Type -Namespace 'GpdInstall' -Name 'ConsoleMode' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern System.IntPtr GetStdHandle(int nStdHandle);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetConsoleMode(System.IntPtr hConsoleHandle, out uint lpMode);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetConsoleMode(System.IntPtr hConsoleHandle, uint dwMode);
+'@ -ErrorAction Stop
+    }
+    $hStdIn = [GpdInstall.ConsoleMode]::GetStdHandle(-10) # STD_INPUT_HANDLE
+    if ($hStdIn -ne [System.IntPtr]::Zero -and $hStdIn -ne ([System.IntPtr]::new(-1))) {
+        $mode = 0
+        if ([GpdInstall.ConsoleMode]::GetConsoleMode($hStdIn, [ref]$mode)) {
+            # ENABLE_QUICK_EDIT_MODE = 0x0040 (clear)
+            # ENABLE_INSERT_MODE     = 0x0020 (clear; otherwise paste-during-output can deadlock)
+            # ENABLE_EXTENDED_FLAGS  = 0x0080 (must be set for the above changes to apply)
+            $newMode = ($mode -band (-bnot 0x0060)) -bor 0x0080
+            if ($newMode -ne $mode) {
+                [GpdInstall.ConsoleMode]::SetConsoleMode($hStdIn, $newMode) | Out-Null
+            }
+        }
+    }
+} catch {
+    # Console handle inaccessible (Windows Terminal / conpty, ISE,
+    # redirected stdin). Falling back to the user's default mode means
+    # they may still see the QuickEdit-pause behavior; nothing else
+    # depends on this succeeding.
+}
+
 # ── Configuration ──────────────────────────────────────────────────────────
 
 $GpdHome      = if ($env:GPD_HOME) { $env:GPD_HOME } else { Join-Path $HOME ".gpd" }
