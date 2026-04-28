@@ -850,7 +850,6 @@ function Read-LiteLlmKey {
     Write-Host ""
     Write-Host "  PSI API Key Configuration" -ForegroundColor White
     Write-Host "  Your PSI key connects GPD to AI models." -ForegroundColor DarkGray
-    Write-Host "  Get your key from your lab administrator." -ForegroundColor DarkGray
     Write-Host ""
 
     # Key validation regex: matches the Unix installer so the same keys

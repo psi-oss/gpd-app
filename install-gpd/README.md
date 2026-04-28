@@ -169,7 +169,7 @@ Each installer performs these steps:
 1. **System dependencies** — git + LaTeX + Python 3.11+ via the platform's package manager.
 2. **GPD desktop app + CLI runtime** — the platform's Tauri bundle (`.deb` / `.dmg` / NSIS `.exe`).
 3. **Python venv** — creates `~/.gpd/venv/` with `get-physics-done` installed from GitHub.
-4. **PSI key** — prompts for your virtual key (get it from your lab administrator), or reads `GPD_API_KEY` env var for non-interactive installs. Writes it to both `~/.gpd/config/litellm.env` and opencode's `auth.json`.
+4. **PSI key** — prompts for your virtual key, or reads `GPD_API_KEY` env var for non-interactive installs. Writes it to both `~/.gpd/config/litellm.env` and opencode's `auth.json`.
 5. **`gpd` command** — creates the `gpd` wrapper on PATH.
 6. **PATH** — adds `~/.gpd/bin` to your shell / user PATH.
 7. **Runtime config** — runs `gpd install opencode --global` to deploy agents, commands, and the GPD provider config.
