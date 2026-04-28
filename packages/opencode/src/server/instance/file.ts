@@ -212,6 +212,52 @@ export const FileRoutes = lazy(() =>
       },
     )
     .post(
+      "/file/write",
+      describeRoute({
+        summary: "Write file",
+        description: "Replace a file with full text content using an expected content hash for optimistic concurrency.",
+        operationId: "file.write",
+        responses: {
+          200: {
+            description: "Write applied",
+            content: {
+              "application/json": {
+                schema: resolver(File.WriteResult),
+              },
+            },
+          },
+          409: {
+            description: "Conflict: current content hash no longer matches expectedHash",
+            content: {
+              "application/json": {
+                schema: resolver(File.WriteConflict),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "json",
+        z.object({
+          path: z.string(),
+          expectedHash: z.string(),
+          content: z.string(),
+        }),
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const result = await AppRuntime.runPromise(File.Service.use((svc) => svc.write(body)))
+        if (!result.ok) {
+          return c.json(result, 409)
+        }
+        const full = path.resolve(Instance.directory, body.path)
+        await Bus.publish(File.Event.Edited, { file: full }).catch(() => {})
+        await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "change" }).catch(() => {})
+        return c.json(result, 200)
+      },
+    )
+    .post(
       "/file/edit-line",
       describeRoute({
         summary: "Edit a single line in a file",

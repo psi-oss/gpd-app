@@ -17,6 +17,7 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { UserMessage } from "@opencode-ai/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { useCloseTabDialog } from "@/components/file-edit/close-tab-dialog"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -46,6 +47,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const layout = useLayout()
   const navigate = useNavigate()
   const { params, tabs, view } = useSessionLayout()
+  const close = useCloseTabDialog()
 
   const info = () => {
     const id = params.id
@@ -221,7 +223,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const closeTab = () => {
     const tab = closableTab()
     if (!tab) return
-    tabs().close(tab)
+    close.request(tab, file.pathFromTab(tab), tabs().close)
   }
 
   const addSelection = () => {

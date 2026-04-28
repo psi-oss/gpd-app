@@ -1,6 +1,7 @@
 import { afterEach, describe, test, expect } from "bun:test"
 import { $ } from "bun"
 import { Effect } from "effect"
+import { createHash } from "crypto"
 import path from "path"
 import fs from "fs/promises"
 import { File } from "../../src/file"
@@ -18,10 +19,13 @@ const run = <A, E>(eff: Effect.Effect<A, E, File.Service>) =>
 const status = () => run(File.Service.use((svc) => svc.status()))
 const read = (file: string) => run(File.Service.use((svc) => svc.read(file)))
 const list = (dir?: string) => run(File.Service.use((svc) => svc.list(dir)))
+const sum = (content: string | Uint8Array) => createHash("sha256").update(content).digest("hex")
 const search = (input: { query: string; limit?: number; dirs?: boolean; type?: "file" | "directory" }) =>
   run(File.Service.use((svc) => svc.search(input)))
 const editLine = (input: { path: string; line: number; oldContent: string; newContent: string }) =>
   run(File.Service.use((svc) => svc.editLine(input)))
+const write = (input: { path: string; expectedHash: string; content: string }) =>
+  run(File.Service.use((svc) => svc.write(input)))
 
 describe("file/index Filesystem patterns", () => {
   describe("read() - text content", () => {
@@ -36,6 +40,7 @@ describe("file/index Filesystem patterns", () => {
           const result = await read("test.txt")
           expect(result.type).toBe("text")
           expect(result.content).toBe("Hello World")
+          expect(result.hash).toBe(sum("Hello World"))
         },
       })
     })
@@ -50,20 +55,71 @@ describe("file/index Filesystem patterns", () => {
           const result = await read("nonexistent.txt")
           expect(result.type).toBe("text")
           expect(result.content).toBe("")
+          expect(result.hash).toBe(sum(""))
         },
       })
     })
 
-    test("trims whitespace from text content", async () => {
+    test("preserves leading whitespace", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
-      await fs.writeFile(filepath, "  content with spaces  \n\n", "utf-8")
+      const content = "  \tcontent"
+      await fs.writeFile(filepath, content, "utf-8")
 
       await Instance.provide({
         directory: tmp.path,
         fn: async () => {
           const result = await read("test.txt")
-          expect(result.content).toBe("content with spaces")
+          expect(result.content).toBe(content)
+          expect(result.hash).toBe(sum(content))
+        },
+      })
+    })
+
+    test("preserves trailing spaces", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "test.txt")
+      const content = "content with spaces  "
+      await fs.writeFile(filepath, content, "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const result = await read("test.txt")
+          expect(result.content).toBe(content)
+          expect(result.hash).toBe(sum(content))
+        },
+      })
+    })
+
+    test("preserves CRLF line endings", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "test.txt")
+      const content = "one\r\ntwo\r\n"
+      await fs.writeFile(filepath, content, "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const result = await read("test.txt")
+          expect(result.content).toBe(content)
+          expect(result.hash).toBe(sum(content))
+        },
+      })
+    })
+
+    test("preserves trailing newlines", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "test.txt")
+      const content = "content\n\n\n"
+      await fs.writeFile(filepath, content, "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const result = await read("test.txt")
+          expect(result.content).toBe(content)
+          expect(result.hash).toBe(sum(content))
         },
       })
     })
@@ -79,6 +135,7 @@ describe("file/index Filesystem patterns", () => {
           const result = await read("empty.txt")
           expect(result.type).toBe("text")
           expect(result.content).toBe("")
+          expect(result.hash).toBe(sum(""))
         },
       })
     })
@@ -113,6 +170,7 @@ describe("file/index Filesystem patterns", () => {
           expect(result.encoding).toBe("base64")
           expect(result.mimeType).toBe("image/png")
           expect(result.content).toBe(binaryContent.toString("base64"))
+          expect(result.hash).toBe(sum(binaryContent))
         },
       })
     })
@@ -128,6 +186,7 @@ describe("file/index Filesystem patterns", () => {
           const result = await read("binary.so")
           expect(result.type).toBe("binary")
           expect(result.content).toBe("")
+          expect(result.hash).toBe(sum(Buffer.from([0x7f, 0x45, 0x4c, 0x46])))
         },
       })
     })
@@ -846,7 +905,7 @@ describe("file/index Filesystem patterns", () => {
         fn: async () => {
           const result = await read("file.txt")
           expect(result.type).toBe("text")
-          expect(result.content).toBe("modified content")
+          expect(result.content).toBe("modified content\n")
           expect(result.diff).toBeDefined()
           expect(result.diff).toContain("original content")
           expect(result.diff).toContain("modified content")
@@ -887,9 +946,82 @@ describe("file/index Filesystem patterns", () => {
         fn: async () => {
           const result = await read("clean.txt")
           expect(result.type).toBe("text")
-          expect(result.content).toBe("unchanged")
+          expect(result.content).toBe("unchanged\n")
           expect(result.diff).toBeUndefined()
           expect(result.patch).toBeUndefined()
+        },
+      })
+    })
+  })
+
+  describe("write()", () => {
+    test("writes content with a matching hash", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "sample.txt")
+      await fs.writeFile(filepath, "before\n", "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const result = await write({
+            path: "sample.txt",
+            expectedHash: sum("before\n"),
+            content: "after\n",
+          })
+          expect(result.ok).toBe(true)
+          if (result.ok) expect(result.hash).toBe(sum("after\n"))
+          expect(await fs.readFile(filepath, "utf-8")).toBe("after\n")
+        },
+      })
+    })
+
+    test("returns conflict for a stale hash", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "sample.txt")
+      await fs.writeFile(filepath, "current\n", "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const result = await write({
+            path: "sample.txt",
+            expectedHash: sum("stale\n"),
+            content: "next\n",
+          })
+          expect(result.ok).toBe(false)
+          if (!result.ok) {
+            expect(result.reason).toBe("conflict")
+            expect(result.currentContent).toBe("current\n")
+            expect(result.currentHash).toBe(sum("current\n"))
+          }
+          expect(await fs.readFile(filepath, "utf-8")).toBe("current\n")
+        },
+      })
+    })
+
+    test("rejects path traversal", async () => {
+      await using tmp = await tmpdir()
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await expect(write({ path: "../escape.txt", expectedHash: sum(""), content: "x" })).rejects.toThrow(
+            "Access denied",
+          )
+        },
+      })
+    })
+
+    test("rejects directory targets", async () => {
+      await using tmp = await tmpdir()
+      await fs.mkdir(path.join(tmp.path, "dir"))
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await expect(write({ path: "dir", expectedHash: sum(""), content: "x" })).rejects.toThrow(
+            "Path is a directory",
+          )
         },
       })
     })

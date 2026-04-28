@@ -1,8 +1,16 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { Compartment, EditorState, type Extension } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
-import { bracketMatching, defaultHighlightStyle, foldGutter, indentOnInput, syntaxHighlighting } from "@codemirror/language"
-import { EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view"
+import { bracketMatching, foldGutter, indentOnInput } from "@codemirror/language"
+import {
+  crosshairCursor,
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from "@codemirror/view"
 import { indentWithTab } from "@codemirror/commands"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -15,6 +23,8 @@ import type { FileWriteConflict, FileWriteResult } from "@opencode-ai/sdk/v2"
 import { detectLanguage, type EditorLanguage } from "./eligibility"
 import { useEditorRegistry } from "./editor-registry"
 import { ConflictDialog } from "./conflict-dialog"
+import { set as search, extension as findExt, ranges, type Hit } from "./editor-search"
+import { style } from "./editor-theme"
 import { FilePreview, previewKind, type EditorMode } from "./preview"
 import { StaleBanner } from "./stale-banner"
 
@@ -107,6 +117,7 @@ export function FileEditor(props: Props) {
   const sdk = useSDK()
 
   let host!: HTMLDivElement
+  let input: HTMLInputElement | undefined
   let view: EditorView | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let remove: (() => void) | undefined
@@ -120,6 +131,9 @@ export function FileEditor(props: Props) {
   const [open, setOpen] = createSignal(false)
   const [stale, setStale] = createSignal(false)
   const [banner, setBanner] = createSignal(false)
+  const [find, setFind] = createSignal(false)
+  const [query, setQuery] = createSignal("")
+  const [hit, setHit] = createSignal(0)
   const kind = createMemo(() => previewKind(props.path))
   const [mode, setMode] = createSignal<EditorMode>(
     file.editor(props.path)?.mode === "preview" && kind() ? "preview" : "source",
@@ -145,6 +159,46 @@ export function FileEditor(props: Props) {
     if (current === "dirty") return language.t("file.editor.status.dirty")
     return language.t("file.editor.status.clean")
   })
+  const hits = createMemo(() => ranges(draft(), query()))
+  const current = createMemo(() => {
+    const all = hits()
+    if (!all.length) return 0
+    return Math.min(hit(), all.length - 1)
+  })
+
+  const select = (range: Hit | undefined, focus = false) => {
+    if (!view || !range) return
+    view.dispatch({
+      selection: { anchor: range.from, head: range.to },
+      scrollIntoView: true,
+    })
+    if (focus) view.focus()
+  }
+
+  const jump = (step: number, focus = false) => {
+    const all = hits()
+    if (!all.length) return
+    const next = (current() + step + all.length) % all.length
+    setHit(next)
+    select(all[next], focus)
+  }
+
+  const update = (value: string) => {
+    setQuery(value)
+    setHit(0)
+    select(ranges(draft(), value)[0])
+  }
+
+  const showFind = () => {
+    setFind(true)
+    requestAnimationFrame(() => input?.focus())
+  }
+
+  const hideFind = () => {
+    setFind(false)
+    update("")
+    view?.focus()
+  }
 
   const replace = (content: string) => {
     if (!view) return
@@ -285,9 +339,13 @@ export function FileEditor(props: Props) {
     bracketMatching(),
     indentOnInput(),
     highlightActiveLine(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    drawSelection(),
+    rectangularSelection(),
+    crosshairCursor(),
+    style,
     EditorView.lineWrapping,
-    EditorState.allowMultipleSelections.of(false),
+    EditorState.allowMultipleSelections.of(true),
+    findExt,
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return
       setRev((value) => value + 1)
@@ -300,6 +358,14 @@ export function FileEditor(props: Props) {
         stopPropagation: true,
         run: () => {
           void save()
+          return true
+        },
+      },
+      {
+        key: "Mod-f",
+        preventDefault: true,
+        run: () => {
+          showFind()
           return true
         },
       },
@@ -380,6 +446,19 @@ export function FileEditor(props: Props) {
   })
 
   createEffect(() => {
+    const all = hits()
+    if (hit() < all.length) return
+    setHit(Math.max(all.length - 1, 0))
+  })
+
+  createEffect(() => {
+    const term = query()
+    const active = current()
+    if (!view) return
+    view.dispatch({ effects: search.of({ query: term, active }) })
+  })
+
+  createEffect(() => {
     const hash = props.content.hash
     if (dirty()) return
     if (hash) setBase(hash)
@@ -442,8 +521,62 @@ export function FileEditor(props: Props) {
   return (
     <div class="flex h-full min-h-0 flex-col bg-background" data-component="file-editor">
       <div class="flex h-8 items-center justify-between border-b border-border-weaker-base px-3 text-12-regular text-text-weak">
-        <span>{label()}</span>
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="shrink-0">{label()}</span>
+          <Show when={find()}>
+            <div class="flex h-6 min-w-0 items-center rounded border border-border-weaker-base bg-surface-raised-base text-text-base">
+              <input
+                ref={(el) => (input = el)}
+                class="h-full w-40 bg-transparent px-2 text-12-regular text-text-strong outline-none placeholder:text-text-weak"
+                placeholder={language.t("common.search.placeholder")}
+                value={query()}
+                onInput={(event) => update(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    jump(event.shiftKey ? -1 : 1)
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault()
+                    hideFind()
+                  }
+                }}
+              />
+              <span class="min-w-12 px-1 text-right text-11-regular text-text-weak">
+                {query() ? `${hits().length ? current() + 1 : 0}/${hits().length}` : ""}
+              </span>
+              <button
+                class="grid h-full w-9 place-items-center text-text-weak hover:bg-surface-raised-base-hover hover:text-text-strong disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Previous match"
+                disabled={!hits().length}
+                onClick={() => jump(-1)}
+              >
+                Prev
+              </button>
+              <button
+                class="grid h-full w-9 place-items-center text-text-weak hover:bg-surface-raised-base-hover hover:text-text-strong disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Next match"
+                disabled={!hits().length}
+                onClick={() => jump(1)}
+              >
+                Next
+              </button>
+              <button
+                class="grid h-full w-6 place-items-center rounded-r text-text-weak hover:bg-surface-raised-base-hover hover:text-text-strong"
+                aria-label={language.t("common.close")}
+                onClick={hideFind}
+              >
+                x
+              </button>
+            </div>
+          </Show>
+        </div>
         <div class="flex items-center gap-2">
+          <Show when={!find()}>
+            <Button size="small" variant="ghost" onClick={showFind}>
+              {language.t("common.search.placeholder")}
+            </Button>
+          </Show>
           <Show when={kind()}>
             <RadioGroup
               size="small"

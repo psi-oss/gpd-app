@@ -1091,9 +1091,9 @@ export const dict = {
   "session.tab.fileStatus.saving": "Saving file",
   "session.tab.fileStatus.stale": "Disk changed",
   "session.tab.fileStatus.conflict": "Save conflict",
-  "settings.general.row.experimentalFileEditor.title": "Experimental file editor",
+  "settings.general.row.experimentalFileEditor.title": "Full-file editor",
   "settings.general.row.experimentalFileEditor.description":
-    "Use the full-file editor for source files. This is off by default while it stabilizes.",
+    "Use the full-file editor for text files. Turn this off to use the read-only file viewer.",
   "file.editor.mode.source": "Source",
   "file.editor.mode.preview": "Preview",
   "file.editor.status.clean": "Saved",

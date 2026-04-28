@@ -1668,6 +1668,155 @@ export type Config = {
      */
     mcp_timeout?: number
   }
+  [key: string]:
+    | unknown
+    | string
+    | LogLevel
+    | ServerConfig
+    | {
+        [key: string]: {
+          template: string
+          description?: string
+          agent?: string
+          model?: string
+          subtask?: boolean
+        }
+      }
+    | {
+        /**
+         * Additional paths to skill folders
+         */
+        paths?: Array<string>
+        /**
+         * URLs to fetch skills from (e.g., https://example.com/.well-known/skills/)
+         */
+        urls?: Array<string>
+      }
+    | {
+        ignore?: Array<string>
+      }
+    | boolean
+    | Array<
+        | string
+        | [
+            string,
+            {
+              [key: string]: unknown
+            },
+          ]
+      >
+    | "manual"
+    | "auto"
+    | "disabled"
+    | boolean
+    | "notify"
+    | Array<string>
+    | Array<string>
+    | {
+        build?: AgentConfig
+        plan?: AgentConfig
+        [key: string]: AgentConfig | undefined
+      }
+    | {
+        plan?: AgentConfig
+        build?: AgentConfig
+        general?: AgentConfig
+        explore?: AgentConfig
+        title?: AgentConfig
+        summary?: AgentConfig
+        compaction?: AgentConfig
+        [key: string]: AgentConfig | undefined
+      }
+    | {
+        [key: string]: ProviderConfig
+      }
+    | {
+        [key: string]:
+          | McpLocalConfig
+          | McpRemoteConfig
+          | {
+              enabled: boolean
+            }
+      }
+    | false
+    | {
+        [key: string]: {
+          disabled?: boolean
+          command?: Array<string>
+          environment?: {
+            [key: string]: string
+          }
+          extensions?: Array<string>
+        }
+      }
+    | false
+    | {
+        [key: string]:
+          | {
+              disabled: true
+            }
+          | {
+              command: Array<string>
+              extensions?: Array<string>
+              disabled?: boolean
+              env?: {
+                [key: string]: string
+              }
+              initialization?: {
+                [key: string]: unknown
+              }
+            }
+      }
+    | Array<string>
+    | LayoutConfig
+    | PermissionConfig
+    | {
+        [key: string]: boolean
+      }
+    | {
+        /**
+         * Enterprise URL
+         */
+        url?: string
+      }
+    | {
+        /**
+         * Enable automatic compaction when context is full (default: true)
+         */
+        auto?: boolean
+        /**
+         * Enable pruning of old tool outputs (default: true)
+         */
+        prune?: boolean
+        /**
+         * Token buffer for compaction. Leaves enough window to avoid overflow during compaction.
+         */
+        reserved?: number
+      }
+    | {
+        disable_paste_summary?: boolean
+        /**
+         * Enable the batch tool
+         */
+        batch_tool?: boolean
+        /**
+         * Enable OpenTelemetry spans for AI SDK calls (using the 'experimental_telemetry' flag)
+         */
+        openTelemetry?: boolean
+        /**
+         * Tools that should only be available to primary agents.
+         */
+        primary_tools?: Array<string>
+        /**
+         * Continue the agent loop when a tool call is denied
+         */
+        continue_loop_on_deny?: boolean
+        /**
+         * Timeout in milliseconds for model context protocol (MCP) requests
+         */
+        mcp_timeout?: number
+      }
+    | undefined
 }
 
 export type BadRequestError = {
@@ -1793,6 +1942,48 @@ export type Provider = {
   models: {
     [key: string]: Model
   }
+}
+
+export type HealthCheck = {
+  id: string
+  label: string
+  status: "ok" | "warn" | "fail"
+  category: "runtime" | "core" | "optional"
+  details?: string
+  version?: string
+  path?: string
+  installHint?: {
+    macos?: string
+    windows?: string
+    linux?: string
+    url?: string
+  }
+}
+
+export type DoctorResponse = {
+  overall: "ok" | "warn" | "fail"
+  summary: {
+    ok: number
+    warn: number
+    fail: number
+    total: number
+  }
+  checks: Array<HealthCheck>
+  rawOutput?: string
+  pythonExecutable?: string
+}
+
+export type PresetStatus = {
+  id: string
+  label: string
+  description: string
+  status: "ok" | "warn" | "fail"
+  missing: Array<string>
+}
+
+export type PresetsResponse = {
+  presets: Array<PresetStatus>
+  rawOutput?: string
 }
 
 export type ToolIds = Array<string>
@@ -1992,6 +2183,7 @@ export type FileNode = {
 export type FileContent = {
   type: "text" | "binary"
   content: string
+  hash: string
   diff?: string
   patch?: {
     oldFileName: string
@@ -2016,6 +2208,30 @@ export type File = {
   added: number
   removed: number
   status: "added" | "deleted" | "modified"
+}
+
+export type FileWriteResult = {
+  ok: true
+  hash: string
+}
+
+export type FileWriteConflict = {
+  ok: false
+  reason: "conflict"
+  currentContent: string
+  currentHash: string
+}
+
+export type FileEditLineResult = {
+  ok: true
+  content: string
+}
+
+export type FileEditLineConflict = {
+  ok: false
+  reason: "conflict"
+  currentContent: string
+  currentLineContent?: string
 }
 
 export type Event =
@@ -2448,6 +2664,40 @@ export type ProjectInitGitResponses = {
 
 export type ProjectInitGitResponse = ProjectInitGitResponses[keyof ProjectInitGitResponses]
 
+export type ProjectDeleteData = {
+  body?: never
+  path: {
+    projectID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/project/{projectID}"
+}
+
+export type ProjectDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ProjectDeleteError = ProjectDeleteErrors[keyof ProjectDeleteErrors]
+
+export type ProjectDeleteResponses = {
+  /**
+   * Project deleted
+   */
+  204: void
+}
+
+export type ProjectDeleteResponse = ProjectDeleteResponses[keyof ProjectDeleteResponses]
+
 export type ProjectUpdateData = {
   body?: {
     name?: string
@@ -2494,40 +2744,6 @@ export type ProjectUpdateResponses = {
 }
 
 export type ProjectUpdateResponse = ProjectUpdateResponses[keyof ProjectUpdateResponses]
-
-export type ProjectDeleteData = {
-  body?: never
-  path: {
-    projectID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/project/{projectID}"
-}
-
-export type ProjectDeleteErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * Not found
-   */
-  404: NotFoundError
-}
-
-export type ProjectDeleteError = ProjectDeleteErrors[keyof ProjectDeleteErrors]
-
-export type ProjectDeleteResponses = {
-  /**
-   * Project deleted
-   */
-  204: void
-}
-
-export type ProjectDeleteResponse = ProjectDeleteResponses[keyof ProjectDeleteResponses]
 
 export type PtyListData = {
   body?: never
@@ -2780,6 +2996,44 @@ export type ConfigProvidersResponses = {
 }
 
 export type ConfigProvidersResponse = ConfigProvidersResponses[keyof ConfigProvidersResponses]
+
+export type HealthDoctorData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/health/doctor"
+}
+
+export type HealthDoctorResponses = {
+  /**
+   * Doctor report
+   */
+  200: DoctorResponse
+}
+
+export type HealthDoctorResponse = HealthDoctorResponses[keyof HealthDoctorResponses]
+
+export type HealthPresetsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/health/presets"
+}
+
+export type HealthPresetsResponses = {
+  /**
+   * Preset readiness
+   */
+  200: PresetsResponse
+}
+
+export type HealthPresetsResponse = HealthPresetsResponses[keyof HealthPresetsResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never
@@ -4637,20 +4891,44 @@ export type FileStatusResponses = {
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
 
-export type FileEditLineResult = {
-  ok: true
-  content: string
+export type FileWriteData = {
+  body?: {
+    path: string
+    expectedHash: string
+    content: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/file/write"
 }
 
-export type FileEditLineConflict = {
-  ok: false
-  reason: "conflict"
-  currentContent: string
-  currentLineContent?: string
+export type FileWriteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict: current content hash no longer matches expectedHash
+   */
+  409: FileWriteConflict
 }
+
+export type FileWriteError = FileWriteErrors[keyof FileWriteErrors]
+
+export type FileWriteResponses = {
+  /**
+   * Write applied
+   */
+  200: FileWriteResult
+}
+
+export type FileWriteResponse = FileWriteResponses[keyof FileWriteResponses]
 
 export type FileEditLineData = {
-  body: {
+  body?: {
     path: string
     line: number
     oldContent: string
@@ -4670,7 +4948,7 @@ export type FileEditLineErrors = {
    */
   400: BadRequestError
   /**
-   * Conflict
+   * Conflict: the current line no longer matches oldContent
    */
   409: FileEditLineConflict
 }

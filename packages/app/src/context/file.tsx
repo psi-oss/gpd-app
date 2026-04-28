@@ -8,6 +8,7 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
+import { useEditorRegistry } from "@/components/file-edit/editor-registry"
 import { createPathHelpers } from "./file/path"
 import {
   approxBytes,
@@ -58,6 +59,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     const params = useParams()
     const language = useLanguage()
     const layout = useLayout()
+    const registry = useEditorRegistry()
 
     const scope = createMemo(() => sdk.directory)
     const path = createPathHelpers(scope)
@@ -206,6 +208,12 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
         hasFile: (file) => Boolean(store.file[file]),
         isOpen: (file) => tabs.all().some((tab) => path.pathFromTab(tab) === file),
         loadFile: (file) => {
+          const editor = registry.get(file)
+          if (editor?.isSaving()) return
+          if (editor?.isDirty()) {
+            editor.markStale()
+            return
+          }
           void load(file, { force: true })
         },
         node: tree.node,
@@ -229,14 +237,17 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       return state
     }
 
-    function withPath(input: string, action: (file: string) => unknown) {
+    function withPath<T>(input: string, action: (file: string) => T) {
       return action(path.normalize(input))
     }
     const scrollTop = (input: string) => withPath(input, (file) => view().scrollTop(file))
     const scrollLeft = (input: string) => withPath(input, (file) => view().scrollLeft(file))
+    const editor = (input: string) => withPath(input, (file) => view().editor(file))
     const selectedLines = (input: string) => withPath(input, (file) => view().selectedLines(file))
     const setScrollTop = (input: string, top: number) => withPath(input, (file) => view().setScrollTop(file, top))
     const setScrollLeft = (input: string, left: number) => withPath(input, (file) => view().setScrollLeft(file, left))
+    const setEditor = (input: string, editor: FileViewState["editor"]) =>
+      withPath(input, (file) => view().setEditor(file, editor))
     const setSelectedLines = (input: string, range: SelectedLineRange | null) =>
       withPath(input, (file) => view().setSelectedLines(file, range))
 
@@ -269,8 +280,10 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       load,
       scrollTop,
       scrollLeft,
+      editor,
       setScrollTop,
       setScrollLeft,
+      setEditor,
       selectedLines,
       setSelectedLines,
       searchFiles: (query: string) => search(query, "false"),

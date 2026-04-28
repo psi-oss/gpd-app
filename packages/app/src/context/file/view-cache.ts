@@ -72,6 +72,7 @@ function createViewSession(dir: string, id: string | undefined) {
 
   const scrollTop = (path: string) => view.file[path]?.scrollTop
   const scrollLeft = (path: string) => view.file[path]?.scrollLeft
+  const editor = (path: string) => view.file[path]?.editor
   const selectedLines = (path: string) => view.file[path]?.selectedLines
 
   const setScrollTop = (path: string, top: number) => {
@@ -108,13 +109,25 @@ function createViewSession(dir: string, id: string | undefined) {
     pruneView(path)
   }
 
+  const setEditor = (path: string, editor: FileViewState["editor"]) => {
+    setView(
+      produce((draft) => {
+        const file = draft.file[path] ?? (draft.file[path] = {})
+        file.editor = editor
+      }),
+    )
+    pruneView(path)
+  }
+
   return {
     ready,
     scrollTop,
     scrollLeft,
+    editor,
     selectedLines,
     setScrollTop,
     setScrollLeft,
+    setEditor,
     setSelectedLines,
   }
 }

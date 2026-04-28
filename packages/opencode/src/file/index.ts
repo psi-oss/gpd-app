@@ -5,9 +5,11 @@ import { AppFileSystem } from "@/filesystem"
 import { Git } from "@/git"
 import { Effect, Layer, Context } from "effect"
 import * as Stream from "effect/Stream"
+import { createHash, randomUUID } from "crypto"
 import { formatPatch, structuredPatch } from "diff"
 import fuzzysort from "fuzzysort"
 import ignore from "ignore"
+import { rename, unlink } from "fs/promises"
 import path from "path"
 import z from "zod"
 import { Global } from "../global"
@@ -47,6 +49,7 @@ export namespace File {
     .object({
       type: z.enum(["text", "binary"]),
       content: z.string(),
+      hash: z.string(),
       diff: z.string().optional(),
       patch: z
         .object({
@@ -104,6 +107,28 @@ export namespace File {
       ref: "FileEditLineConflict",
     })
   export type EditLineConflict = z.infer<typeof EditLineConflict>
+
+  export const WriteResult = z
+    .object({
+      ok: z.literal(true),
+      hash: z.string(),
+    })
+    .meta({
+      ref: "FileWriteResult",
+    })
+  export type WriteResult = z.infer<typeof WriteResult>
+
+  export const WriteConflict = z
+    .object({
+      ok: z.literal(false),
+      reason: z.literal("conflict"),
+      currentContent: z.string(),
+      currentHash: z.string(),
+    })
+    .meta({
+      ref: "FileWriteConflict",
+    })
+  export type WriteConflict = z.infer<typeof WriteConflict>
 
   const log = Log.create({ service: "file" })
 
@@ -320,6 +345,8 @@ export namespace File {
   const isImage = (mimeType: string) => mimeType.startsWith("image/")
   const getImageMimeType = (file: string) => mime[ext(file)] || "image/" + ext(file)
   const getPdfMimeType = (_file: string) => "application/pdf"
+  const empty = createHash("sha256").update(new Uint8Array()).digest("hex")
+  const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex")
 
   function shouldEncode(mimeType: string) {
     const type = mimeType.toLowerCase()
@@ -368,6 +395,11 @@ export namespace File {
       oldContent: string
       newContent: string
     }) => Effect.Effect<EditLineResult | EditLineConflict>
+    readonly write: (input: {
+      path: string
+      expectedHash: string
+      content: string
+    }) => Effect.Effect<WriteResult | WriteConflict>
   }
 
   export class Service extends Context.Service<Service, Interface>()("@opencode/File") {}
@@ -561,11 +593,12 @@ export namespace File {
             return {
               type: "text" as const,
               content: Buffer.from(bytes).toString("base64"),
+              hash: hash(bytes),
               mimeType: getImageMimeType(file),
               encoding: "base64" as const,
             }
           }
-          return { type: "text" as const, content: "" }
+          return { type: "text" as const, content: "", hash: empty }
         }
 
         if (isPdfByExtension(file)) {
@@ -575,39 +608,49 @@ export namespace File {
             return {
               type: "text" as const,
               content: Buffer.from(bytes).toString("base64"),
+              hash: hash(bytes),
               mimeType: getPdfMimeType(file),
               encoding: "base64" as const,
             }
           }
-          return { type: "text" as const, content: "" }
+          return { type: "text" as const, content: "", hash: empty }
         }
 
         const knownText = isTextByExtension(file) || isTextByName(file)
 
-        if (isBinaryByExtension(file) && !knownText) return { type: "binary" as const, content: "" }
+        if (isBinaryByExtension(file) && !knownText) {
+          const exists = yield* appFs.existsSafe(full)
+          const bytes = exists
+            ? yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+            : new Uint8Array()
+          return { type: "binary" as const, content: "", hash: hash(bytes) }
+        }
 
         const exists = yield* appFs.existsSafe(full)
-        if (!exists) return { type: "text" as const, content: "" }
+        if (!exists) return { type: "text" as const, content: "", hash: empty }
 
         const mimeType = AppFileSystem.mimeType(full)
         const encode = knownText ? false : shouldEncode(mimeType)
 
-        if (encode && !isImage(mimeType)) return { type: "binary" as const, content: "", mimeType }
+        if (encode && !isImage(mimeType)) {
+          const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+          return { type: "binary" as const, content: "", hash: hash(bytes), mimeType }
+        }
 
         if (encode) {
           const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
           return {
             type: "text" as const,
             content: Buffer.from(bytes).toString("base64"),
+            hash: hash(bytes),
             mimeType,
             encoding: "base64" as const,
           }
         }
 
-        const content = yield* appFs.readFileString(full).pipe(
-          Effect.map((s) => s.trim()),
-          Effect.catch(() => Effect.succeed("")),
-        )
+        const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+        const content = Buffer.from(bytes).toString("utf8")
+        const digest = hash(bytes)
 
         if (Instance.project.vcs === "git") {
           let diff = yield* gitText(["-c", "core.fsmonitor=false", "diff", "--", file])
@@ -620,12 +663,12 @@ export namespace File {
               context: Infinity,
               ignoreWhitespace: true,
             })
-            return { type: "text" as const, content, patch, diff: formatPatch(patch) }
+            return { type: "text" as const, content, hash: digest, patch, diff: formatPatch(patch) }
           }
-          return { type: "text" as const, content }
+          return { type: "text" as const, content, hash: digest }
         }
 
-        return { type: "text" as const, content }
+        return { type: "text" as const, content, hash: digest }
       })
 
       const list = Effect.fn("File.list")(function* (dir?: string) {
@@ -754,8 +797,54 @@ export namespace File {
         } satisfies EditLineResult
       })
 
+      const write: Interface["write"] = Effect.fn("File.write")(function* (input) {
+        const full = path.resolve(Instance.directory, input.path)
+        const dir = path.dirname(full)
+        const inside = (item: string) => {
+          const rel = path.relative(Instance.directory, item)
+          return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+        }
+
+        if (!inside(full)) throw new Error("Access denied: path escapes project directory")
+        if (!inside(dir)) throw new Error("Access denied: path escapes project directory")
+
+        const parent = yield* appFs.stat(dir).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!parent) throw new Error(`Directory not found: ${path.dirname(input.path)}`)
+        if (parent.type !== "Directory") throw new Error(`Parent path is not a directory: ${path.dirname(input.path)}`)
+
+        const stat = yield* appFs.stat(full).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (stat?.type === "Directory") throw new Error(`Path is a directory, not a file: ${input.path}`)
+
+        const bytes = stat
+          ? yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+          : new Uint8Array()
+        const currentHash = hash(bytes)
+        const currentContent = Buffer.from(bytes).toString("utf8")
+
+        if (currentHash !== input.expectedHash) {
+          return {
+            ok: false as const,
+            reason: "conflict" as const,
+            currentContent,
+            currentHash,
+          } satisfies WriteConflict
+        }
+
+        const tmp = path.join(dir, `.${path.basename(full)}.tmp.${process.pid}.${randomUUID()}`)
+        yield* appFs.writeFileString(tmp, input.content).pipe(Effect.orDie)
+        yield* Effect.tryPromise({
+          try: () => rename(tmp, full),
+          catch: (cause) => cause,
+        }).pipe(Effect.tapError(() => Effect.promise(() => unlink(tmp).catch(() => undefined))), Effect.orDie)
+
+        return {
+          ok: true as const,
+          hash: hash(input.content),
+        } satisfies WriteResult
+      })
+
       log.info("init")
-      return Service.of({ init, status, read, list, search, editLine })
+      return Service.of({ init, status, read, list, search, editLine, write })
     }),
   )
 
@@ -794,5 +883,13 @@ export namespace File {
     newContent: string
   }): Promise<EditLineResult | EditLineConflict> {
     return runPromise((svc) => svc.editLine(input))
+  }
+
+  export async function write(input: {
+    path: string
+    expectedHash: string
+    content: string
+  }): Promise<WriteResult | WriteConflict> {
+    return runPromise((svc) => svc.write(input))
   }
 }

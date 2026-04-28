@@ -13,6 +13,7 @@ import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { usePlatform } from "@/context/platform"
 import { useGlobalSDK } from "@/context/global-sdk"
+import { useEditorRegistry } from "@/components/file-edit/editor-registry"
 import {
   monoDefault,
   monoFontFamily,
@@ -74,6 +75,7 @@ export const SettingsGeneral: Component = () => {
   const globalSDK = useGlobalSDK()
   const params = useParams()
   const settings = useSettings()
+  const registry = useEditorRegistry()
 
   onMount(() => {
     void theme.loadThemes()
@@ -108,6 +110,23 @@ export const SettingsGeneral: Component = () => {
     }
 
     permission.disableAutoAccept(params.id, value)
+  }
+
+  const toggleEditor = (checked: boolean) => {
+    if (checked) {
+      settings.general.setExperimentalFileEditor(true)
+      return
+    }
+
+    if (registry.dirty().length > 0) {
+      showToast({
+        title: language.t("file.editor.status.dirty"),
+        description: language.t("file.editor.close.description"),
+      })
+      return
+    }
+
+    settings.general.setExperimentalFileEditor(false)
   }
 
   const check = () => {
@@ -275,6 +294,18 @@ export const SettingsGeneral: Component = () => {
             <Switch
               checked={settings.general.editToolPartsExpanded()}
               onChange={(checked) => settings.general.setEditToolPartsExpanded(checked)}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.experimentalFileEditor.title")}
+          description={language.t("settings.general.row.experimentalFileEditor.description")}
+        >
+          <div data-action="settings-experimental-file-editor">
+            <Switch
+              checked={settings.general.experimentalFileEditor()}
+              onChange={toggleEditor}
             />
           </div>
         </SettingsRow>

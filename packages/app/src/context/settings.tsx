@@ -26,6 +26,7 @@ export interface Settings {
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
+    experimentalFileEditor: boolean
   }
   updates: {
     startup: boolean
@@ -92,6 +93,7 @@ const defaultSettings: Settings = {
     showReasoningSummaries: false,
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
+    experimentalFileEditor: true,
   },
   updates: {
     startup: true,
@@ -182,6 +184,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ),
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
+        },
+        experimentalFileEditor: withFallback(
+          () => store.general?.experimentalFileEditor,
+          defaultSettings.general.experimentalFileEditor,
+        ),
+        setExperimentalFileEditor(value: boolean) {
+          setStore("general", "experimentalFileEditor", value)
         },
       },
       updates: {

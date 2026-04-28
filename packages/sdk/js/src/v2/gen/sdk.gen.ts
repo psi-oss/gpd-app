@@ -43,6 +43,8 @@ import type {
   FilePartSource,
   FileReadResponses,
   FileStatusResponses,
+  FileWriteErrors,
+  FileWriteResponses,
   FindFilesResponses,
   FindSymbolsResponses,
   FindTextResponses,
@@ -55,6 +57,8 @@ import type {
   GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  HealthDoctorResponses,
+  HealthPresetsResponses,
   InstanceDisposeResponses,
   LspStatusResponses,
   McpAddErrors,
@@ -600,6 +604,38 @@ export class Project extends HeyApiClient {
   }
 
   /**
+   * Delete project
+   *
+   * Remove a project from GPD. Cascades to sessions, workspaces, and permissions. Does not touch files on disk.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      projectID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "projectID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<ProjectDeleteResponses, ProjectDeleteErrors, ThrowOnError>({
+      url: "/project/{projectID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Update project
    *
    * Update project properties such as name, icon, and commands.
@@ -648,38 +684,6 @@ export class Project extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
-    })
-  }
-
-  /**
-   * Delete project
-   *
-   * Remove a project from GPD. Cascades to sessions, workspaces, and permissions. Does not touch files on disk.
-   */
-  public delete<ThrowOnError extends boolean = false>(
-    parameters: {
-      projectID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "projectID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<ProjectDeleteResponses, ProjectDeleteErrors, ThrowOnError>({
-      url: "/project/{projectID}",
-      ...options,
-      ...params,
     })
   }
 }
@@ -996,6 +1000,68 @@ export class Config2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ConfigProvidersResponses, unknown, ThrowOnError>({
       url: "/config/providers",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Health extends HeyApiClient {
+  /**
+   * Get GPD runtime doctor report
+   *
+   * Runs lightweight tool probes (Python, git, venv, LaTeX, PDF tooling) and returns a structured readiness report. Mirrors `gpd doctor --live-executable-probes`.
+   */
+  public doctor<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<HealthDoctorResponses, unknown, ThrowOnError>({
+      url: "/health/doctor",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get GPD workflow preset readiness
+   *
+   * Returns a readiness status for each workflow preset (core-research, theory, numerics, publication) based on the doctor report.
+   */
+  public presets<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<HealthPresetsResponses, unknown, ThrowOnError>({
+      url: "/health/presets",
       ...options,
       ...params,
     })
@@ -3197,18 +3263,59 @@ export class File extends HeyApiClient {
   }
 
   /**
+   * Write file
+   *
+   * Replace a file with full text content using an expected content hash for optimistic concurrency.
+   */
+  public write<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      expectedHash?: string
+      content?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "expectedHash" },
+            { in: "body", key: "content" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileWriteResponses, FileWriteErrors, ThrowOnError>({
+      url: "/file/write",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Edit a single line in a file
    *
    * Replace one line of a file with new content, using optimistic concurrency against the prior line value.
    */
   public editLine<ThrowOnError extends boolean = false>(
-    parameters: {
+    parameters?: {
       directory?: string
       workspace?: string
-      path: string
-      line: number
-      oldContent: string
-      newContent: string
+      path?: string
+      line?: number
+      oldContent?: string
+      newContent?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4254,6 +4361,11 @@ export class OpencodeClient extends HeyApiClient {
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
+  }
+
+  private _health?: Health
+  get health(): Health {
+    return (this._health ??= new Health({ client: this.client }))
   }
 
   private _experimental?: Experimental

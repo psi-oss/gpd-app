@@ -896,9 +896,9 @@ export const dict = {
   "settings.general.row.editToolPartsExpanded.title": "Show edit details",
   "settings.general.row.editToolPartsExpanded.description":
     "Show edit, write, and change details expanded by default in the conversation",
-  "settings.general.row.experimentalFileEditor.title": "Experimental file editor",
+  "settings.general.row.experimentalFileEditor.title": "Full-file editor",
   "settings.general.row.experimentalFileEditor.description":
-    "Use a full-file source editor for text files. Off by default while this is in preview.",
+    "Use the full-file editor for text files. Turn this off to use the read-only file viewer.",
 
   "settings.general.row.wayland.title": "Use native Wayland",
   "settings.general.row.wayland.description": "Disable X11 fallback on Wayland. Requires restart.",

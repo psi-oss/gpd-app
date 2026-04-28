@@ -18,6 +18,15 @@ export type FileViewState = {
   scrollTop?: number
   scrollLeft?: number
   selectedLines?: SelectedLineRange | null
+  editor?: {
+    mode?: "source" | "preview"
+    cursor?: {
+      anchor: number
+      head: number
+    }
+    scrollTop?: number
+    scrollLeft?: number
+  }
 }
 
 export type FileState = {
