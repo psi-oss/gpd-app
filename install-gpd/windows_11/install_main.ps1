@@ -259,18 +259,27 @@ function Test-FileSha256 {
 }
 
 function Test-GpdRunning {
-    # Pre-flight: abort if GPD is currently running under $GpdHome. Windows
-    # file locking would make in-place overwrites of python.exe / venv
-    # scripts fail with cryptic "access denied" errors mid-install. Better
-    # to bail early with a clear message so the user can quit the app
-    # first.
+    # Pre-flight: terminate any process running out of $GpdHome before
+    # touching python/venv dirs. Windows file locking on python.exe and
+    # venv scripts otherwise turns later extract/copy steps into mid-
+    # install failures with no clean way back to the prior state.
+    #
+    # The previous version asked the user to "Quit GPD" — but quitting
+    # the desktop app doesn't always reap orphaned children: the
+    # bun/opencode-cli sidecar (Tauri externalBin) and any venv python
+    # subprocess (gpd MCP tools) can outlive the GUI parent on Windows
+    # because Tauri doesn't put them in a Job Object. Users hit a loop
+    # of "I closed GPD, why is it still detecting one?".
+    #
+    # Since every binary under $GpdHome ships from THIS installer, we
+    # own it and can safely kill it. Try Stop-Process with a short wait
+    # for graceful exit, escalate to -Force, and only Stop-WithError if
+    # that still fails (process held by something we can't terminate
+    # without admin rights).
     if (-not (Test-Path $GpdHome)) { return }
 
     $running = @()
     foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
-        # `.Path` access on system-owned processes throws under
-        # $ErrorActionPreference="Stop". Catch per-process so one
-        # access-denied entry doesn't abort the whole pre-flight check.
         $path = $null
         try { $path = $proc.Path } catch { continue }
         if ($path -and $path.StartsWith($GpdHome, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -278,9 +287,31 @@ function Test-GpdRunning {
         }
     }
 
-    if ($running.Count -gt 0) {
-        $names = ($running | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ", "
-        Stop-WithError "Detected a running GPD process ($names). Quit GPD before running the installer again."
+    if ($running.Count -eq 0) { return }
+
+    $names = ($running | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ", "
+    Write-Log "Stopping leftover GPD processes from a previous install: $names"
+
+    foreach ($proc in $running) {
+        try { Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue } catch { }
+    }
+    Start-Sleep -Milliseconds 500
+    foreach ($proc in $running) {
+        try {
+            $still = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+            if ($still) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        } catch { }
+    }
+    Start-Sleep -Milliseconds 500
+
+    $stillRunning = @()
+    foreach ($proc in $running) {
+        $live = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+        if ($live) { $stillRunning += $live }
+    }
+    if ($stillRunning.Count -gt 0) {
+        $remaining = ($stillRunning | ForEach-Object { "$($_.ProcessName) (pid $($_.Id))" }) -join ", "
+        Stop-WithError "Couldn't stop GPD processes: $remaining. Open Task Manager, end them, then re-run the installer."
     }
 }
 
