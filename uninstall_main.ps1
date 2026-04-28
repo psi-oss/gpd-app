@@ -444,10 +444,44 @@ function Invoke-GpdManifestRemoval {
         return
     }
 
+    # Collect manifest-tracked paths from every shape the gpd python
+    # writer has used. Two real-world shapes coexist:
+    #   - `files` is a dict keyed by relative path -> sha256 (current
+    #     schema, gpd >= the "manifest_v2" rewrite). Iterate the
+    #     PSCustomObject's property names.
+    #   - `files` is a list of relative-path strings (legacy + the
+    #     hand-written fallback). Iterate `files`.
+    # The dict-keyed schema also stores opencode-generated command
+    # markers in a sibling list `opencode_generated_command_files`;
+    # without merging that list, `command\gpd-*.md` and
+    # `agents\gpd-*.md` survive uninstall (matches the macOS uninstall
+    # bug fixed earlier in 23d1fa6e2f). The L2 post-publish smoke
+    # caught this on first run on windows-latest.
     if ($data -is [array]) {
         $entries = $data
-    } elseif ($data.PSObject.Properties.Name -contains "files") {
-        $entries = $data.files
+    } else {
+        $files = $data.files
+        if ($null -ne $files) {
+            if ($files -is [array]) {
+                $entries += $files
+            } elseif ($files -is [System.Management.Automation.PSCustomObject] -or $files.PSObject.Properties.Name) {
+                $entries += @($files.PSObject.Properties.Name)
+            }
+        }
+        $extras = $data.opencode_generated_command_files
+        if ($extras -is [array]) {
+            $entries += $extras
+        }
+    }
+    # Dedupe while preserving order — same path may appear in `files`
+    # AND `opencode_generated_command_files` once the writer schema
+    # consolidates.
+    $seen = @{}
+    $entries = $entries | Where-Object {
+        if ($null -eq $_ -or [string]::IsNullOrWhiteSpace($_)) { return $false }
+        if ($seen.ContainsKey($_)) { return $false }
+        $seen[$_] = $true
+        return $true
     }
 
     # Allowlist: every manifest entry must resolve to a path inside one
@@ -484,6 +518,26 @@ function Invoke-GpdManifestRemoval {
 
     if ($missing -gt 0) {
         Write-Skip "$missing manifest entry(ies) already gone"
+    }
+
+    # Defense-in-depth orphan sweep. Mirrors the POSIX uninstall and
+    # the install side (which sweep `command\gpd-*.md`,
+    # `agents\gpd-*.md`, `hooks\gpd-*` before re-running
+    # `gpd install opencode --global`). Catches the case where the
+    # manifest writer schema drifted from what this script knows: any
+    # GPD-namespaced marker the manifest pass missed gets cleaned
+    # here.
+    $orphanSwept = 0
+    foreach ($pat in @("command\gpd-*.md", "agents\gpd-*.md", "hooks\gpd-*")) {
+        $matched = Get-ChildItem -Path (Join-Path $baseDir $pat) -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.PSIsContainer }
+        if ($matched) {
+            $matched | Remove-Item -Force -ErrorAction SilentlyContinue
+            $orphanSwept += $matched.Count
+        }
+    }
+    if ($orphanSwept -gt 0) {
+        Write-Success "Removed $orphanSwept orphan GPD marker file(s) from $baseDir (post-manifest sweep)"
     }
 
     try {
