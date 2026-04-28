@@ -1003,7 +1003,7 @@ configure_litellm_key() {
     else
         printf "\n"
         printf " ${BOLD}PSI API Key Configuration${RESET}\n"
-        printf " ${DIM}Your PSI key connects GPD to AI models. Get it from your lab admin.${RESET}\n"
+        printf " ${DIM}Your PSI key connects GPD to AI models.${RESET}\n"
         printf "\n"
 
         # Up to 3 validation attempts. Echo the key as the user types so
