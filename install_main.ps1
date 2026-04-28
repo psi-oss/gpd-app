@@ -156,7 +156,13 @@ function Write-Err {
 function Stop-WithError {
     param([string]$Message)
     Write-Err $Message
-    exit 1
+    # `throw` instead of `exit 1` because this script runs as a scriptblock
+    # under the `irm | iex` -> bootstrap path. PowerShell's `exit` from a
+    # scriptblock kills the entire host process, which closes the
+    # PowerShell window mid-install with no visible error so users can't
+    # see what went wrong. Throwing propagates a terminating error that
+    # PowerShell prints in red and leaves the window open.
+    throw $Message
 }
 
 # ── Banner ─────────────────────────────────────────────────────────────────
@@ -258,17 +264,23 @@ function Test-GpdRunning {
     # scripts fail with cryptic "access denied" errors mid-install. Better
     # to bail early with a clear message so the user can quit the app
     # first.
-    try {
-        $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.Path -and $_.Path.StartsWith($GpdHome, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not (Test-Path $GpdHome)) { return }
+
+    $running = @()
+    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
+        # `.Path` access on system-owned processes throws under
+        # $ErrorActionPreference="Stop". Catch per-process so one
+        # access-denied entry doesn't abort the whole pre-flight check.
+        $path = $null
+        try { $path = $proc.Path } catch { continue }
+        if ($path -and $path.StartsWith($GpdHome, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $running += $proc
         }
-        if ($running) {
-            Stop-WithError "Detected a running GPD process. Quit GPD before running the installer again."
-        }
-    } catch {
-        # Non-fatal: some processes deny access to .Path (e.g. protected
-        # services). We're only trying to catch GPD itself, which we own,
-        # so access denials on unrelated processes are expected.
+    }
+
+    if ($running.Count -gt 0) {
+        $names = ($running | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ", "
+        Stop-WithError "Detected a running GPD process ($names). Quit GPD before running the installer again."
     }
 }
 
