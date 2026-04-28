@@ -84,16 +84,6 @@ Windows-specific flags:
   irm https://download.gpd.psi.inc/install.ps1 | iex
   ```
 
-How `irm | iex` works on Windows (background): `download.gpd.psi.inc/install.ps1`
-serves a tiny ASCII-only bootstrap that fetches the real installer
-(`install_main.ps1`) with explicit UTF-8 decoding and evaluates it as a
-scriptblock. The bootstrap exists because PowerShell 5.1 + `Invoke-RestMethod`
-defaults to ISO-8859-1 decoding when the response has no `charset=utf-8`
-header — which on non-English locales (PT-BR, DE, FR, RU, ...) turns the
-UTF-8 BOM and the GPD box-drawing banner into mojibake that the parser
-rejects with `Atributo 'CmdletBinding' inesperado` / `Token 'param' inesperado`.
-You should never need to think about the split; the bootstrap is invisible.
-
 ### Verify the installer before executing (optional, recommended)
 
 The one-liners above go straight from download to execution, so an
