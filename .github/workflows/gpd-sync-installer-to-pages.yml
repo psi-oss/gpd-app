@@ -151,7 +151,7 @@ jobs:
           GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
         run: |
           set -euo pipefail
-          git add install install.ps1 uninstall uninstall.sh uninstall.ps1 SHA256SUMS.txt SHA256SUMS.meta
+          git add install install.ps1 install_main.ps1 uninstall uninstall.sh uninstall.ps1 uninstall_main.ps1 SHA256SUMS.txt SHA256SUMS.meta
           if git diff --cached --quiet; then
             echo "No installer changes; nothing to publish."
             exit 0
