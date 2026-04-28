@@ -1,0 +1,43 @@
+name: Installer Static Gates
+
+# L0 of the installer hardening plan: deterministic checks that catch
+# release-breaking regressions BEFORE they reach gh-pages, on every PR
+# and every push to gpd. Single repo-local script, no toolchain
+# dependency beyond stock POSIX bash + (optional) pwsh + python3 — both
+# preinstalled on every GHA hosted runner.
+#
+# Each check exists because we shipped the regression once (or saw it
+# imminent in a near-miss). See scripts/check-installer-static.sh for
+# the per-gate rationale + minimal repro.
+
+on:
+  pull_request:
+    paths:
+      - "install-gpd/**"
+      - "README.md"
+      - "scripts/check-installer-static.sh"
+      - ".github/workflows/installer-lint.yml"
+  push:
+    branches: [gpd]
+    paths:
+      - "install-gpd/**"
+      - "README.md"
+      - "scripts/check-installer-static.sh"
+      - ".github/workflows/installer-lint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer static gates
+        run: bash scripts/check-installer-static.sh

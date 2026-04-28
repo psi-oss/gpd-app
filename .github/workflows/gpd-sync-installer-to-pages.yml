@@ -151,7 +151,14 @@ jobs:
           GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
         run: |
           set -euo pipefail
-          git add install install.ps1 install_main.ps1 uninstall uninstall.sh uninstall.ps1 uninstall_main.ps1 SHA256SUMS.txt SHA256SUMS.meta
+          # `git add -A` over the publish dir, not a hardcoded allowlist.
+          # Earlier the staging step added install_main.ps1 + uninstall_main.ps1
+          # to the copy + SHA256SUMS list but the `git add` line still
+          # listed only the legacy filenames; new files were copied,
+          # never staged, never committed, and 404'd at the served URL
+          # while the workflow reported success. -A keeps copy + commit
+          # in lockstep automatically.
+          git add -A .
           if git diff --cached --quiet; then
             echo "No installer changes; nothing to publish."
             exit 0
