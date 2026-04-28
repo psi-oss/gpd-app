@@ -238,6 +238,25 @@ if [[ -d "$opencode_gpd_subdir" ]]; then
     found_anything=true
 fi
 
+# Orphan GPD-namespaced marker files. The user may have wiped ~/.gpd or
+# the manifest by hand and re-run the uninstaller; without this scan
+# we'd hit the "Nothing to remove" early-exit and leak `gpd-*.md` files
+# into the next install. Mirrors the install-side orphan recovery
+# (`install:1336-1354`) and the no-manifest branch in
+# process_gpd_manifest below — the same set of glob patterns.
+orphan_marker_dirs=()
+for d in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR"; do
+    [[ -d "$d" ]] || continue
+    for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
+        if compgen -G "$d/$pat" >/dev/null 2>&1; then
+            orphan_marker_dirs+=("$d")
+            log "Found orphan GPD markers in: $d"
+            found_anything=true
+            break
+        fi
+    done
+done
+
 # Shell rc files / login profiles for the GPD sentinel block.
 rc_and_profile_candidates=(
     "$HOME/.bashrc"
@@ -498,6 +517,15 @@ process_gpd_manifest() {
         return
     fi
 
+    # Collect manifest-tracked paths from every shape the gpd python
+    # writer has used. Two real-world shapes coexist:
+    #   - `files` is a dict keyed by relative path → sha256 (current schema,
+    #     gpd >= the "manifest_v2" rewrite). Iterate `files.keys()`.
+    #   - `files` is a list of relative-path strings (legacy + the
+    #     hand-written fallback). Iterate `files`.
+    # The dict-keyed schema also stores opencode-generated command markers
+    # in a sibling list `opencode_generated_command_files`; without merging
+    # that list, `command/gpd-*.md` and `agents/gpd-*.md` survive uninstall.
     local files_list
     files_list="$("$PY" - "$manifest" "$base_dir" 2>/dev/null <<'PY' || true
 import json, os, sys
@@ -508,21 +536,31 @@ try:
         data = json.load(f)
 except Exception:
     sys.exit(3)
+
+paths = []
 if isinstance(data, dict):
-    files = data.get("files", [])
+    files = data.get("files")
+    if isinstance(files, dict):
+        paths.extend(files.keys())
+    elif isinstance(files, list):
+        paths.extend(files)
+    extras = data.get("opencode_generated_command_files")
+    if isinstance(extras, list):
+        paths.extend(extras)
 elif isinstance(data, list):
-    files = data
-else:
-    files = []
-if not isinstance(files, list):
-    files = []
-for entry in files:
+    paths.extend(data)
+
+seen = set()
+for entry in paths:
     if not isinstance(entry, str) or not entry:
         continue
     if "\n" in entry:
         sys.stderr.write(f"skipping entry with newline: {entry!r}\n")
         continue
     path = entry if os.path.isabs(entry) else os.path.join(base_dir, entry)
+    if path in seen:
+        continue
+    seen.add(path)
     sys.stdout.write(path + "\n")
 sys.exit(0)
 PY
@@ -572,6 +610,25 @@ PY
         skip "$missing_count manifest entry(ies) already gone"
     fi
 
+    # Defense-in-depth orphan sweep. Matches the install side (which sweeps
+    # `command/gpd-*.md`, `agents/gpd-*.md`, `hooks/gpd-*` before re-running
+    # `gpd install opencode --global`). Catches the case where the manifest
+    # writer schema drifted from what this script knows: any GPD-namespaced
+    # marker the manifest pass missed gets cleaned here, mirroring the
+    # no-manifest branch above.
+    local orphan_swept=0
+    for pat in "command/gpd-*.md" "agents/gpd-*.md" "hooks/gpd-*"; do
+        local matched
+        matched=$(find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$matched" != "0" ]]; then
+            find "$base_dir" -maxdepth 2 -path "$base_dir/$pat" -type f -delete 2>/dev/null || true
+            orphan_swept=$((orphan_swept + matched))
+        fi
+    done
+    if (( orphan_swept > 0 )); then
+        success "Removed $orphan_swept orphan GPD marker file(s) from $base_dir (post-manifest sweep)"
+    fi
+
     rm -f "$manifest"
     success "Removed $manifest"
 }
@@ -583,6 +640,20 @@ if (( ${#opencode_manifest_paths[@]} > 0 )); then
 else
     process_gpd_manifest "$OPENCODE_CONFIG_DIR/gpd-file-manifest.json" "$OPENCODE_CONFIG_DIR"
 fi
+
+# Sweep orphan markers in any opencode dir we found markers in but did not
+# already process via a manifest. Without this, markers under
+# $OPENCODE_DATA_DIR (the XDG_DATA_HOME path) survive when the manifest
+# lived only under $OPENCODE_CONFIG_DIR.
+for d in "${orphan_marker_dirs[@]:-}"; do
+    [[ -z "$d" ]] && continue
+    already_processed=false
+    for m in "${opencode_manifest_paths[@]:-}"; do
+        [[ "$(dirname "$m")" == "$d" ]] && already_processed=true && break
+    done
+    [[ "$already_processed" == true ]] && continue
+    process_gpd_manifest "$d/gpd-file-manifest.json" "$d"
+done
 
 if [[ -d "$opencode_gpd_subdir" ]]; then
     rm -rf "$opencode_gpd_subdir"

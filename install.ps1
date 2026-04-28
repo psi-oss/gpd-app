@@ -1,28 +1,47 @@
 ﻿# GPD CLI installer for Windows 11
 #
 # Usage:
+#   irm https://download.gpd.psi.inc/install.ps1 | iex
 #   powershell -ExecutionPolicy Bypass -File install.ps1
-#   irm https://<url>/install/windows_11/install.ps1 | iex
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -SkipLaunch -NoExportKey
+#
+# Flags via env vars (for the `irm | iex` invocation, since iex doesn't
+# pass arguments down):
+#   $env:GPD_SKIP_LAUNCH   = "1"  → suppress auto-launch
+#   $env:GPD_NO_EXPORT_KEY = "1"  → skip writing GPD_API_KEY to User env
 #
 # Installs: OpenCode CLI, Python 3.11+ (app-local), GPD package, gpd command.
 # Everything goes into $HOME\.gpd\ -- no system-wide changes except user PATH.
 # Does not require administrator privileges.
+#
+# Why no `[CmdletBinding()]` + `param(...)` block:
+#   `iex` (Invoke-Expression) parses the input string at the current
+#   statement scope, where `[CmdletBinding()]` and `param(...)` are
+#   illegal — they're only valid as the first statement in a script
+#   file, function body, or scriptblock. Users hit
+#       "Atributo 'CmdletBinding' inesperado"
+#       "Token 'param' inesperado na expressão ou instrução"
+#   when running `irm <url>/install.ps1 | iex`. Dropping the param block
+#   and reading flags via $args + env-var fallback works cleanly in both
+#   `-File` and `iex` modes.
 
-#Requires -Version 5.1
-[CmdletBinding()]
-param(
-    # Suppress the automatic GPD.exe launch at the end of install.
-    # Useful for CI / scripted installs that just want the files in
-    # place without a window popping up.
-    [switch]$SkipLaunch,
+# Parse $args for `-File install.ps1 -SkipLaunch -NoExportKey` invocation.
+# Empty under `irm | iex` (iex doesn't propagate caller args to the
+# evaluated string). Accept several spelling variants so existing CI
+# scripts keep working.
+$SkipLaunch  = $false
+$NoExportKey = $false
+foreach ($a in $args) {
+    switch -regex ($a) {
+        '^-{1,2}SkipLaunch$|^-{1,2}skip-launch$|^/SkipLaunch$'    { $SkipLaunch  = $true }
+        '^-{1,2}NoExportKey$|^-{1,2}no-export-key$|^/NoExportKey$' { $NoExportKey = $true }
+    }
+}
+# Env-var fallback. Truthy = any non-empty string except "0"/"false".
+$envTruthy = { param($v) $v -and $v -notmatch '^(0|false|no)$' }
+if (& $envTruthy $env:GPD_SKIP_LAUNCH)   { $SkipLaunch  = $true }
+if (& $envTruthy $env:GPD_NO_EXPORT_KEY) { $NoExportKey = $true }
 
-    # Skip writing GPD_API_KEY into the user environment. The key is
-    # still saved to $env:USERPROFILE\.gpd\config\litellm.env and to
-    # opencode's auth.json so the CLI wrapper and desktop app both
-    # keep working; only the User-scope environment variable is
-    # skipped. Mirrors the Unix --no-export-key flag.
-    [switch]$NoExportKey
-)
 $ErrorActionPreference = "Stop"
 
 # Force the console to UTF-8 for output so the Unicode box-drawing chars
