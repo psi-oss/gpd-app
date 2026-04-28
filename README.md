@@ -28,14 +28,9 @@ curl -fsSL https://download.gpd.psi.inc/uninstall | bash -s -- --yes
 irm https://download.gpd.psi.inc/uninstall.ps1 | iex
 ```
 
-Removes `~/.gpd/`, the desktop app, PATH entries, and the `gpd` entry
-from opencode's `auth.json`. Keeps system-wide deps (git, LaTeX, brew)
-since other apps may use them — uninstaller prints copy-pasteable
-removal commands at the end.
-
 Flags, verify-before-piping, manual download: [`install-gpd/README.md`](install-gpd/README.md).
 
-## For professors / post-docs
+## For GPD Grant Recipients
 
 Open the app, paste the access key you received, start a research project. That's it.
 
