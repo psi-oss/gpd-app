@@ -1,0 +1,196 @@
+name: Installer Post-Publish Smoke
+
+# L2 of the installer hardening plan: after gpd-sync-installer-to-pages
+# publishes a new bootstrap to download.gpd.psi.inc, immediately
+# install-from-CDN onto a clean runner across the three OS we ship
+# for. Catches regressions that L0 (static gates) can't see — CDN
+# cache staleness, redirected URL changes, the *_main.ps1 staging
+# drift that returned 404 mid-install, signed-binary download issues,
+# and runtime contract failures (sidecar boot, sentinel marker).
+#
+# Triggered automatically when the publish workflow finishes
+# successfully on the gpd branch. Also runs on workflow_dispatch so we
+# can re-verify after a manual gh-pages edit.
+
+on:
+  workflow_run:
+    workflows: ["GPD Sync Installer Scripts to Pages"]
+    types: [completed]
+    branches: [gpd]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-postpublish-smoke
+  cancel-in-progress: false   # let smoke runs queue, don't drop them
+
+jobs:
+  url-availability:
+    # Cheap (<30s), runs first. If the published SHA256SUMS.txt names
+    # a file that doesn't return 200, the install matrix would all
+    # fail in roughly the same way — fail fast here with a clearer
+    # error.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe every URL listed in SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          # Cache-bust to bypass GitHub Pages edge cache (max-age=600).
+          bust="$(date +%s)"
+          base="https://download.gpd.psi.inc"
+          tmp="$(mktemp -d)"
+
+          curl -fsSL "$base/SHA256SUMS.txt?v=$bust" -o "$tmp/sums.txt"
+          echo "Manifest:"
+          cat "$tmp/sums.txt"
+
+          declare -i failures=0
+          while read -r expected name; do
+            [[ -z "${name:-}" ]] && continue
+            url="$base/$name?v=$bust"
+            # HEAD-equivalent: ask the server for content + verify SHA
+            # in one shot, since GitHub Pages sometimes treats HEAD
+            # responses inconsistently and we want a real-content check.
+            if ! curl -fsSL "$url" -o "$tmp/$name"; then
+              echo "FAIL: $url returned non-2xx"
+              failures+=1
+              continue
+            fi
+            actual="$(sha256sum "$tmp/$name" | awk '{print $1}')"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "FAIL: $url SHA mismatch"
+              echo "  expected: $expected"
+              echo "  actual:   $actual"
+              failures+=1
+              continue
+            fi
+            echo "OK: $name"
+          done < "$tmp/sums.txt"
+
+          if (( failures > 0 )); then
+            echo "::error::$failures URL(s) failed availability or SHA check"
+            exit 1
+          fi
+
+  install-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    needs: url-availability
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  shell: bash,       label: linux }
+          - { os: macos-latest,   shell: bash,       label: macos-arm }
+          - { os: macos-13,       shell: bash,       label: macos-x64 }
+          # `shell: powershell` forces PS 5.1 (Windows PowerShell, not pwsh)
+          # on every windows-* runner image — that's the host where every
+          # recent regression fired (irm ISO-8859-1 default, BOM mojibake,
+          # scriptblock exit-host-kill). windows-latest currently maps to
+          # windows-2022 and ships PS 5.1 alongside PS 7; we're testing the
+          # 5.1 path explicitly so the bug class stays caught even after
+          # GitHub retires Server 2019 images.
+          - { os: windows-latest, shell: powershell, label: windows-ps5 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Run installer end-to-end (POSIX)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bust="$(date +%s)"
+          # --skip-key + --no-launch are now defaults but pass them
+          # explicitly so the test reads the same on every release.
+          curl -fsSL "https://download.gpd.psi.inc/install?v=$bust" \
+            | bash -s -- --skip-key --no-launch
+
+      - name: Run installer end-to-end (Windows / PS 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        env:
+          GPD_SKIP_LAUNCH: "1"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          # Force the bootstrap path users actually take on Windows.
+          # Matrix runs on windows-2019 to keep PS 5.1 in scope —
+          # that's the host where every recent regression fired.
+          Invoke-RestMethod -UseBasicParsing -Uri "https://download.gpd.psi.inc/install.ps1?v=$bust" | Invoke-Expression
+
+      - name: Verify post-install invariants (POSIX)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -e
+          test -f "$HOME/.gpd/.gpd-initialized"           || { echo "FAIL: missing .gpd-initialized"; exit 1; }
+          test -x "$HOME/.gpd/bin/opencode"                || { echo "FAIL: missing or non-exec ~/.gpd/bin/opencode"; exit 1; }
+          test -x "$HOME/.gpd/venv/bin/python"             || { echo "FAIL: missing venv python"; exit 1; }
+          "$HOME/.gpd/venv/bin/python" -c 'import gpd'    || { echo "FAIL: import gpd failed"; exit 1; }
+          test -f "$HOME/.config/opencode/gpd-file-manifest.json" \
+            || { echo "FAIL: missing gpd-file-manifest.json"; exit 1; }
+          echo "OK: all post-install invariants satisfied"
+
+      - name: Verify post-install invariants (Windows)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $g = Join-Path $HOME '.gpd'
+          if (-not (Test-Path (Join-Path $g '.gpd-initialized'))) { throw 'missing .gpd-initialized' }
+          if (-not (Test-Path (Join-Path $g 'bin\opencode.exe'))) { throw 'missing bin\opencode.exe' }
+          if (-not (Test-Path (Join-Path $g 'venv\Scripts\python.exe'))) { throw 'missing venv python.exe' }
+          & (Join-Path $g 'venv\Scripts\python.exe') -c 'import gpd' | Out-Null
+          $manifest = Join-Path $env:USERPROFILE '.config\opencode\gpd-file-manifest.json'
+          if (-not (Test-Path $manifest)) { throw "missing $manifest" }
+          Write-Host 'OK: all post-install invariants satisfied'
+
+      - name: Run uninstaller end-to-end (POSIX)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bust="$(date +%s)"
+          curl -fsSL "https://download.gpd.psi.inc/uninstall?v=$bust" \
+            | bash -s -- --yes
+
+      - name: Run uninstaller end-to-end (Windows)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        env:
+          GPD_YES: "1"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          Invoke-RestMethod -UseBasicParsing -Uri "https://download.gpd.psi.inc/uninstall.ps1?v=$bust" | Invoke-Expression
+
+      - name: Verify post-uninstall invariants (POSIX)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -e
+          [ ! -e "$HOME/.gpd" ]                                         || { echo "FAIL: ~/.gpd survived"; exit 1; }
+          [ ! -e "$HOME/.config/opencode/gpd-file-manifest.json" ]      || { echo "FAIL: manifest survived"; exit 1; }
+          n_command="$(find "$HOME/.config/opencode/command" -maxdepth 1 -name 'gpd-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+          n_agents="$(find  "$HOME/.config/opencode/agents"  -maxdepth 1 -name 'gpd-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+          [ "$n_command" = "0" ] || { echo "FAIL: $n_command stale command/gpd-*.md markers"; exit 1; }
+          [ "$n_agents"  = "0" ] || { echo "FAIL: $n_agents stale agents/gpd-*.md markers";  exit 1; }
+          echo "OK: clean uninstall (no stale markers, no leaked dirs)"
+
+      - name: Verify post-uninstall invariants (Windows)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path (Join-Path $HOME '.gpd')) { throw '~/.gpd survived' }
+          $manifest = Join-Path $env:USERPROFILE '.config\opencode\gpd-file-manifest.json'
+          if (Test-Path $manifest) { throw "manifest survived: $manifest" }
+          $cmdDir   = Join-Path $env:USERPROFILE '.config\opencode\command'
+          $agentDir = Join-Path $env:USERPROFILE '.config\opencode\agents'
+          $nCmd   = if (Test-Path $cmdDir)   { (Get-ChildItem $cmdDir   -Filter 'gpd-*.md' -ErrorAction SilentlyContinue | Measure-Object).Count } else { 0 }
+          $nAgent = if (Test-Path $agentDir) { (Get-ChildItem $agentDir -Filter 'gpd-*.md' -ErrorAction SilentlyContinue | Measure-Object).Count } else { 0 }
+          if ($nCmd   -gt 0) { throw "$nCmd stale command/gpd-*.md markers" }
+          if ($nAgent -gt 0) { throw "$nAgent stale agents/gpd-*.md markers" }
+          Write-Host 'OK: clean uninstall (no stale markers, no leaked dirs)'
