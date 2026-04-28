@@ -13,6 +13,23 @@ export type DialogOpenOrCreateProjectProps = {
   onOpenExisting: () => void
 }
 
+// Display-only join: pick the path separator that matches the parent.
+// A bare `${parent}/${name}` template printed `A:\Friendo/gpd` on
+// Windows because the Tauri picker hands us native backslash paths and
+// we'd hardcoded a slash. The real mkdir runs Rust-side
+// (`platform.createProjectDirectory`) so the on-disk path is fine
+// either way; this only fixes the preview line.
+function joinPathPreview(parent: string, name: string): string {
+  const trimmed = parent.replace(/[\\/]+$/, "")
+  const sep =
+    trimmed.includes("\\") && !trimmed.includes("/")
+      ? "\\"
+      : /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\")
+        ? "\\"
+        : "/"
+  return `${trimmed}${sep}${name}`
+}
+
 export const DialogOpenOrCreateProject: Component<DialogOpenOrCreateProjectProps> = (props) => {
   const language = useLanguage()
   const platform = usePlatform()
@@ -142,7 +159,7 @@ export const DialogOpenOrCreateProject: Component<DialogOpenOrCreateProjectProps
           <Show when={parent() && name().trim()}>
             <div class="text-11-regular text-text-weak">
               {language.t("home.combinedPicker.create.preview", {
-                path: `${parent()}/${name().trim()}`,
+                path: joinPathPreview(parent()!, name().trim()),
               })}
             </div>
           </Show>
