@@ -496,7 +496,21 @@ function Install-OpenCode {
         return
     }
 
-    $asset = "opencode-windows-${Arch}.zip"
+    # Force x64 on Windows ARM. The native aarch64 build of opencode-cli
+    # ships a bun runtime whose Windows-ARM port is unofficial / not in
+    # bun's CI matrix; under real workloads it crashes with
+    # STATUS_ACCESS_VIOLATION (0xC0000005) mid-stream — observed
+    # 2026-04-29 on a Parallels Win 11 ARM VM, surfaced in the GUI as
+    # ERR_CONNECTION_REFUSED on 127.0.0.1:<sidecar_port>/global/event
+    # after the bun process disappears. Windows runs x64 binaries on ARM
+    # via the OS emulator with no install ceremony and the perf cost is
+    # negligible for a streaming HTTP client. We can drop this when bun
+    # ships a stable Windows-ARM build (track upstream bun#11161).
+    $cliArch = if ($Arch -eq "arm64") { "x64" } else { $Arch }
+    if ($cliArch -ne $Arch) {
+        Write-Log "Using x64 OpenCode CLI on Windows ARM (bun ARM64-Windows is unstable; runs under x64 emulation)"
+    }
+    $asset = "opencode-windows-${cliArch}.zip"
     $gpdUrl      = "https://github.com/${OpenCodeOrg}/${OpenCodeRepo}/releases/latest/download/${asset}"
     $fallbackUrl = "https://github.com/${OpenCodeFallbackOrg}/${OpenCodeFallbackRepo}/releases/latest/download/${asset}"
 
