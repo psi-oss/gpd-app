@@ -433,7 +433,16 @@ export namespace LLM {
               ...input.model.headers,
               ...headers,
             },
-            maxRetries: input.retries ?? 0,
+            // Default to 3 retries on transient HTTP/network failures.
+            // The Vercel AI SDK retries 5xx, ECONNRESET, mid-stream
+            // disconnects, and InvalidHTTPResponse class errors with
+            // exponential backoff. We previously defaulted to 0 — a
+            // single Railway/upstream blip mid-stream surfaced as a
+            // user-visible "Couldn't reach the server" toast even when
+            // the very next attempt would have succeeded. 3 covers the
+            // common transient blip without making genuinely-broken
+            // upstreams take painful amounts of time to fail.
+            maxRetries: input.retries ?? 3,
             messages,
             model: wrapLanguageModel({
               model: language,
