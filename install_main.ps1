@@ -416,18 +416,31 @@ function Get-GpdLatestTag {
 function Install-GpdDesktop {
     param([string]$Arch)
 
-    # We ship only the x64 NSIS installer today. On Windows 11 ARM
-    # the x64 setup.exe + the bundled GPD.exe both run transparently
-    # via the OS-level x64 emulation layer (a Microsoft-supported
-    # path; see https://learn.microsoft.com/en-us/windows/arm/overview).
-    # That's strictly better UX than skipping the desktop app — ARM
-    # users still get the full GUI, and we drop the "Start a new
-    # session: gpd" CLI-only fallback message that confused users.
-    # The day Tauri's arm64-pc-windows-msvc target is GA we can flip
-    # this to install a native ARM bundle and short-circuit the
-    # emulation.
-    if ($Arch -ne "x64") {
-        Write-Log "Installing x64 GPD desktop app on $Arch (runs via Windows x64 emulation)..."
+    # Pick the native installer for the user's CPU when available, with a
+    # graceful fallback to x64-via-emulation if the ARM bundle hasn't
+    # been published yet. Both Tauri NSIS bundles install transparently
+    # under %LOCALAPPDATA%\GPD\GPD.exe; the only difference is which
+    # binary the OS executes.
+    #
+    # Why we prefer native ARM64: the x64 bundle runs under Windows'
+    # x86-on-ARM emulator, and bun in that emulator hit the
+    # RADAR_PRE_LEAK_64 memory-leak detector mid-session, killing the
+    # sidecar. Reproduced 2026-04-29 on Parallels Win 11 ARM (WER event
+    # 1001, P1 opencode-cli.exe v1.3.11.0). Switching to the native
+    # ARM64 bundle avoids the emulator entirely.
+    #
+    # Fallback rationale: until the first release that includes the
+    # arm64-setup.exe artifact lands, Test-UrlExists will 404 on ARM
+    # hosts and we'd skip the desktop install entirely. Falling back to
+    # x64 keeps users unblocked with a less-stable but still-working
+    # build (auto-recovery is handled by the Rust-side sidecar
+    # watchdog; see packages/desktop/src-tauri/src/lib.rs).
+    if ($Arch -eq "arm64") {
+        $preferredArchSuffix = "arm64"
+        $fallbackArchSuffix = "x64"
+    } else {
+        $preferredArchSuffix = "x64"
+        $fallbackArchSuffix = $null
     }
 
     # Tauri NSIS per-user install path. The default is %LOCALAPPDATA%\GPD\
@@ -456,12 +469,25 @@ function Install-GpdDesktop {
         Write-Warn "Could not parse version from tag '$tag' - skipping desktop app."
         return $false
     }
-    $setupFile = "GPD_" + $ver + "_x64-setup.exe"
+
+    $setupFile = "GPD_" + $ver + "_$preferredArchSuffix-setup.exe"
     $setupUrl = "https://github.com/$OpenCodeOrg/$OpenCodeRepo/releases/download/$tag/$setupFile"
 
     if (-not (Test-UrlExists $setupUrl)) {
-        Write-Warn "GPD desktop .exe not found at $setupUrl"
-        return $false
+        if ($fallbackArchSuffix) {
+            Write-Log "Native $preferredArchSuffix bundle not found at $setupUrl; falling back to $fallbackArchSuffix (Windows x64 emulation)..."
+            $setupFile = "GPD_" + $ver + "_$fallbackArchSuffix-setup.exe"
+            $setupUrl = "https://github.com/$OpenCodeOrg/$OpenCodeRepo/releases/download/$tag/$setupFile"
+            if (-not (Test-UrlExists $setupUrl)) {
+                Write-Warn "GPD desktop .exe not found for $preferredArchSuffix or $fallbackArchSuffix at $setupUrl"
+                return $false
+            }
+        } else {
+            Write-Warn "GPD desktop .exe not found at $setupUrl"
+            return $false
+        }
+    } elseif ($Arch -eq "arm64") {
+        Write-Log "Installing native ARM64 GPD desktop app..."
     }
 
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gpd-desktop-$(Get-Random)"
