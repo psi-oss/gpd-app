@@ -140,21 +140,24 @@ $GpdPackageVersion = if ($env:GPD_PACKAGE_VERSION) { $env:GPD_PACKAGE_VERSION } 
 $LiteLlmProxyUrl = "https://litellm-production-46bb.up.railway.app"
 
 # Python-build-standalone: portable, relocatable CPython builds from Astral.
-$PbsTag    = "20250409"
-$PbsPython = "3.13.3"
+$PbsTag    = "20260414"
+$PbsPython = "3.13.13"
 $PbsBaseUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/$PbsTag"
 
 # Pinned SHA256 of each PBS tarball we might download. Verified against
 # the file we actually pull over the wire; mismatch aborts the install.
 # Regenerate via install-gpd/scripts/verify-pbs-hashes.sh when bumping
 # $PbsTag or $PbsPython. Values sourced from upstream SHA256SUMS:
-# https://github.com/astral-sh/python-build-standalone/releases/download/20250409/SHA256SUMS
+# https://github.com/astral-sh/python-build-standalone/releases/download/20260414/SHA256SUMS
 #
-# NB: upstream does not publish an aarch64-pc-windows-msvc build for the
-# 20250409 tag, so there is no entry for that triple. Install-LocalPython
-# already calls Stop-WithError for unsupported arches earlier.
+# Bumped from 20250409/3.13.3 because that release ships no
+# aarch64-pc-windows-msvc build (Windows ARM users hit
+# "Download failed: ... Not Found" mid-install). 20260414 adds the
+# aarch64-pc-windows-msvc triple as a first-class build, fixing
+# Surface / Snapdragon X / Windows ARM VMs.
 $PbsSha256 = @{
-    "x86_64-pc-windows-msvc" = "6012f9b1530d5cb45fd59b116e24b35ad51d7c957d119b60b5fefff4b2a60977"
+    "x86_64-pc-windows-msvc"  = "ee0cb26453d6e025d36502d765c1639c34830355e46ab3ad31c0360bc4cd9b79"
+    "aarch64-pc-windows-msvc" = "586ba71c75f341e1d111399b7f719ae784dc11e8672e93e017388f28684226d0"
 }
 
 # Sentinel constants for any user-environment change we make. Phase 2's

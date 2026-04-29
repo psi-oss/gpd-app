@@ -53,8 +53,8 @@ GPD_PACKAGE_VERSION="${GPD_PACKAGE_VERSION:-}"
 LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 
 # Python-build-standalone: portable, relocatable CPython builds from Astral.
-PBS_TAG="20250409"
-PBS_PYTHON="3.13.3"
+PBS_TAG="20260414"
+PBS_PYTHON="3.13.13"
 PBS_BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_TAG"
 
 # Pinned SHA256 of each PBS tarball we might download. These are verified
@@ -62,11 +62,17 @@ PBS_BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/down
 # install (tampering, CDN corruption, or stale pin after a retag).
 # Regenerate via install-gpd/scripts/verify-pbs-hashes.sh when bumping
 # PBS_TAG or PBS_PYTHON. Values sourced from upstream SHA256SUMS:
-# https://github.com/astral-sh/python-build-standalone/releases/download/20250409/SHA256SUMS
-PBS_SHA256_LINUX_X64="1314ad7809df183542d5110fda25847ae69ea46c53e3b290fa9c400c91e3a722"
-PBS_SHA256_LINUX_ARM64="2cdf65789be7492e37db1f22958f193ebea0c9353804378799643c568beab623"
-PBS_SHA256_DARWIN_X64="90b3581a23563921b434113b08d905d766a50e7455ee6a66a98ea1b999b7e2a2"
-PBS_SHA256_DARWIN_ARM64="6d8409990e03e11432c957207195f7185da84622889bd3a0fac6f1e4944c1b7a"
+# https://github.com/astral-sh/python-build-standalone/releases/download/20260414/SHA256SUMS
+#
+# Bumped from 20250409/3.13.3 because 20250409 ships no
+# aarch64-pc-windows-msvc build — Windows ARM users (Surface,
+# Snapdragon X) hit "Download failed: ... Not Found" mid-install. The
+# 20260414 release adds aarch64-pc-windows-msvc as a first-class
+# triple, see install_main.ps1's $PbsSha256 hashtable.
+PBS_SHA256_LINUX_X64="e5ec3b2c5693215d153c434ac018e75511b2c4f96d2bce30468a477cb3a89d5e"
+PBS_SHA256_LINUX_ARM64="6a65f68043d7fadcd580415493d2929d1fd686013f9ae44ddbd3a81307ab256d"
+PBS_SHA256_DARWIN_X64="540337412d2c4220e99280f741dbf45c1e3da3a39edaaab20c6ba1d53e1692ef"
+PBS_SHA256_DARWIN_ARM64="c652dad552122cd2e76968ec41c803f8222038169b11310dba0c85928265f5c1"
 
 REQUIRED_PYTHON_MAJOR=3
 REQUIRED_PYTHON_MINOR=11
