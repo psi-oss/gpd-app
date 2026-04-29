@@ -206,6 +206,52 @@ function Test-OpenCodeJsonHasGpd {
 
 # -- Removal actions -------------------------------------------------------
 
+function Stop-GpdProcesses {
+    # Kill the desktop app + sidecar BEFORE we touch any dirs. WebView2
+    # holds an exclusive lock on its leveldb files at
+    # %LOCALAPPDATA%\inc.psi.gpd\EBWebView\Default\Local Storage\leveldb\,
+    # so a still-running GPD.exe (or its detached msedgewebview2.exe child)
+    # makes Remove-Item fail there with a Yellow "Could not remove ...
+    # being used by another process" warning. The uninstaller silently
+    # carried on, the localStorage file survived, and on reinstall the
+    # cached `gpd.key.saved=true` flag re-promoted the user past the
+    # welcome screen — looking like a "re-login without consent" bug.
+    # Reproduced 2026-04-29 on a Windows 11 ARM VM.
+    #
+    # We kill by image name (no PID handoff between sessions). Tauri's
+    # mainBinaryName is "GPD" (see tauri.prod.conf.json), so the running
+    # process is "GPD.exe". The sidecar binary on disk is named with a
+    # platform suffix ("opencode-cli-aarch64-pc-windows-msvc.exe"), but
+    # Tauri spawns it via that path so it appears under that exact image
+    # name in the process list — match with a wildcard. ErrorAction
+    # SilentlyContinue: it's fine if the app isn't running.
+    $names = @("GPD", "opencode-cli*", "msedgewebview2")
+    $stopped = $false
+    foreach ($n in $names) {
+        $procs = Get-Process -Name $n -ErrorAction SilentlyContinue
+        if (-not $procs) { continue }
+        foreach ($p in $procs) {
+            try {
+                Stop-Process -Id $p.Id -Force -ErrorAction Stop
+                Write-Success "Stopped $($p.ProcessName) (PID $($p.Id))"
+                $stopped = $true
+            } catch {
+                Write-Warn "Could not stop $($p.ProcessName) (PID $($p.Id)) -- $_"
+            }
+        }
+    }
+    if ($stopped) {
+        # Give Windows a beat to release file handles. WebView2 child
+        # processes can take ~500ms after their parent dies before
+        # leveldb locks drop. 1s is empirically enough; we don't probe
+        # the locks because that requires opening the file (which would
+        # itself fail if still locked) and the cost of waiting is trivial.
+        Start-Sleep -Milliseconds 1000
+    } else {
+        Write-Skip "No GPD processes running"
+    }
+}
+
 function Remove-TauriDesktop {
     if (Test-Path $TauriUninstaller) {
         Write-Log "Running GPD desktop uninstaller..."
@@ -742,12 +788,16 @@ function Invoke-GpdUninstall {
     Write-Host ""
 
     # Order matters:
+    #   0. Stop any running GPD processes -- otherwise the WebView2
+    #      leveldb (which carries gpd.key.saved=true) survives the
+    #      cleanup and the next install sees a "logged-in" user.
     #   1. Tauri desktop uninstaller -- needs its own files intact.
     #   2. Tauri state dir.
     #   3. PATH entry -- harmless before .gpd removal, but cleanest first.
     #   4. auth.json / opencode.json / manifest cleanup -- surgical only;
     #      we never rm -rf opencode's config/state/cache dirs (AC-2).
     #   5. .gpd dir -- last, since anything else could live inside it.
+    Stop-GpdProcesses
     Remove-TauriDesktop
     Remove-TauriState
     Remove-GpdFromPath

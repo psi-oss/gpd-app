@@ -140,8 +140,8 @@ In these cases, read the upstream changelog first, understand the changes, then 
 If new AI models were released (e.g., Claude 5.0), update:
 
 1. **LiteLLM** — add via API (`/model/new`)
-2. **`gpd_setup.rs`** — add to `build_config_json()` model list
-3. **`inject-litellm-provider.py`** — add to `PROVIDER_CONFIG` (for terminal install)
+2. **`packages/opencode/src/provider/gpd-models.ts`** — add display metadata and any model-specific reasoning-effort overrides
+3. **`gpd_setup.rs`** — add to `build_config_json()` model list for the desktop fallback config
 
 ## Emergency: Rebase Goes Wrong
 

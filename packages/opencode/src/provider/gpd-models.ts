@@ -72,6 +72,10 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   // supports_xhigh_reasoning_effort=true). `max` not supported. Also note
   // that `tool_choice` is fixed in the same bump.
   "gpt-5.5": ["low", "medium", "high", "xhigh"],
+  // gpt-5.5-pro rejects `low` upstream (probed 2026-04-29):
+  //   "Supported values are: 'medium', 'high', and 'xhigh'."
+  // No `max` either. Floor=medium, like gpt-5.4-pro.
+  "gpt-5.5-pro": ["medium", "high", "xhigh"],
   // gpt-5.4 family: xhigh OK, max rejected upstream by OpenAI.
   "gpt-5.4": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
@@ -144,13 +148,14 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     temperature: true,
     limit: { context: 1_050_000, output: 128_000 },
   },
-  // NB: gpt-5.5-pro intentionally NOT listed. The Pro variant requires
-  // OpenAI's /v1/responses endpoint, and LiteLLM v1.83.7-stable (our
-  // pinned proxy version) doesn't include gpt-5.5-pro in its built-in
-  // registry, so the chat-completions bridge can't redirect to the
-  // responses endpoint at runtime — every call returns 404
-  // "not a chat model". Add when LiteLLM stable picks up the model
-  // (currently only in v1.83.13-nightly).
+  "gpt-5.5-pro": {
+    name: "GPT-5.5 Pro",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_050_000, output: 128_000 },
+  },
   "gpt-5.4": {
     name: "GPT-5.4",
     tool_call: true,

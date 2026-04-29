@@ -84,13 +84,15 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 - **Master key:** `LITELLM_MASTER_KEY` (in Railway env vars — starts with `sk-`)
 - **Railway project:** `https://railway.com/project/0ddad766-1ee1-44ed-95c2-f8f7d9cb5515`
 
-### Models (14 total)
+### Models (16 total)
 
 | Provider | Model | LiteLLM model_name |
 |----------|-------|--------------------|
 | Anthropic | Claude Opus 4.6 | `claude-opus-4-6` |
 | Anthropic | Claude Sonnet 4.6 | `claude-sonnet-4-6` |
 | Anthropic | Claude Haiku 4.5 | `claude-haiku-4-5` |
+| OpenAI | GPT-5.5 | `gpt-5.5` |
+| OpenAI | GPT-5.5 Pro | `gpt-5.5-pro` |
 | OpenAI | GPT-5.4 | `gpt-5.4` |
 | OpenAI | GPT-5.4 mini | `gpt-5.4-mini` |
 | OpenAI | GPT-5.4 nano | `gpt-5.4-nano` |
@@ -150,7 +152,7 @@ curl -X POST 'https://litellm-production-46bb.up.railway.app/model/new' \
   }'
 ```
 
-Then add the model to `gpd_setup.rs:provider_config_json()` in the fork so the desktop app knows about it.
+Then add model metadata to `packages/opencode/src/provider/gpd-models.ts` and the desktop fallback list in `gpd_setup.rs:provider_config_json()` so the app shows the correct name, capabilities, limits, and reasoning-effort variants.
 
 ### Railway Environment Variables
 
@@ -301,13 +303,12 @@ curl -X POST 'https://litellm-production-46bb.up.railway.app/model/new' \
   -d '{"model_name": "new-model", "litellm_params": {"model": "provider/model-id", "api_key": "os.environ/PROVIDER_KEY"}, "model_info": {"access_groups": ["all-models"]}}'
 ```
 
-2. **Add to the fork's provider config** (requires rebuild):
+2. **Add to the fork's provider metadata** (requires rebuild):
+   - Edit `packages/opencode/src/provider/gpd-models.ts`
+   - Add display metadata and any model-specific reasoning-effort overrides
    - Edit `packages/desktop/src-tauri/src/gpd_setup.rs` → `provider_config_json()`
    - Add the model to the JSON string with name, capabilities, and limits
    - Commit, push, trigger release
-
-3. **Update `inject-litellm-provider.py`** (for terminal install path):
-   - Add the model to the `PROVIDER_CONFIG` dict
 
 ---
 

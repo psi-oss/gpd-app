@@ -631,34 +631,42 @@ export const SettingsGeneral: Component = () => {
       abortAllPending()
       try {
         const key = platform.readGpdKey ? await platform.readGpdKey() : null
-        if (!key) {
-          throw new Error(language.t("settings.account.revokeConsent.errorNoKey"))
-        }
-        const res = await fetch(
-          "https://litellm-production-46bb.up.railway.app/gpd/tos-revoke",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${key}`,
-              "Content-Type": "application/json",
+        // Only POST a server-side revocation row when we actually hold a
+        // key. Without one we can't authenticate to /gpd/tos-revoke, but
+        // we must still let the user out of the main IDE — otherwise the
+        // button is dead in exactly the desync state it's meant to fix
+        // (local "signed in" + auth.json empty). In that desync state
+        // there is no provable current acceptance from this device tied
+        // to a real user_id anyway, so skipping the audit row is correct
+        // — the local wipe + reload sends them back to the welcome
+        // screen where a fresh acceptance will be recorded properly.
+        if (key) {
+          const res = await fetch(
+            "https://litellm-production-46bb.up.railway.app/gpd/tos-revoke",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${key}`,
+                "Content-Type": "application/json",
+              },
+              body: "{}",
             },
-            body: "{}",
-          },
-        )
-        if (!res.ok) {
-          let detail = ""
-          try {
-            const body = (await res.json()) as { detail?: string }
-            detail = body.detail ?? ""
-          } catch {
-            /* non-JSON */
-          }
-          throw new Error(
-            language.t("settings.account.revokeConsent.errorHttp", {
-              status: res.status,
-              detail: detail ? `: ${detail}` : "",
-            }),
           )
+          if (!res.ok) {
+            let detail = ""
+            try {
+              const body = (await res.json()) as { detail?: string }
+              detail = body.detail ?? ""
+            } catch {
+              /* non-JSON */
+            }
+            throw new Error(
+              language.t("settings.account.revokeConsent.errorHttp", {
+                status: res.status,
+                detail: detail ? `: ${detail}` : "",
+              }),
+            )
+          }
         }
         // Delete the GPD entry from auth.json on disk before clearing
         // localStorage. Without this step the LiteLLM virtual key

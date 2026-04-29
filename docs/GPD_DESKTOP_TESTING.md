@@ -327,7 +327,7 @@ For each MCP server, verify:
    - Verify GPD provider is listed and connected
    - Verify no other providers show (only GPD)
 5. **Models tab:**
-   - Verify all 14 models are listed
+   - Verify all 16 models are listed
    - Change default model — verify it sticks across sessions
 6. **MCP servers:**
    - Verify all 8 servers listed

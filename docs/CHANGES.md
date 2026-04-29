@@ -1,5 +1,14 @@
 # GPD Desktop App — Changes Log
 
+## GPT-5.5 Pro Model Enablement (2026-04-29)
+
+**Date:** 2026-04-29
+**Changes:**
+- Added `gpt-5.5-pro` to GPD provider metadata, desktop fallback config, distribution docs, and release test expectations.
+- Added the production LiteLLM DB model row for `gpt-5.5-pro` in the `all-models` and `gpd-chat` access groups.
+- Set the GPD reasoning-effort picker to `medium`, `high`, and `xhigh`; direct OpenAI probe rejects `low` for this model.
+- Overrode production LiteLLM pricing for this row because the pinned `v1.83.14.rc.1` cost map has stale GPT-5.5 Pro prices.
+
 ## GPD Home Path Unification + LiteLLM Pin Bump (2026-04-27)
 
 **Date:** 2026-04-27
