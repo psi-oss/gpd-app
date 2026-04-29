@@ -41,5 +41,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Self-test FIRST: every gate must report 0 fails on a clean
+      # fixture and exactly the expected fail on a targeted dirty
+      # fixture. Catches gate-self-bugs (e.g. the heredoc-arg bug
+      # in gate 4 that false-positived on every PR for one push)
+      # before the gate is ever pointed at real source.
+      - name: Self-test the static gates
+        run: bash scripts/test-installer-static.sh
+
       - name: Run installer static gates
         run: bash scripts/check-installer-static.sh

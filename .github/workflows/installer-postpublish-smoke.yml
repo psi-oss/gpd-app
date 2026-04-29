@@ -96,6 +96,29 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
+      # Hostile-env baseline (Windows only). GHA's hosted Windows
+      # runners default to ExecutionPolicy=Unrestricted, but real user
+      # machines default to Restricted. uv's PowerShell installer
+      # spawns a child `powershell -File ...` that re-checks
+      # ExecutionPolicy — under Restricted it aborts mid-install with
+      # "PowerShell requires an execution policy in [Unrestricted,
+      # RemoteSigned, Bypass] to run". Match a real user's environment
+      # so this entire class of regression fails CI instead of
+      # shipping. Process scope = no admin, no persist; CurrentUser
+      # is what `Set-ExecutionPolicy` writes by default and what
+      # users actually have.
+      - name: Set ExecutionPolicy=Restricted (mimic real Windows user default)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Restricted -Force
+          $effective = Get-ExecutionPolicy -Scope CurrentUser
+          Write-Host "CurrentUser ExecutionPolicy = $effective"
+          if ($effective -ne 'Restricted') {
+            throw "Failed to set ExecutionPolicy to Restricted (got $effective)"
+          }
+
       - name: Run installer end-to-end (POSIX)
         if: matrix.shell == 'bash'
         shell: bash
