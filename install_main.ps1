@@ -222,9 +222,12 @@ function Write-Banner {
 }
 
 function Write-SuccessBanner {
-    # Detect the desktop bundle so the message points at the GUI rather
-    # than the CLI. The NSIS installer drops GPD.exe under
-    # %LOCALAPPDATA%\GPD\GPD.exe (per-user install).
+    # NSIS drops GPD.exe under %LOCALAPPDATA%\GPD\GPD.exe (per-user
+    # install). We always install the desktop bundle (x64 binary
+    # runs on ARM via Windows emulation), so the success message
+    # always points at the GUI. If the .exe is somehow missing
+    # (download skipped, network failure handled non-fatally), fall
+    # back to telling the user how to invoke the CLI wrapper.
     $gpdExePath = Join-Path $env:LOCALAPPDATA "GPD\GPD.exe"
     $hasDesktop = Test-Path $gpdExePath
 
@@ -237,8 +240,9 @@ function Write-SuccessBanner {
         Write-Host " app from the Start menu to get started."
         Write-Host "  First launch walks you through TOS acceptance + your PSI key." -ForegroundColor DarkGray
     } else {
-        Write-Host "  Start a new session:  " -NoNewline
-        Write-Host "gpd" -ForegroundColor White
+        Write-Host "  GPD desktop app NOT installed at $gpdExePath." -ForegroundColor Red
+        Write-Host "  The desktop installer step failed earlier. Re-run the installer or open" -ForegroundColor Red
+        Write-Host "  an issue at https://github.com/psi-oss/gpd-app/issues with the log above." -ForegroundColor Red
     }
     Write-Host ""
     Write-Host "  Installation directory: $GpdHome" -ForegroundColor DarkGray
@@ -412,9 +416,18 @@ function Get-GpdLatestTag {
 function Install-GpdDesktop {
     param([string]$Arch)
 
+    # We ship only the x64 NSIS installer today. On Windows 11 ARM
+    # the x64 setup.exe + the bundled GPD.exe both run transparently
+    # via the OS-level x64 emulation layer (a Microsoft-supported
+    # path; see https://learn.microsoft.com/en-us/windows/arm/overview).
+    # That's strictly better UX than skipping the desktop app — ARM
+    # users still get the full GUI, and we drop the "Start a new
+    # session: gpd" CLI-only fallback message that confused users.
+    # The day Tauri's arm64-pc-windows-msvc target is GA we can flip
+    # this to install a native ARM bundle and short-circuit the
+    # emulation.
     if ($Arch -ne "x64") {
-        Write-Warn "GPD desktop .exe only available for x64 - skipping."
-        return $false
+        Write-Log "Installing x64 GPD desktop app on $Arch (runs via Windows x64 emulation)..."
     }
 
     # Tauri NSIS per-user install path. The default is %LOCALAPPDATA%\GPD\
@@ -893,7 +906,7 @@ function Read-LiteLlmKey {
         # interactive prompt for users who want litellm.env populated
         # before ever opening the desktop app.
         if (-not $PromptKey) {
-            Write-Log "Deferring PSI key entry to the desktop welcome screen (set `$env:GPD_API_KEY before install or pass -PromptKey to enter it now)."
+            # Silent. Welcome screen captures the key on first launch.
             return
         }
         if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
@@ -1183,24 +1196,24 @@ function Invoke-GpdInstall {
     }
 
     # Step 1: git + LaTeX (install first so later steps see them on PATH)
-    Write-Log "Step 1/7: Installing git and LaTeX..."
+    Write-Log "Step 1/6: Installing git and LaTeX..."
     Install-Git
     Install-LaTeX
     Write-Host ""
 
     # Step 2: GPD desktop + CLI binary
-    Write-Log "Step 2/7: Installing GPD desktop app and CLI..."
+    Write-Log "Step 2/6: Installing GPD desktop app and CLI..."
     Install-GpdDesktop -Arch $arch | Out-Null
     Install-OpenCode -Arch $arch
     Write-Host ""
 
     # Step 3: Python
-    Write-Log "Step 3/7: Ensuring Python ${RequiredPythonMajor}.${RequiredPythonMinor}+..."
+    Write-Log "Step 3/6: Ensuring Python ${RequiredPythonMajor}.${RequiredPythonMinor}+..."
     $python = Get-Python -Arch $arch
     Write-Host ""
 
     # Step 4: Venv + GPD package
-    Write-Log "Step 4/7: Installing GPD package..."
+    Write-Log "Step 4/6: Installing GPD package..."
     New-GpdVenv -PythonPath $python
     Install-Gpd
     # Two-step liveness + import probe. Must pass before we proceed;
@@ -1208,18 +1221,21 @@ function Invoke-GpdInstall {
     Test-GpdInstall
     Write-Host ""
 
-    # Step 5: PSI key
-    Write-Log "Step 5/7: Configuring PSI key..."
+    # PSI key — silent in the default-skip path. Only logs/prompts when
+    # $env:GPD_API_KEY is preset or -PromptKey was passed; otherwise we
+    # rely on the desktop welcome screen to capture + validate the key
+    # on first launch. Removed from the visible step sequence so users
+    # don't see a phantom "Configuring PSI key" header that does
+    # nothing.
     Read-LiteLlmKey
-    Write-Host ""
 
-    # Step 6: Wrapper scripts
-    Write-Log "Step 6/7: Creating gpd command..."
+    # Step 5: Wrapper scripts
+    Write-Log "Step 5/6: Creating gpd command..."
     New-GpdWrappers
     Write-Host ""
 
-    # Step 7: PATH
-    Write-Log "Step 7/7: Configuring PATH..."
+    # Step 6: PATH
+    Write-Log "Step 6/6: Configuring PATH..."
     Add-GpdToPath
     Write-Host ""
 
