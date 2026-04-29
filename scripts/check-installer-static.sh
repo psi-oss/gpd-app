@@ -113,11 +113,43 @@ fi
 # install_main.ps1 was hit by this and is now `throw`. Don't let it
 # regress.
 #
-# Allow `exit` inside a `function ... { ... }` body. Heuristic:
-# track brace depth from any line opening a `function ... {` and
-# only flag bare `exit N` when depth is 0.
+# Prefer PowerShell's own AST when available. Fallback to a broad
+# line-level `exit\b` heuristic for local machines without pwsh.
 prev_fails=$fails
-check_top_level_exit() {
+check_top_level_exit_ast() {
+  local f="$1"
+  pwsh -NoProfile -File - "$f" <<'PS'
+$ErrorActionPreference = "Stop"
+$path = $args[0]
+$tokens = $null
+$errs = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs)
+if ($errs) {
+  foreach ($err in $errs) {
+    Write-Host ("{0}:{1}:{2}: {3}" -f $path, $err.Extent.StartLineNumber, $err.Extent.StartColumnNumber, $err.Message)
+  }
+  exit 2
+}
+$bad = $ast.FindAll({
+  param($node)
+  if (-not ($node -is [System.Management.Automation.Language.ExitStatementAst])) { return $false }
+  $parent = $node.Parent
+  while ($null -ne $parent) {
+    if ($parent -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $false }
+    if ($parent -is [System.Management.Automation.Language.ScriptBlockAst]) {
+      return $parent -eq $ast.EndBlock -or $parent -eq $ast
+    }
+    $parent = $parent.Parent
+  }
+  return $true
+}, $true)
+foreach ($node in $bad) {
+  Write-Host ("{0}:{1}:{2}: {3}" -f $path, $node.Extent.StartLineNumber, $node.Extent.StartColumnNumber, $node.Extent.Text)
+}
+if ($bad.Count -gt 0) { exit 1 }
+PS
+}
+check_top_level_exit_fallback() {
   local f="$1"
   awk '
     BEGIN { fn_depth = 0 }
@@ -140,7 +172,7 @@ check_top_level_exit() {
           }
         }
       }
-      if (fn_depth == 0 && line ~ /^[[:space:]]*exit[[:space:]]+[0-9]/) {
+      if (fn_depth == 0 && line ~ /^[[:space:]]*exit([[:space:]]|$)/) {
         printf "%s:%d: %s\n", FILENAME, NR, line
         bad = 1
       }
@@ -150,7 +182,14 @@ check_top_level_exit() {
 }
 for f in "${SERVED_PS1[@]}"; do
   [[ -f "$f" ]] || continue
-  if ! out="$(check_top_level_exit "$f")"; then
+  if command -v pwsh >/dev/null 2>&1; then
+    out="$(check_top_level_exit_ast "$f" 2>&1)"
+    rc=$?
+  else
+    out="$(check_top_level_exit_fallback "$f" 2>&1)"
+    rc=$?
+  fi
+  if [[ $rc -ne 0 ]]; then
     fail "top-level \`exit\` (kills host under iex/scriptblock) in $f:"
     echo "$out" | sed 's/^/  /'
   fi
@@ -170,80 +209,72 @@ done
 [[ $fails -eq $prev_fails ]] && ok "POSIX bash installers parse cleanly"
 
 # ── Gate 6: manifest schema round-trip ────────────────────────────────────
-# The macOS uninstaller parses the gpd-file-manifest.json that the
-# python writer emits. Schema drifted from list-of-strings to dict-of-
-# path→sha256 + sibling list `opencode_generated_command_files`, and
-# the bash reader silently ignored the dict shape, leaving 95 stale
-# markers on disk. Fixture-test both shapes against the actual reader.
+# The uninstaller parses the gpd-file-manifest.json that the python
+# writer emits. Schema drifted from list-of-strings to dict-of-path→sha256
+# + sibling list `opencode_generated_command_files`, and the bash reader
+# silently ignored the dict shape, leaving stale markers on disk. Run the
+# real uninstaller against temp HOME/XDG dirs so this gate exercises the
+# user-facing code path, not a mirrored parser.
 if command -v python3 >/dev/null 2>&1; then
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
   prev_fails=$fails
 
-  base_dir="$tmp_dir/manifest-fixture"
-  mkdir -p "$base_dir/command" "$base_dir/agents"
-  : > "$base_dir/command/gpd-fixture.md"
-  : > "$base_dir/agents/gpd-fixture.md"
+  run_manifest_fixture() {
+    local shape="$1"
+    local home="$tmp_dir/home-$shape"
+    local config="$home/.config"
+    local data="$home/.local/share"
+    local base="$config/opencode"
+    mkdir -p "$base/command" "$base/agents" "$home/.gpd"
+    : > "$base/command/gpd-fixture.md"
+    : > "$base/agents/gpd-fixture.md"
 
-  for shape in list dict dict-with-extras; do
     case "$shape" in
       list)
-        cat > "$base_dir/gpd-file-manifest.json" <<'JSON'
+        cat > "$base/gpd-file-manifest.json" <<'JSON'
 {"version":1,"files":["command/gpd-fixture.md","agents/gpd-fixture.md"]}
 JSON
         ;;
       dict)
-        cat > "$base_dir/gpd-file-manifest.json" <<'JSON'
+        cat > "$base/gpd-file-manifest.json" <<'JSON'
 {"version":1,"files":{"command/gpd-fixture.md":"deadbeef","agents/gpd-fixture.md":"feedface"}}
 JSON
         ;;
       dict-with-extras)
-        cat > "$base_dir/gpd-file-manifest.json" <<'JSON'
+        cat > "$base/gpd-file-manifest.json" <<'JSON'
 {"version":1,"files":{"agents/gpd-fixture.md":"feedface"},"opencode_generated_command_files":["command/gpd-fixture.md"]}
 JSON
         ;;
     esac
-    : > "$base_dir/command/gpd-fixture.md"
-    : > "$base_dir/agents/gpd-fixture.md"
-    paths="$(python3 - "$base_dir/gpd-file-manifest.json" "$base_dir" <<'PY'
-import json, os, sys
-manifest_path = sys.argv[1]
-base_dir = sys.argv[2]
-with open(manifest_path) as f:
-    data = json.load(f)
-paths = []
-if isinstance(data, dict):
-    files = data.get("files")
-    if isinstance(files, dict):
-        paths.extend(files.keys())
-    elif isinstance(files, list):
-        paths.extend(files)
-    extras = data.get("opencode_generated_command_files")
-    if isinstance(extras, list):
-        paths.extend(extras)
-elif isinstance(data, list):
-    paths.extend(data)
-out = []
-seen = set()
-for entry in paths:
-    if not isinstance(entry, str) or not entry:
-        continue
-    p = entry if os.path.isabs(entry) else os.path.join(base_dir, entry)
-    if p in seen:
-        continue
-    seen.add(p)
-    out.append(p)
-print("\n".join(out))
-PY
-)"
-    expected=2
-    actual="$(printf '%s\n' "$paths" | grep -c '/gpd-fixture\.md$' || true)"
-    if [[ "$actual" != "$expected" ]]; then
-      fail "manifest shape '$shape' parsed $actual paths, expected $expected"
+
+    local out rc remaining
+    out="$(
+      HOME="$home" \
+      GPD_HOME="$home/.gpd" \
+      XDG_CONFIG_HOME="$config" \
+      XDG_DATA_HOME="$data" \
+      bash install-gpd/uninstall --yes 2>&1
+    )"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      fail "real uninstall failed for manifest shape '$shape' (exit $rc):"
+      echo "$out" | sed 's/^/  /'
+      return
     fi
+
+    remaining="$(find "$base" -path "$base/gpd-file-manifest.json" -o -path "$base/command/gpd-fixture.md" -o -path "$base/agents/gpd-fixture.md" 2>/dev/null)"
+    if [[ -n "$remaining" ]]; then
+      fail "real uninstall left manifest artifacts for shape '$shape':"
+      echo "$remaining" | sed 's/^/  /'
+    fi
+  }
+
+  for shape in list dict dict-with-extras; do
+    run_manifest_fixture "$shape"
   done
 
-  [[ $fails -eq $prev_fails ]] && ok "manifest list/dict/extras shapes all parse"
+  [[ $fails -eq $prev_fails ]] && ok "real uninstall removes manifest list/dict/extras artifacts"
 else
   echo "SKIP: python3 missing — skipping manifest shape gate"
 fi

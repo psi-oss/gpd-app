@@ -139,26 +139,21 @@ $GpdPackageVersion = if ($env:GPD_PACKAGE_VERSION) { $env:GPD_PACKAGE_VERSION } 
 
 $LiteLlmProxyUrl = "https://litellm-production-46bb.up.railway.app"
 
-# Python-build-standalone: portable, relocatable CPython builds from Astral.
-$PbsTag    = "20260414"
-$PbsPython = "3.13.13"
-$PbsBaseUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/$PbsTag"
-
-# Pinned SHA256 of each PBS tarball we might download. Verified against
-# the file we actually pull over the wire; mismatch aborts the install.
-# Regenerate via install-gpd/scripts/verify-pbs-hashes.sh when bumping
-# $PbsTag or $PbsPython. Values sourced from upstream SHA256SUMS:
-# https://github.com/astral-sh/python-build-standalone/releases/download/20260414/SHA256SUMS
+# Python provisioning is delegated to uv. uv ships its own per-platform
+# installer (`irm https://astral.sh/uv/install.ps1 | iex`) that always
+# resolves the latest stable uv binary for the host triple, including
+# x86_64-pc-windows-msvc + aarch64-pc-windows-msvc + i686-pc-windows-msvc.
+# `uv python install <X.Y>` then fetches the matching python-build-
+# standalone tarball via uv's internal manifest, which always tracks
+# the latest patch release and supports every triple uv runs on. By
+# delegating, we drop the hand-pinned $PbsSha256 hashtable + the
+# bespoke tar extractor + the per-tag URL composition.
 #
-# Bumped from 20250409/3.13.3 because that release ships no
-# aarch64-pc-windows-msvc build (Windows ARM users hit
-# "Download failed: ... Not Found" mid-install). 20260414 adds the
-# aarch64-pc-windows-msvc triple as a first-class build, fixing
-# Surface / Snapdragon X / Windows ARM VMs.
-$PbsSha256 = @{
-    "x86_64-pc-windows-msvc"  = "ee0cb26453d6e025d36502d765c1639c34830355e46ab3ad31c0360bc4cd9b79"
-    "aarch64-pc-windows-msvc" = "586ba71c75f341e1d111399b7f719ae784dc11e8672e93e017388f28684226d0"
-}
+# Required Python minor release. uv resolves the latest patch release
+# matching this minor version (3.13.13 today via PBS 20260414). We do
+# not pin a patch number — uv refreshes its manifest when astral-sh
+# ships a new build, so installer reruns pull the latest fixes for free.
+$RequiredPythonMinorRelease = "3.13"
 
 # Sentinel constants for any user-environment change we make. Phase 2's
 # uninstaller keys off the exact same strings — do not change wording or
@@ -566,6 +561,46 @@ function Find-SystemPython {
     return $null
 }
 
+# Install uv into a private prefix so we don't pollute the user's
+# system PATH. Idempotent: if uv.exe is present and runnable we don't
+# redownload. astral-sh's installer respects $env:UV_INSTALL_DIR +
+# $env:INSTALLER_NO_MODIFY_PATH so we keep the install fully scoped.
+function Install-UvBootstrap {
+    $uvDir = Join-Path $GpdHome "uv-bootstrap"
+    $uvBin = Join-Path $uvDir "uv.exe"
+
+    if ((Test-Path $uvBin)) {
+        try {
+            & $uvBin --version | Out-Null
+            if ($LASTEXITCODE -eq 0) { return $uvBin }
+        } catch { }
+    }
+
+    if (-not (Test-Path $uvDir)) {
+        New-Item -ItemType Directory -Path $uvDir -Force | Out-Null
+    }
+
+    Write-Log "Installing uv (manages app-local Python)..."
+    $env:UV_INSTALL_DIR = $uvDir
+    $env:INSTALLER_NO_MODIFY_PATH = "1"
+    try {
+        # astral-sh's PowerShell installer is itself ASCII-clean and
+        # does its own UTF-8 fetch dance, so piping through iex is
+        # safe even on PS 5.1.
+        Invoke-Expression (Invoke-RestMethod "https://astral.sh/uv/install.ps1")
+    } catch {
+        Stop-WithError "uv installer failed: $_"
+    } finally {
+        Remove-Item Env:UV_INSTALL_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:INSTALLER_NO_MODIFY_PATH -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-Path $uvBin)) {
+        Stop-WithError "uv installer ran but $uvBin is missing."
+    }
+    return $uvBin
+}
+
 function Install-LocalPython {
     param([string]$Arch)
 
@@ -576,221 +611,89 @@ function Install-LocalPython {
         return $pythonBin
     }
 
-    # Map architecture to python-build-standalone triple
-    $triple = switch ($Arch) {
-        "x64"   { "x86_64-pc-windows-msvc" }
-        "arm64" { "aarch64-pc-windows-msvc" }
-        default { Stop-WithError "No python-build-standalone build for windows/${Arch}" }
+    # Provision Python via uv. uv resolves the host triple
+    # (incl. aarch64-pc-windows-msvc on Windows ARM) + the latest
+    # patch release of $RequiredPythonMinorRelease against its own
+    # manifest of python-build-standalone tarballs. Replaces our
+    # hand-pinned PBS hash table + bespoke tar extractor.
+    $uvBin = Install-UvBootstrap
+    $versionsDir = Join-Path $GpdHome "python-versions"
+    if (-not (Test-Path $versionsDir)) {
+        New-Item -ItemType Directory -Path $versionsDir -Force | Out-Null
     }
 
-    $filename = "cpython-${PbsPython}+${PbsTag}-${triple}-install_only.tar.gz"
-    $url = "${PbsBaseUrl}/${filename}"
-
-    Write-Log "Downloading Python ${PbsPython} (app-local, not system-wide)..."
-
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gpd-python-$(Get-Random)"
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-
-    # Atomic extract targets — we stage into .new, verify, then swap.
-    # Never touch the existing $GpdPythonDir until the new tree is
-    # proven runnable. If anything fails, roll back to .old (or leave
-    # the old tree in place if it exists).
-    $newDir = "$GpdPythonDir.new"
-    $oldDir = "$GpdPythonDir.old"
-    if (Test-Path $newDir) { Remove-Item -Path $newDir -Recurse -Force }
-    if (Test-Path $oldDir) { Remove-Item -Path $oldDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $newDir -Force | Out-Null
-
+    Write-Log "Installing Python $RequiredPythonMinorRelease via uv (app-local)..."
+    $env:UV_PYTHON_INSTALL_DIR = $versionsDir
     try {
-        $archive = Join-Path $tmpDir $filename
-        Invoke-Download -Url $url -Destination $archive
-
-        # SHA256 pin check BEFORE we invest any time in extraction.
-        # Mismatch aborts before we touch the live tree.
-        $expected = $PbsSha256[$triple]
-        if (-not $expected) {
-            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-            Stop-WithError "No PBS SHA256 pin for triple '$triple'. Update `$PbsSha256."
-        }
-        if (-not (Test-FileSha256 -Path $archive -Expected $expected)) {
-            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-            Stop-WithError "PBS checksum mismatch -- suspected tampering or stale pin. Aborting."
-        }
-
-        Write-Log "Extracting Python to $newDir..."
-
-        # Use tar (available on Windows 10+) to extract .tar.gz
-        $tarAvailable = Get-Command "tar" -ErrorAction SilentlyContinue
-        if ($tarAvailable) {
-            & tar -xzf $archive -C $newDir --strip-components=1
-            if ($LASTEXITCODE -ne 0) {
-                Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                Stop-WithError "Python extract failed"
-            }
-        }
-        else {
-            # Fallback: decompress gzip then extract tar using .NET
-            Write-Log "tar not found, using .NET extraction fallback..."
-
-            $tarFile = Join-Path $tmpDir "python.tar"
-
-            # Decompress gzip
-            $gzipStream = [System.IO.File]::OpenRead($archive)
-            $decompStream = New-Object System.IO.Compression.GZipStream($gzipStream, [System.IO.Compression.CompressionMode]::Decompress)
-            $tarStream = [System.IO.File]::Create($tarFile)
-            $decompStream.CopyTo($tarStream)
-            $tarStream.Close()
-            $decompStream.Close()
-            $gzipStream.Close()
-
-            # Extract tar -- minimal tar reader for install_only archives
-            # These archives have a single top-level directory (python/) that we strip
-            $stream = [System.IO.File]::OpenRead($tarFile)
-            $buffer = New-Object byte[] 512
-            while ($true) {
-                $read = $stream.Read($buffer, 0, 512)
-                if ($read -lt 512) { break }
-
-                # Check for end-of-archive (two 512-byte blocks of zeros)
-                $allZero = $true
-                for ($i = 0; $i -lt 512; $i++) {
-                    if ($buffer[$i] -ne 0) { $allZero = $false; break }
-                }
-                if ($allZero) { break }
-
-                # Parse header: name at offset 0 (100 bytes), size at offset 124 (12 bytes), typeflag at offset 156
-                $nameBytes = $buffer[0..99]
-                $nameEnd = [Array]::IndexOf($nameBytes, [byte]0)
-                if ($nameEnd -lt 0) { $nameEnd = 100 }
-                $name = [System.Text.Encoding]::ASCII.GetString($nameBytes, 0, $nameEnd).Trim()
-
-                $sizeStr = [System.Text.Encoding]::ASCII.GetString($buffer[124..135]).Trim().TrimEnd([char]0)
-                $size = if ($sizeStr) { [Convert]::ToInt64($sizeStr, 8) } else { 0 }
-
-                $typeFlag = [char]$buffer[156]
-
-                # Strip first path component (e.g., "python/")
-                $strippedName = $name
-                $slashIdx = $name.IndexOf("/")
-                if ($slashIdx -ge 0) {
-                    $strippedName = $name.Substring($slashIdx + 1)
-                }
-                else {
-                    # Top-level entry with no slash -- skip
-                    $blocks = [math]::Ceiling($size / 512)
-                    if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                if ([string]::IsNullOrWhiteSpace($strippedName)) {
-                    $blocks = [math]::Ceiling($size / 512)
-                    if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                # Zip-slip guard: reject any `..` or empty segment in the
-                # archive's stripped entry path BEFORE we Join-Path, then
-                # re-check that the resolved absolute path still lives
-                # inside $newDir. Defense in depth for the case where the
-                # SHA256 pin drifts away from a known-good PBS archive.
-                $entrySegments = $strippedName -split '[/\\]'
-                foreach ($seg in $entrySegments) {
-                    if ($seg -eq ".." -or $seg -eq "") {
-                        Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                        Stop-WithError "Refusing to extract archive entry with traversal segment: $strippedName"
-                    }
-                }
-
-                $outPath = Join-Path $newDir $strippedName.Replace("/", "\")
-                $newDirFull = [System.IO.Path]::GetFullPath($newDir)
-                $outPathFull = [System.IO.Path]::GetFullPath($outPath)
-                $newDirWithSep = $newDirFull.TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
-                if (-not (
-                    $outPathFull.Equals($newDirFull, [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $outPathFull.StartsWith($newDirWithSep, [System.StringComparison]::OrdinalIgnoreCase)
-                )) {
-                    Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-                    Stop-WithError "Refusing to extract archive entry outside target dir: $strippedName"
-                }
-
-                if ($typeFlag -eq "5" -or $name.EndsWith("/")) {
-                    # Directory
-                    New-Item -ItemType Directory -Path $outPath -Force | Out-Null
-                }
-                elseif ($typeFlag -eq "0" -or $typeFlag -eq [char]0) {
-                    # Regular file
-                    $parentDir = Split-Path $outPath -Parent
-                    if (-not (Test-Path $parentDir)) {
-                        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-                    }
-
-                    $fileStream = [System.IO.File]::Create($outPath)
-                    $remaining = $size
-                    $readBuf = New-Object byte[] 65536
-                    while ($remaining -gt 0) {
-                        $toRead = [math]::Min($remaining, 65536)
-                        $bytesRead = $stream.Read($readBuf, 0, $toRead)
-                        $fileStream.Write($readBuf, 0, $bytesRead)
-                        $remaining -= $bytesRead
-                    }
-                    $fileStream.Close()
-
-                    # Skip padding to next 512-byte boundary
-                    $pad = (512 - ($size % 512)) % 512
-                    if ($pad -gt 0) { [void]$stream.Seek($pad, [System.IO.SeekOrigin]::Current) }
-                    continue
-                }
-
-                # Skip data blocks for this entry
-                $blocks = [math]::Ceiling($size / 512)
-                if ($blocks -gt 0) { [void]$stream.Seek($blocks * 512, [System.IO.SeekOrigin]::Current) }
-            }
-            $stream.Close()
-        }
-
-        # Liveness probe against the staged tree before we swap it into
-        # place. Catches wrong-arch archives, missing CRT DLLs, etc.
-        $newPython = Join-Path $newDir "python.exe"
-        if (-not (Test-Path $newPython)) {
-            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-            Stop-WithError "Python extract failed -- $newPython not found"
-        }
-        # Liveness probe: `-c "pass"` is a minimal valid Python program.
-        # We can't use `-c ""` here because PowerShell 5.1 strips
-        # empty-string args before passing them to native commands, so
-        # python would see `-c` with no value and error out.
-        & $newPython -c "pass" 2>$null | Out-Null
+        & $uvBin python install $RequiredPythonMinorRelease 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
-            Remove-Item -Path $newDir -Recurse -Force -ErrorAction SilentlyContinue
-            Stop-WithError "Extracted Python is not runnable"
+            Stop-WithError "uv python install $RequiredPythonMinorRelease failed (exit $LASTEXITCODE)"
         }
-
-        # Swap: move old aside, then new into place. Roll back to the old
-        # tree if the move fails so the user isn't left with no Python.
-        if (Test-Path $GpdPythonDir) {
-            Move-Item -Path $GpdPythonDir -Destination $oldDir -Force
-        }
-        try {
-            Move-Item -Path $newDir -Destination $GpdPythonDir -Force
-        } catch {
-            if (Test-Path $oldDir) {
-                Move-Item -Path $oldDir -Destination $GpdPythonDir -Force -ErrorAction SilentlyContinue
-            }
-            Stop-WithError "Python swap failed: $_"
-        }
-        if (Test-Path $oldDir) {
-            Remove-Item -Path $oldDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        # `uv python find` prints the absolute path to python.exe for
+        # the requested version. `--python-preference only-managed`
+        # forces it to consider only uv-managed installs (not whatever
+        # system Python may also satisfy the version).
+        $resolvedPython = & $uvBin python find $RequiredPythonMinorRelease --python-preference only-managed 2>$null
+    } finally {
+        Remove-Item Env:UV_PYTHON_INSTALL_DIR -ErrorAction SilentlyContinue
     }
-    finally {
-        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    if (-not $resolvedPython -or -not (Test-Path $resolvedPython)) {
+        Stop-WithError "uv could not locate the installed Python $RequiredPythonMinorRelease interpreter"
+    }
+
+    # Liveness probe before we publish the symlink. Empty-string args
+    # get stripped by PS 5.1 before native invoke, so we use `pass`.
+    & $resolvedPython -c "pass" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "uv-installed Python is not runnable: $resolvedPython"
+    }
+
+    # uv lays out Pythons under
+    # <versions>\cpython-3.13.13-x86_64-pc-windows-msvc-none\python.exe
+    # so the prefix dir is the parent of the resolved python.exe.
+    $prefix = Split-Path -Parent $resolvedPython
+
+    # Atomic swap: stage a directory junction (mklink /J) at
+    # $GpdPythonDir.new pointing at the uv-managed prefix, move the
+    # old tree aside, then move the junction into place. Junctions
+    # behave like symlinks for filesystem traversal but don't require
+    # SeCreateSymbolicLinkPrivilege (admin-only by default on Windows).
+    $newPath = "$GpdPythonDir.new"
+    $oldPath = "$GpdPythonDir.old"
+    if (Test-Path $newPath) { Remove-Item -Path $newPath -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $oldPath) { Remove-Item -Path $oldPath -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # `cmd /c mklink /J <link> <target>` is the most reliable junction
+    # creation API across PS 5.1 + 7. New-Item -ItemType Junction works
+    # on PS 5.1 too but emits noisy verbose output; mklink stays quiet.
+    & cmd /c mklink /J "$newPath" "$prefix" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "Could not create junction $newPath -> $prefix"
+    }
+
+    if (Test-Path $GpdPythonDir) {
+        Move-Item -Path $GpdPythonDir -Destination $oldPath -Force
+    }
+    try {
+        Move-Item -Path $newPath -Destination $GpdPythonDir -Force
+    } catch {
+        # Roll back so the user isn't left without a Python.
+        if (Test-Path $oldPath) {
+            Move-Item -Path $oldPath -Destination $GpdPythonDir -Force -ErrorAction SilentlyContinue
+        }
+        Stop-WithError "Python junction swap failed: $_"
+    }
+    if (Test-Path $oldPath) {
+        Remove-Item -Path $oldPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     if (-not (Test-Path $pythonBin)) {
-        Stop-WithError "Python extraction failed -- $pythonBin not found"
+        Stop-WithError "Python install failed -- $pythonBin not found"
     }
 
-    Write-Success "Python ${PbsPython} installed to $GpdPythonDir"
+    $installedVer = (& $pythonBin --version 2>&1) -replace '^Python\s+',''
+    Write-Success "Python $installedVer installed via uv to $GpdPythonDir"
     return $pythonBin
 }
 

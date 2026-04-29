@@ -17,6 +17,7 @@ on:
       - "README.md"
       - "scripts/check-installer-static.sh"
       - ".github/workflows/installer-lint.yml"
+      - ".github/workflows/gpd-sync-installer-to-pages.yml"
   push:
     branches: [gpd]
     paths:
@@ -24,6 +25,7 @@ on:
       - "README.md"
       - "scripts/check-installer-static.sh"
       - ".github/workflows/installer-lint.yml"
+      - ".github/workflows/gpd-sync-installer-to-pages.yml"
   workflow_dispatch:
 
 permissions:

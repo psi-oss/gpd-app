@@ -53,26 +53,30 @@ GPD_PACKAGE_VERSION="${GPD_PACKAGE_VERSION:-}"
 LITELLM_PROXY_URL="https://litellm-production-46bb.up.railway.app"
 
 # Python-build-standalone: portable, relocatable CPython builds from Astral.
-PBS_TAG="20260414"
-PBS_PYTHON="3.13.13"
-PBS_BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_TAG"
-
-# Pinned SHA256 of each PBS tarball we might download. These are verified
-# against the file we actually pull over the wire; a mismatch aborts the
-# install (tampering, CDN corruption, or stale pin after a retag).
-# Regenerate via install-gpd/scripts/verify-pbs-hashes.sh when bumping
-# PBS_TAG or PBS_PYTHON. Values sourced from upstream SHA256SUMS:
-# https://github.com/astral-sh/python-build-standalone/releases/download/20260414/SHA256SUMS
+# Python provisioning is delegated to uv. uv ships its own per-platform
+# installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`) that
+# always resolves the latest stable uv binary for the host triple —
+# linux-{x86_64,aarch64,arm}-{gnu,musl}, darwin-{x86_64,aarch64},
+# windows-{x86_64,aarch64,i686} — including the Windows ARM64 build
+# that the previous PBS hash-pin approach couldn't reach (the pinned
+# 20250409 release had no aarch64-pc-windows-msvc tarball).
 #
-# Bumped from 20250409/3.13.3 because 20250409 ships no
-# aarch64-pc-windows-msvc build — Windows ARM users (Surface,
-# Snapdragon X) hit "Download failed: ... Not Found" mid-install. The
-# 20260414 release adds aarch64-pc-windows-msvc as a first-class
-# triple, see install_main.ps1's $PbsSha256 hashtable.
-PBS_SHA256_LINUX_X64="e5ec3b2c5693215d153c434ac018e75511b2c4f96d2bce30468a477cb3a89d5e"
-PBS_SHA256_LINUX_ARM64="6a65f68043d7fadcd580415493d2929d1fd686013f9ae44ddbd3a81307ab256d"
-PBS_SHA256_DARWIN_X64="540337412d2c4220e99280f741dbf45c1e3da3a39edaaab20c6ba1d53e1692ef"
-PBS_SHA256_DARWIN_ARM64="c652dad552122cd2e76968ec41c803f8222038169b11310dba0c85928265f5c1"
+# `uv python install <X.Y>` then fetches the matching python-build-
+# standalone tarball via uv's internal manifest, which tracks the
+# latest patch release per Python minor version and supports every
+# triple uv runs on. By delegating, we drop:
+#   - 6 hand-pinned SHA256 hashes (one per supported triple)
+#   - The per-tag URL composition + retry logic
+#   - The custom atomic-swap extract + liveness probe
+#   - The "PBS doesn't ship build for triple X" failure mode
+# uv handles all of that internally and is updated continuously.
+#
+# Required Python version. uv resolves the latest patch release
+# matching this minor (3.13.13 today via PBS 20260414). We don't pin a
+# patch number — uv refreshes its manifest when astral-sh ships a new
+# Python build, so installer reruns pull the latest fixes for free.
+REQUIRED_PYTHON_MINOR_RELEASE="3.13"
+UV_INSTALLER_URL="https://astral.sh/uv/install.sh"
 
 REQUIRED_PYTHON_MAJOR=3
 REQUIRED_PYTHON_MINOR=11
@@ -764,25 +768,33 @@ python_version_ok() {
     (( major > REQUIRED_PYTHON_MAJOR || (major == REQUIRED_PYTHON_MAJOR && minor >= REQUIRED_PYTHON_MINOR) ))
 }
 
-pbs_triple() {
-    case "${os}_${arch}" in
-        linux_x64)    echo "x86_64-unknown-linux-gnu" ;;
-        linux_arm64)  echo "aarch64-unknown-linux-gnu" ;;
-        darwin_x64)   echo "x86_64-apple-darwin" ;;
-        darwin_arm64)  echo "aarch64-apple-darwin" ;;
-        *)            die "No python-build-standalone for ${os}/${arch}" ;;
-    esac
-}
+# Install uv into a private prefix so we don't leak `uv` onto the user's
+# PATH (mirrors the approach the Tauri sidecar already uses with
+# `uv-bundle/`). Idempotent: if the binary is already present and
+# usable we don't redownload. The astral.sh installer respects
+# UV_INSTALL_DIR + INSTALLER_NO_MODIFY_PATH so we can keep the install
+# fully scoped.
+install_uv_bootstrap() {
+    local uv_dir="$GPD_HOME/uv-bootstrap"
+    local uv_bin="$uv_dir/uv"
 
-# Lookup the hardcoded SHA256 for the PBS tarball matching our platform.
-pbs_expected_sha256() {
-    case "${os}_${arch}" in
-        linux_x64)    echo "$PBS_SHA256_LINUX_X64" ;;
-        linux_arm64)  echo "$PBS_SHA256_LINUX_ARM64" ;;
-        darwin_x64)   echo "$PBS_SHA256_DARWIN_X64" ;;
-        darwin_arm64) echo "$PBS_SHA256_DARWIN_ARM64" ;;
-        *)            die "No PBS SHA256 pin for ${os}/${arch}" ;;
-    esac
+    if [[ -x "$uv_bin" ]] && "$uv_bin" --version >/dev/null 2>&1; then
+        echo "$uv_bin"
+        return 0
+    fi
+
+    mkdir -p "$uv_dir"
+    log "Installing uv (manages app-local Python)..."
+    if ! INSTALLER_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$uv_dir" \
+            UV_UNMANAGED_INSTALL="$uv_dir" \
+            sh -c "curl -LsSf '$UV_INSTALLER_URL' | sh" >&2; then
+        die "uv installer failed. Check network connectivity to astral.sh."
+    fi
+
+    if [[ ! -x "$uv_bin" ]]; then
+        die "uv installer ran but $uv_bin is missing. Open an issue with the installer's stderr above."
+    fi
+    echo "$uv_bin"
 }
 
 ensure_python() {
@@ -816,69 +828,62 @@ ensure_python() {
         done
     fi
 
-    # Download standalone Python (always on macOS; Linux only if system
-    # python3 is missing or older than 3.11)
-    log "Installing app-local Python ${PBS_PYTHON} (${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ not found or Mac)"
-    local triple
-    triple="$(pbs_triple)"
-    local filename="cpython-${PBS_PYTHON}+${PBS_TAG}-${triple}-install_only.tar.gz"
-    local url="${PBS_BASE_URL}/${filename}"
+    # Provision app-local Python via uv. uv handles platform detection,
+    # the latest patch release of the requested minor version, and the
+    # download/extract/atomic-swap dance that we used to do by hand.
+    log "Installing app-local Python ${REQUIRED_PYTHON_MINOR_RELEASE} (${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ not found or Mac)"
+    local uv_bin
+    uv_bin="$(install_uv_bootstrap)"
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    local archive="$tmp_dir/$filename"
-    download "$url" "$archive"
+    # Tell uv to install managed Pythons under our app dir, NOT the
+    # default ~/.local/share/uv tree — keeps the install fully scoped
+    # and lets us symlink to a stable $GPD_PYTHON_DIR/bin/python3 that
+    # downstream code already depends on.
+    local uv_versions_dir="$GPD_HOME/python-versions"
+    mkdir -p "$uv_versions_dir"
 
-    # Verify SHA256 against our pinned value BEFORE we touch any on-disk
-    # Python dir. A mismatch here means the CDN handed us something other
-    # than the build we vetted — could be tampering, partial download, or
-    # a stale pin after upstream retagged. Either way, do not extract.
-    local expected actual
-    expected="$(pbs_expected_sha256)"
-    actual="$(compute_sha256 "$archive")" || die "Cannot verify Python checksum: no sha256sum/shasum available"
-    if [[ "$actual" != "$expected" ]]; then
-        rm -rf "$tmp_dir"
-        die "PBS checksum mismatch — suspected tampering or stale pin. Aborting."
+    if ! UV_PYTHON_INSTALL_DIR="$uv_versions_dir" \
+            "$uv_bin" python install "$REQUIRED_PYTHON_MINOR_RELEASE" >&2; then
+        die "uv python install $REQUIRED_PYTHON_MINOR_RELEASE failed"
     fi
 
-    log "Extracting Python to $GPD_PYTHON_DIR..."
-    # Atomic extract + swap: never delete the working Python until the
-    # new one is proven runnable. If any step fails we either stay on the
-    # old tree (if it existed) or leave no tree at all — never a half-
-    # populated one. Failure modes we guard against here:
-    #   1. tar extract errors mid-stream (partial tree)
-    #   2. extracted tree missing/broken python3 binary (bad asset, hash
-    #      matched but something is wrong in our pin table)
-    #   3. mv of new tree into place fails after old was moved aside
-    local new_dir="$GPD_PYTHON_DIR.new"
-    local old_dir="$GPD_PYTHON_DIR.old"
-    rm -rf "$new_dir" "$old_dir"
-    mkdir -p "$new_dir"
-    if ! tar -xzf "$archive" -C "$new_dir" --strip-components=1; then
-        rm -rf "$new_dir" "$tmp_dir"
-        die "Python extract failed"
+    # Resolve the freshly-installed interpreter path. uv prints the
+    # absolute path to python3 for the requested version; we convert
+    # that to the prefix dir (parent of bin/) and symlink it to
+    # $GPD_PYTHON_DIR. Atomic via mv-into-place after the symlink is
+    # built, so we never leave the user with no Python.
+    local resolved_python
+    resolved_python="$(UV_PYTHON_INSTALL_DIR="$uv_versions_dir" \
+        "$uv_bin" python find "$REQUIRED_PYTHON_MINOR_RELEASE" \
+        --python-preference only-managed 2>/dev/null || true)"
+    if [[ -z "$resolved_python" || ! -x "$resolved_python" ]]; then
+        die "uv could not locate the installed Python ${REQUIRED_PYTHON_MINOR_RELEASE} interpreter"
     fi
-    # Liveness probe: spawn the interpreter and run an empty program.
-    # This catches cases where the archive extracted cleanly but the
-    # binary can't execute (wrong arch, missing dynamic loader, etc.).
-    if ! "$new_dir/bin/python3" -c "" 2>/dev/null; then
-        rm -rf "$new_dir" "$tmp_dir"
-        die "Extracted Python is not runnable"
-    fi
-    if [[ -d "$GPD_PYTHON_DIR" ]]; then
-        mv "$GPD_PYTHON_DIR" "$old_dir"
-    fi
-    if ! mv "$new_dir" "$GPD_PYTHON_DIR"; then
-        # Best-effort rollback to the old tree so the user isn't left
-        # with no Python at all.
-        [[ -d "$old_dir" ]] && mv "$old_dir" "$GPD_PYTHON_DIR"
-        rm -rf "$tmp_dir"
-        die "Python swap failed"
-    fi
-    rm -rf "$old_dir" "$tmp_dir"
+    local prefix
+    prefix="$(dirname "$(dirname "$resolved_python")")"
 
-    [[ -x "$python_bin" ]] || die "Python extraction failed"
-    success "Python ${PBS_PYTHON} installed"
+    # Liveness probe before we publish the symlink — catches bizarre
+    # cases where uv reported success but the binary won't execute.
+    if ! "$resolved_python" -c "" 2>/dev/null; then
+        die "uv-installed Python is not runnable: $resolved_python"
+    fi
+
+    rm -rf "$GPD_PYTHON_DIR.new"
+    ln -s "$prefix" "$GPD_PYTHON_DIR.new"
+    if [[ -L "$GPD_PYTHON_DIR" || -e "$GPD_PYTHON_DIR" ]]; then
+        rm -rf "$GPD_PYTHON_DIR.old"
+        mv "$GPD_PYTHON_DIR" "$GPD_PYTHON_DIR.old" 2>/dev/null || true
+    fi
+    if ! mv "$GPD_PYTHON_DIR.new" "$GPD_PYTHON_DIR"; then
+        # Roll back to whatever was there before so the user isn't
+        # left without a Python at all.
+        [[ -e "$GPD_PYTHON_DIR.old" ]] && mv "$GPD_PYTHON_DIR.old" "$GPD_PYTHON_DIR"
+        die "Python symlink swap failed"
+    fi
+    rm -rf "$GPD_PYTHON_DIR.old"
+
+    [[ -x "$python_bin" ]] || die "Python install failed (no $python_bin)"
+    success "Python $("$python_bin" --version 2>&1 | awk '{print $2}') installed via uv"
     PYTHON="$python_bin"
 }
 
