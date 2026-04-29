@@ -639,18 +639,30 @@ function Install-LocalPython {
 
     Write-Log "Installing Python $RequiredPythonMinorRelease via uv (app-local)..."
     $env:UV_PYTHON_INSTALL_DIR = $versionsDir
+    # uv writes its download/install progress to stderr. With our
+    # script-level `$ErrorActionPreference = 'Stop'`, `& $uv ...`
+    # piped through `2>&1 | ForEach-Object` was promoting every
+    # stderr line into a NativeCommandError that aborted the
+    # function mid-download. Drop the merge + relax EAP just for
+    # the native call so uv can stream progress to its own
+    # stdout/stderr without our wrapper interpreting it as a
+    # terminating error.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        & $uvBin python install $RequiredPythonMinorRelease 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -ne 0) {
-            Stop-WithError "uv python install $RequiredPythonMinorRelease failed (exit $LASTEXITCODE)"
-        }
+        & $uvBin python install $RequiredPythonMinorRelease
+        $installCode = $LASTEXITCODE
         # `uv python find` prints the absolute path to python.exe for
         # the requested version. `--python-preference only-managed`
         # forces it to consider only uv-managed installs (not whatever
         # system Python may also satisfy the version).
         $resolvedPython = & $uvBin python find $RequiredPythonMinorRelease --python-preference only-managed 2>$null
     } finally {
+        $ErrorActionPreference = $prevEAP
         Remove-Item Env:UV_PYTHON_INSTALL_DIR -ErrorAction SilentlyContinue
+    }
+    if ($installCode -ne 0) {
+        Stop-WithError "uv python install $RequiredPythonMinorRelease failed (exit $installCode)"
     }
 
     if (-not $resolvedPython -or -not (Test-Path $resolvedPython)) {

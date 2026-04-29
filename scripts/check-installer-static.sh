@@ -118,7 +118,18 @@ fi
 prev_fails=$fails
 check_top_level_exit_ast() {
   local f="$1"
-  pwsh -NoProfile -File - "$f" <<'PS'
+  # Stage the AST-walker as a real .ps1 so we can invoke it via
+  # `pwsh -File <tmp> "$f"`. The previous form
+  #     pwsh -NoProfile -File - "$f" <<'PS'
+  # was a bash + pwsh argument-parsing landmine: pwsh interprets
+  # `-File -` as "read script from stdin", consumes the `-`, and
+  # then takes "$f" as the FIRST positional arg to the stdin script
+  # — but on Linux pwsh's heredoc-stdin path falls through and
+  # ends up RUNNING "$f" as the script (which on Linux runners
+  # crashes with `Stop-WithError "Unsupported architecture: ..."`
+  # from Get-Arch). Using a tempfile sidesteps the ambiguity.
+  local tmp="${TMPDIR:-/tmp}/gpd-exit-check-$$-$RANDOM.ps1"
+  cat > "$tmp" <<'PS'
 $ErrorActionPreference = "Stop"
 $path = $args[0]
 $tokens = $null
@@ -148,6 +159,10 @@ foreach ($node in $bad) {
 }
 if ($bad.Count -gt 0) { exit 1 }
 PS
+  pwsh -NoProfile -File "$tmp" "$f"
+  local rc=$?
+  rm -f "$tmp"
+  return $rc
 }
 check_top_level_exit_fallback() {
   local f="$1"
