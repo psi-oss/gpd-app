@@ -583,14 +583,29 @@ function Install-UvBootstrap {
     Write-Log "Installing uv (manages app-local Python)..."
     $env:UV_INSTALL_DIR = $uvDir
     $env:INSTALLER_NO_MODIFY_PATH = "1"
+    # uv's PowerShell installer fetches a shim and invokes a child
+    # `powershell -File ...` which IS subject to the host's
+    # ExecutionPolicy — Windows VMs default to Restricted, so the
+    # inner invocation aborts with "PowerShell requires an execution
+    # policy in [Unrestricted, RemoteSigned, Bypass]". Lift the
+    # policy to Bypass for the duration of the install at Process
+    # scope (no admin required, doesn't persist past this PS
+    # session). Reset on the way out so we don't leak the elevated
+    # state into anything else our caller runs.
+    $prevPolicy = Get-ExecutionPolicy -Scope Process
     try {
-        # astral-sh's PowerShell installer is itself ASCII-clean and
-        # does its own UTF-8 fetch dance, so piping through iex is
-        # safe even on PS 5.1.
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
         Invoke-Expression (Invoke-RestMethod "https://astral.sh/uv/install.ps1")
     } catch {
         Stop-WithError "uv installer failed: $_"
     } finally {
+        # Restore the prior Process-scope policy. Undefined collapses
+        # back to whatever the parent scope dictates, which is the
+        # right default — only set explicitly if the user had set a
+        # non-Undefined policy before our call.
+        if ($prevPolicy -and $prevPolicy -ne 'Undefined') {
+            Set-ExecutionPolicy -Scope Process -ExecutionPolicy $prevPolicy -Force -ErrorAction SilentlyContinue
+        }
         Remove-Item Env:UV_INSTALL_DIR -ErrorAction SilentlyContinue
         Remove-Item Env:INSTALLER_NO_MODIFY_PATH -ErrorAction SilentlyContinue
     }
