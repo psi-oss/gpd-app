@@ -563,6 +563,7 @@ export const SettingsGeneral: Component = () => {
 
   const AccountSection = () => {
     const [revoking, setRevoking] = createSignal(false)
+    const [confirming, setConfirming] = createSignal(false)
     const [revokeError, setRevokeError] = createSignal<string | undefined>()
 
     const handleChangeApiKey = async () => {
@@ -620,9 +621,8 @@ export const SettingsGeneral: Component = () => {
     }
 
     async function handleRevokeConsent() {
-      const confirmed = window.confirm(language.t("settings.account.revokeConsent.confirm"))
-      if (!confirmed) return
       setRevokeError(undefined)
+      setConfirming(false)
       setRevoking(true)
       // Abort all in-flight prompt streams BEFORE anything else. Closes
       // the window where the sidecar keeps streaming tokens against the
@@ -695,7 +695,6 @@ export const SettingsGeneral: Component = () => {
         // Same pre-latch rationale as handleChangeApiKey — block stale
         // sidecar provider.connected from re-promoting hasKey post-reload.
         localStorage.setItem("gpd.key.resetting", "1")
-        window.alert(language.t("settings.account.revokeConsent.success"))
         window.location.reload()
       } catch (e) {
         setRevokeError(e instanceof Error ? e.message : String(e))
@@ -728,12 +727,37 @@ export const SettingsGeneral: Component = () => {
             <Button
               size="small"
               variant="secondary"
-              disabled={revoking()}
-              onClick={handleRevokeConsent}
+              disabled={revoking() || confirming()}
+              onClick={() => setConfirming(true)}
             >
               {language.t("settings.account.revokeConsent.button")}
             </Button>
           </SettingsRow>
+          <Show when={confirming()}>
+            <div class="mx-4 mb-3 flex flex-col gap-3 rounded-md border border-border-weak-base bg-surface-base p-3">
+              <p class="text-13-regular text-text-base">
+                {language.t("settings.account.revokeConsent.confirm")}
+              </p>
+              <div class="flex justify-end gap-2">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  disabled={revoking()}
+                  onClick={() => setConfirming(false)}
+                >
+                  {language.t("common.cancel")}
+                </Button>
+                <Button
+                  size="small"
+                  variant="primary"
+                  disabled={revoking()}
+                  onClick={() => void handleRevokeConsent()}
+                >
+                  {language.t("settings.account.revokeConsent.button")}
+                </Button>
+              </div>
+            </div>
+          </Show>
           <Show when={revokeError()}>
             <p class="px-4 py-2 text-13-regular text-text-danger">{revokeError()}</p>
           </Show>

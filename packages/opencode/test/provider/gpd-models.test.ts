@@ -4,7 +4,7 @@ import { GPD_MODEL_METADATA, gpdReasoningEffortsFor } from "../../src/provider/g
 test("gpt-5.5-pro has GPD metadata and pro reasoning tiers", () => {
   const meta = GPD_MODEL_METADATA["gpt-5.5-pro"]
   expect(meta).toBeDefined()
-  expect(meta.name).toBe("GPT-5.5 Pro")
+  expect(meta.name).toBe("GPT 5.5 Pro")
   expect(meta.reasoning).toBe(true)
   expect(meta.tool_call).toBe(true)
   expect(meta.attachment).toBe(true)

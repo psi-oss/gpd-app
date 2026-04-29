@@ -69,6 +69,10 @@ export const SettingsDependencies: Component = () => {
   const [refreshKey, setRefreshKey] = createSignal(0)
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const [repairing, setRepairing] = createSignal(false)
+  const [pending, setPending] = createSignal<{
+    label: string
+    run: () => Promise<{ launched: boolean; message: string }>
+  }>()
   const [tectonicInstalling, setTectonicInstalling] = createSignal(false)
   const [tectonicProgress, setTectonicProgress] = createSignal<{ loaded: number; total: number } | null>(null)
 
@@ -169,22 +173,25 @@ export const SettingsDependencies: Component = () => {
     toolLabel: string,
     run: () => Promise<{ launched: boolean; message: string }>,
   ) => {
-    const ok = window.confirm(
-      language.t("settings.dependencies.confirm.install", { tool: toolLabel }),
-    )
-    if (!ok) return
+    setPending({ label: toolLabel, run })
+  }
+
+  const runPending = async () => {
+    const item = pending()
+    if (!item) return
+    setPending(undefined)
     try {
-      const result = await run()
+      const result = await item.run()
       showToast({
         variant: result.launched ? "success" : undefined,
         icon: result.launched ? "circle-check" : undefined,
-        title: language.t("settings.dependencies.toast.installLaunched", { tool: toolLabel }),
+        title: language.t("settings.dependencies.toast.installLaunched", { tool: item.label }),
         description: result.message,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       showToast({
-        title: language.t("settings.dependencies.toast.installFailed", { tool: toolLabel }),
+        title: language.t("settings.dependencies.toast.installFailed", { tool: item.label }),
         description: message,
       })
     }
@@ -437,6 +444,24 @@ export const SettingsDependencies: Component = () => {
       </div>
 
       <div class="flex flex-col gap-8 max-w-[720px]">
+        <Show when={pending()}>
+          {(item) => (
+            <div class="flex flex-col gap-3 rounded-md border border-border-weak-base bg-surface-base p-3">
+              <p class="text-13-regular text-text-base">
+                {language.t("settings.dependencies.confirm.install", { tool: item().label })}
+              </p>
+              <div class="flex justify-end gap-2">
+                <Button size="small" variant="ghost" onClick={() => setPending(undefined)}>
+                  {language.t("common.cancel")}
+                </Button>
+                <Button size="small" variant="primary" onClick={() => void runPending()}>
+                  {language.t("settings.dependencies.install")}
+                </Button>
+              </div>
+            </div>
+          )}
+        </Show>
+
         <Section title={language.t("settings.dependencies.runtimeStatus")}>
           <Show
             when={runtimeChecks().length > 0}

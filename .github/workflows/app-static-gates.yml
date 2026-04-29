@@ -1,0 +1,32 @@
+name: App Static Gates
+
+on:
+  pull_request:
+    paths:
+      - "packages/app/src/**"
+      - "packages/desktop/src/**"
+      - "scripts/check-app-static.sh"
+      - ".github/workflows/app-static-gates.yml"
+  push:
+    branches: [gpd]
+    paths:
+      - "packages/app/src/**"
+      - "packages/desktop/src/**"
+      - "scripts/check-app-static.sh"
+      - ".github/workflows/app-static-gates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-static-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run app static gates
+        run: bash scripts/check-app-static.sh

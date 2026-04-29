@@ -141,7 +141,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 200_000, output: 65_536 },
   },
   "gpt-5.5": {
-    name: "GPT-5.5",
+    name: "GPT 5.5",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -149,7 +149,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 128_000 },
   },
   "gpt-5.5-pro": {
-    name: "GPT-5.5 Pro",
+    name: "GPT 5.5 Pro",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -157,7 +157,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 128_000 },
   },
   "gpt-5.4": {
-    name: "GPT-5.4",
+    name: "GPT 5.4",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -165,7 +165,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 131_072 },
   },
   "gpt-5.4-mini": {
-    name: "GPT-5.4 mini",
+    name: "GPT 5.4 mini",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -173,7 +173,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 131_072 },
   },
   "gpt-5.4-nano": {
-    name: "GPT-5.4 nano",
+    name: "GPT 5.4 nano",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -181,7 +181,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 131_072 },
   },
   "gpt-5.4-pro": {
-    name: "GPT-5.4 Pro",
+    name: "GPT 5.4 Pro",
     tool_call: true,
     reasoning: true,
     attachment: true,
@@ -189,7 +189,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 131_072 },
   },
   "gpt-5.3-codex": {
-    name: "GPT-5.3 Codex",
+    name: "GPT 5.3 Codex",
     tool_call: true,
     // 2026-04-27 probe: low → reasoning_tokens=9, medium → 81, high → 64.
     // Original metadata omitted reasoning=true (regression: model is

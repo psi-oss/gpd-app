@@ -1,5 +1,15 @@
 # GPD Desktop App — Changes Log
 
+## Tauri Native Modal Guard (2026-04-29)
+
+**Date:** 2026-04-29
+**Changes:**
+- Replaced revoke-consent `window.confirm` / `window.alert` with app-rendered inline confirmation UI.
+- Replaced dependency-installer `window.confirm` with app-rendered inline confirmation UI.
+- Added `scripts/check-app-static.sh` and `.github/workflows/app-static-gates.yml` to block `window.alert`, `window.confirm`, and `window.prompt` in app/desktop UI code on PRs and pushes.
+**Bug fixed:**
+- macOS WebKit could wedge a native confirm dialog opened from inside the settings modal; both OK and Cancel appeared unresponsive.
+
 ## GPT-5.5 Pro Model Enablement (2026-04-29)
 
 **Date:** 2026-04-29
