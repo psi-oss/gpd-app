@@ -66,12 +66,22 @@ $TauriStateDir = Join-Path $env:APPDATA "inc.psi.gpd"
 # looks like a bug to users re-testing after an uninstall.
 $TauriWebViewDir = Join-Path $env:LOCALAPPDATA "inc.psi.gpd"
 
-# opencode uses xdg-basedir v5 which ignores platform and always
-# resolves xdgData to "$HOME/.local/share" — so on Windows auth.json
-# lives at %USERPROFILE%\.local\share\opencode\auth.json, NOT under
-# %APPDATA%. Match the installer's path exactly.
-$XdgData    = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME ".local\share" }
-$OpenCodeDir = Join-Path $XdgData "opencode"
+# opencode follows xdg-basedir: auth.json lives in xdgData
+# ($HOME/.local/share/opencode/), but the runtime config (opencode.json,
+# gpd-file-manifest.json, command/agents/hooks markers) lives in
+# xdgConfig ($HOME/.config/opencode/). The installer writes to both
+# dirs; the uninstaller previously only probed xdgData and silently
+# leaked the manifest + opencode.json on every Windows uninstall.
+# Track both explicitly so we clean up everything we wrote.
+$XdgData     = if ($env:XDG_DATA_HOME)   { $env:XDG_DATA_HOME }   else { Join-Path $HOME ".local\share" }
+$XdgConfig   = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME ".config" }
+# OPENCODE_CONFIG_DIR overrides the config dir explicitly; honor it.
+$OpenCodeDir       = Join-Path $XdgData   "opencode"   # auth.json
+$OpenCodeConfigDir = if ($env:OPENCODE_CONFIG_DIR) {
+    $env:OPENCODE_CONFIG_DIR
+} else {
+    Join-Path $XdgConfig "opencode"
+}
 $AuthFile    = Join-Path $OpenCodeDir "auth.json"
 
 # Legacy path: previous installer versions wrote auth.json to
@@ -84,9 +94,12 @@ $LegacyAuthFile    = Join-Path $LegacyOpenCodeDir "auth.json"
 # who also run plain opencode have chat history and session state there.
 # Surgical cleanup only (see Remove-OpenCodeGpdFiles).
 
-# Files in the opencode config dir that are gpd-specific and safe to remove.
-$GpdManifestFile = Join-Path $OpenCodeDir "gpd-file-manifest.json"
-$OpenCodeJson    = Join-Path $OpenCodeDir "opencode.json"
+# Files in the opencode config dir that are gpd-specific and safe to
+# remove. Manifest + opencode.json live under $OpenCodeConfigDir
+# (xdg-CONFIG), NOT $OpenCodeDir (xdg-DATA). The previous version
+# pointed at the wrong dir and left both files behind on every run.
+$GpdManifestFile = Join-Path $OpenCodeConfigDir "gpd-file-manifest.json"
+$OpenCodeJson    = Join-Path $OpenCodeConfigDir "opencode.json"
 
 # -- Logging ---------------------------------------------------------------
 
@@ -488,7 +501,7 @@ function Invoke-GpdManifestRemoval {
     # of these prefixes. Anything outside is treated as a manifest-
     # traversal attack (or a dangerous manifest we won't honor) and is
     # skipped with a warning.
-    $allowPrefixes = @($baseDir, $GpdHome, $OpenCodeDir) | Where-Object { $_ }
+    $allowPrefixes = @($baseDir, $GpdHome, $OpenCodeDir, $OpenCodeConfigDir) | Where-Object { $_ }
 
     $missing = 0
     foreach ($entry in $entries) {
@@ -628,14 +641,16 @@ function Remove-OpenCodeJsonGpdEntry {
 }
 
 function Remove-OpenCodeGpdFiles {
-    # Manifest sweep runs regardless of whether $OpenCodeDir exists -- a
-    # manifest might live in a non-standard location if the installer
-    # was told to use one, but defensively check $OpenCodeDir too.
-    if (Test-Path $OpenCodeDir) {
+    # Manifest + opencode.json live under $OpenCodeConfigDir
+    # (xdg-CONFIG, %USERPROFILE%\.config\opencode\). The Test-Path
+    # guard previously checked $OpenCodeDir (xdg-DATA) which made
+    # the entire branch a no-op on a Windows install where xdg-DATA
+    # had only auth.json, leaving manifest + opencode.json on disk.
+    if (Test-Path $OpenCodeConfigDir) {
         Invoke-GpdManifestRemoval -ManifestPath $GpdManifestFile
         Remove-OpenCodeJsonGpdEntry
     } else {
-        Write-Skip "No opencode config dir at $OpenCodeDir"
+        Write-Skip "No opencode config dir at $OpenCodeConfigDir"
     }
 }
 
