@@ -1009,7 +1009,7 @@ configure_litellm_key() {
     # gated by skip_key (default true; --prompt-key opts in).
     local key="${GPD_API_KEY:-${GPD_LITELLM_KEY:-}}"
     if [[ -z "$key" && "$skip_key" == true ]]; then
-        log "Deferring PSI key entry to the desktop welcome screen (set GPD_API_KEY before install or pass --prompt-key to enter it now)."
+        # Silent. Welcome screen captures the key on first launch.
         return 0
     fi
     if [[ -n "$key" ]]; then
@@ -1511,38 +1511,41 @@ main() {
     check_no_running_gpd
     mkdir -p "$GPD_BIN_DIR" "$GPD_PYTHON_DIR" "$GPD_VENV_DIR" "$GPD_CONFIG_DIR"
 
-    log "Step 1/8: Installing OpenCode CLI..."
+    log "Step 1/7: Installing OpenCode CLI..."
     install_opencode
     printf "\n"
 
-    log "Step 2/8: Ensuring Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+..."
+    log "Step 2/7: Ensuring Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+..."
     ensure_python
     printf "\n"
 
-    log "Step 3/8: Installing GPD package..."
+    log "Step 3/7: Installing GPD package..."
     install_gpd_package
     # Two-step liveness + import probe. Must pass before we proceed;
     # also gates the .gpd-initialized marker later in configure_gpd_runtime.
     verify_gpd_install
     printf "\n"
 
-    log "Step 4/8: Installing LaTeX tools..."
+    log "Step 4/7: Installing LaTeX tools..."
     install_latex
     printf "\n"
 
-    log "Step 5/8: Configuring PSI key..."
+    # PSI key — silent in the default-skip path. Only logs/prompts when
+    # GPD_API_KEY is preset or --prompt-key was passed; the desktop
+    # welcome screen captures + validates the key on first launch
+    # otherwise. Removed from the visible step sequence so users don't
+    # see a phantom "Configuring PSI key" header that does nothing.
     configure_litellm_key
-    printf "\n"
 
-    log "Step 6/8: Creating gpd command..."
+    log "Step 5/7: Creating gpd command..."
     create_gpd_wrapper
     printf "\n"
 
-    log "Step 7/8: Configuring PATH..."
+    log "Step 6/7: Configuring PATH..."
     configure_path
     printf "\n"
 
-    log "Step 8/8: Configuring GPD runtime..."
+    log "Step 7/7: Configuring GPD runtime..."
     configure_gpd_runtime
     printf "\n"
 
