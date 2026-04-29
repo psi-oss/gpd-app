@@ -20,13 +20,14 @@ mod windows;
 use crate::cli::CommandChild;
 use futures::{FutureExt, TryFutureExt};
 use std::{
+    collections::VecDeque,
     env,
     future::Future,
     net::TcpListener,
     path::PathBuf,
     process::Command,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Listener, Manager, RunEvent, State, ipc::Channel};
 #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
@@ -737,33 +738,43 @@ async fn initialize(app: AppHandle) {
         current_path,
     );
 
-    // Stable env vars captured for both the initial launch and watchdog respawn.
-    // The password is NOT included here — it is regenerated on each spawn.
-    let stable_env: Vec<(String, String)> = vec![
-        ("OPENCODE_CONFIG_DIR".to_string(), gpd_config_str),
-        ("OPENCODE_CONFIG_CONTENT".to_string(), gpd_setup::build_config_json()),
-        ("PATH".to_string(), augmented_path),
-        // GPD uses a fully self-contained provider definition via OPENCODE_CONFIG_CONTENT
-        // with enabled_providers: ["gpd"], so the models.dev network fetch is wasted work.
-        // Skipping it eliminates several seconds of startup latency on cold cache.
-        ("OPENCODE_DISABLE_MODELS_FETCH".to_string(), "1".to_string()),
-        // GPD: session sharing is hidden in the UI and no-op'd at the runtime layer
-        // until we ship a PSI-hosted share service. Upstream's default share
-        // endpoint is opncd.ai (anomalyco-operated); we don't want researcher
-        // sessions flowing through that. Hard-disable at the sidecar so
-        // programmatic invocations (SDK calls, slash commands, deep links)
-        // all no-op cleanly.
-        ("OPENCODE_DISABLE_SHARE".to_string(), "1".to_string()),
-        // GPD session logging. Activates the GpdLogger bus-subscriber
-        // which POSTs gzipped NDJSON flushes to LiteLLM's /gpd/log route.
-        // Auth flows through the user's existing virtual key in auth.json;
-        // we never ship a GCS service-account key on the desktop.
-        // The proxy on Railway forwards writes to gs://gpd-desktop-logs.
-        ("OPENCODE_GPD_LOGS_ENABLED".to_string(), "1".to_string()),
-    ];
+    // Env builder is a closure invoked once per spawn (initial + every
+    // watchdog respawn). Today every key is static, so freezing the
+    // result at boot would behave identically — but the closure makes
+    // it explicit that respawn picks up a freshly-evaluated env, so a
+    // future change that wires user-mutable state (e.g. a config-driven
+    // toggle) into one of these vars doesn't silently retain the
+    // boot-time value across respawns.
+    let gpd_config_str_for_env = gpd_config_str.clone();
+    let augmented_path_for_env = augmented_path.clone();
+    let build_env = move || -> Vec<(String, String)> {
+        vec![
+            ("OPENCODE_CONFIG_DIR".to_string(), gpd_config_str_for_env.clone()),
+            ("OPENCODE_CONFIG_CONTENT".to_string(), gpd_setup::build_config_json()),
+            ("PATH".to_string(), augmented_path_for_env.clone()),
+            // GPD uses a fully self-contained provider definition via OPENCODE_CONFIG_CONTENT
+            // with enabled_providers: ["gpd"], so the models.dev network fetch is wasted work.
+            // Skipping it eliminates several seconds of startup latency on cold cache.
+            ("OPENCODE_DISABLE_MODELS_FETCH".to_string(), "1".to_string()),
+            // GPD: session sharing is hidden in the UI and no-op'd at the runtime layer
+            // until we ship a PSI-hosted share service. Upstream's default share
+            // endpoint is opncd.ai (anomalyco-operated); we don't want researcher
+            // sessions flowing through that. Hard-disable at the sidecar so
+            // programmatic invocations (SDK calls, slash commands, deep links)
+            // all no-op cleanly.
+            ("OPENCODE_DISABLE_SHARE".to_string(), "1".to_string()),
+            // GPD session logging. Activates the GpdLogger bus-subscriber
+            // which POSTs gzipped NDJSON flushes to LiteLLM's /gpd/log route.
+            // Auth flows through the user's existing virtual key in auth.json;
+            // we never ship a GCS service-account key on the desktop.
+            // The proxy on Railway forwards writes to gs://gpd-desktop-logs.
+            ("OPENCODE_GPD_LOGS_ENABLED".to_string(), "1".to_string()),
+        ]
+    };
 
     let (child, health_check) = {
-        let env_refs: Vec<(&str, String)> = stable_env
+        let env_pairs = build_env();
+        let env_refs: Vec<(&str, String)> = env_pairs
             .iter()
             .map(|(k, v)| (k.as_str(), v.clone()))
             .collect();
@@ -785,7 +796,7 @@ async fn initialize(app: AppHandle) {
     let _ = ready_tx.send(ServerReadyData {
         url: url.clone(),
         username: Some("opencode".to_string()),
-        password: Some(password),
+        password: Some(password.clone()),
     });
     app.manage(SidecarReady(ready_rx.shared()));
     app.manage(ServerState {
@@ -795,29 +806,77 @@ async fn initialize(app: AppHandle) {
 
     // Watchdog: detect unexpected sidecar death and respawn automatically.
     //
-    // Debug-only. In release builds a dead sidecar is an unrecoverable
-    // error from the webview's perspective — the cached base URL and
-    // basic-auth password are both stale after respawn, and we have no
-    // frontend channel to push new credentials, so silent autoheal would
-    // leave users staring at "failed to fetch" forever. Instead, release
-    // builds let the sidecar die loudly so the existing error surface
-    // runs. The test harness (which only runs against debug builds) still
-    // exercises sidecar respawn via tests/lifecycle/test_sidecar_respawn.py.
-    #[cfg(debug_assertions)]
+    // Runs in both debug AND release. Earlier versions gated this on
+    // `cfg(debug_assertions)` because each respawn used to regenerate
+    // the port + basic-auth password, which would have invalidated the
+    // webview's cached credentials and surfaced as "failed to fetch"
+    // forever. We now reuse the same port + password across respawns
+    // (captured once at startup), so the frontend's cached HTTP client
+    // continues to work the moment the new sidecar finishes its health
+    // check — no event channel needed. The trade-off is a brief spinner
+    // during the bind, which is strictly better UX than a permanently
+    // dead app.
+    //
+    // Concrete user-visible bug this fixes: bun on Windows-ARM x64
+    // emulation hits Windows' RADAR_PRE_LEAK_64 memory-leak detector
+    // and the sidecar exits, leaving the GUI stuck on "Could not reach
+    // This computer" until manual relaunch. Reproduced 2026-04-29 on a
+    // Parallels Win 11 ARM VM (Application event log id 1001, P1
+    // opencode-cli.exe v1.3.11.0).
+    //
+    // Watchdog is defense-in-depth, NOT a substitute for fixing root
+    // causes. We log every respawn at WARN/ERROR so operators see the
+    // pattern; a sidecar that respawns 5 times in a session is a bug
+    // worth filing even if the user never noticed.
+    //
+    // Limits enforced:
+    //  - MAX_CONSECUTIVE_FAILURES (10): consecutive unhealthy respawns
+    //    → give up, let the existing "couldn't reach sidecar" UI take
+    //    over. Distinguishes leaks-restart-fine from broken-binary.
+    //  - RATE_CAP (10 healthy respawns / 5min): a sidecar that keeps
+    //    successfully respawning but immediately dies again is masking
+    //    a real bug. After hitting the rate cap we stop respawning so
+    //    the failure becomes visible.
+    //  - HEALTH_CHECK_TIMEOUT (60s): wraps the per-spawn health check
+    //    so a half-alive sidecar (TCP-listens but never responds) can't
+    //    wedge the watchdog forever. Counts as a failed respawn.
+    //
+    // NOT yet addressed (tracked separately):
+    //  - Polling-based liveness (`is_alive()` every 500ms). A sidecar
+    //    that dies + respawns inside the poll window is invisible to
+    //    the watchdog. Switching to a wait()-based exit signal needs
+    //    the Tauri sidecar plugin to expose a wait future, which it
+    //    currently does not.
+    //  - Orphan child reaping. bun spawns LSPs / Python / MCP servers;
+    //    on bun crash they reparent to PID 1. Watchdog respawns bun but
+    //    doesn't sweep orphans. Needs Windows Job Objects + Linux
+    //    PR_SET_CHILD_SUBREAPER, which is invasive enough to deserve
+    //    its own PR.
     {
         let watchdog_app = app.clone();
         let watchdog_child = Arc::clone(&server_child_arc);
         let watchdog_stopping = Arc::clone(&stopping);
+        let watchdog_port = port;
+        let watchdog_password = password.clone();
+        let watchdog_build_env = build_env.clone();
         tokio::spawn(async move {
             // Give the initial sidecar time to start before monitoring begins.
             tokio::time::sleep(Duration::from_secs(10)).await;
             // Exponential backoff across consecutive respawn failures.
-            // Starts at 1s, doubles on each unhealthy respawn, caps at 60s,
-            // resets on a healthy respawn. Prevents a sidecar that
+            // Starts at 1s, doubles on each unhealthy respawn, caps at
+            // 60s, resets on a healthy respawn. Prevents a sidecar that
             // crashloops at startup from thrashing port allocation and
             // flooding logs.
             let mut backoff = Duration::from_secs(1);
             let backoff_cap = Duration::from_secs(60);
+            const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+            const RATE_CAP_MAX: usize = 10;
+            const RATE_CAP_WINDOW: Duration = Duration::from_secs(5 * 60);
+            const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+            let mut consecutive_failures: u32 = 0;
+            // Sliding-window timestamps of healthy respawns. Pruned at
+            // each death to drop entries older than RATE_CAP_WINDOW.
+            let mut healthy_respawn_history: VecDeque<Instant> = VecDeque::with_capacity(RATE_CAP_MAX + 1);
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if watchdog_stopping.load(std::sync::atomic::Ordering::Relaxed) {
@@ -833,44 +892,91 @@ async fn initialize(app: AppHandle) {
                     continue;
                 }
 
-                tracing::warn!(?backoff, "Sidecar died unexpectedly, backing off before respawn");
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    tracing::error!(
+                        consecutive_failures,
+                        "Sidecar exceeded max consecutive respawn failures; giving up"
+                    );
+                    break;
+                }
+
+                // Prune the rate-cap window FIRST so the sliding window
+                // semantics are honored. A successful respawn 6 minutes
+                // ago should not count against the current 5-min cap.
+                let cutoff = Instant::now() - RATE_CAP_WINDOW;
+                while healthy_respawn_history.front().is_some_and(|t| *t < cutoff) {
+                    healthy_respawn_history.pop_front();
+                }
+                if healthy_respawn_history.len() >= RATE_CAP_MAX {
+                    tracing::error!(
+                        respawns_in_window = healthy_respawn_history.len(),
+                        window_secs = RATE_CAP_WINDOW.as_secs(),
+                        "Sidecar respawn rate cap exceeded; stopping. Likely a real bug — file a report.",
+                    );
+                    break;
+                }
+
+                tracing::warn!(
+                    ?backoff,
+                    port = watchdog_port,
+                    consecutive_failures,
+                    healthy_respawns_in_window = healthy_respawn_history.len(),
+                    "Sidecar died unexpectedly, backing off before respawn"
+                );
                 tokio::time::sleep(backoff).await;
                 if watchdog_stopping.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
 
-                let new_port = get_sidecar_port();
-                let new_password = uuid::Uuid::new_v4().to_string();
-                let env_refs: Vec<(&str, String)> = stable_env
+                // Reuse the original port + password so the webview's
+                // cached HTTP client + basic-auth header remain valid.
+                // Rebuild env each respawn so any freshly-evaluated
+                // values get picked up (today every key is static; this
+                // is forward-compatible).
+                let env_pairs = (watchdog_build_env)();
+                let env_refs: Vec<(&str, String)> = env_pairs
                     .iter()
                     .map(|(k, v)| (k.as_str(), v.clone()))
                     .collect();
                 let (new_child, health_check) = server::spawn_local_server(
                     watchdog_app.clone(),
                     "127.0.0.1".to_string(),
-                    new_port,
-                    new_password,
+                    watchdog_port,
+                    watchdog_password.clone(),
                     &env_refs,
                 );
                 *watchdog_child.lock().unwrap() = Some(new_child);
 
-                // Await the health check before declaring the respawn
-                // successful. If the new sidecar fails to become healthy,
-                // the next loop iteration will observe `is_alive() == false`
-                // again and double the backoff — preventing a tight
-                // crashloop on a genuinely broken binary.
-                match health_check.0.await {
-                    Ok(Ok(())) => {
-                        tracing::info!(new_port, "Sidecar respawned and healthy");
+                // Await the health check, but bound it: a sidecar that
+                // accepts TCP yet never responds (half-alive) would
+                // otherwise wedge the watchdog forever on this single
+                // respawn. timeout() returns Err on elapsed, which we
+                // treat the same as a failed health check.
+                let outcome = timeout(HEALTH_CHECK_TIMEOUT, health_check.0).await;
+                match outcome {
+                    Ok(Ok(Ok(()))) => {
+                        tracing::info!(port = watchdog_port, "Sidecar respawned and healthy");
                         backoff = Duration::from_secs(1);
+                        consecutive_failures = 0;
+                        healthy_respawn_history.push_back(Instant::now());
                     }
-                    Ok(Err(err)) => {
+                    Ok(Ok(Err(err))) => {
                         tracing::error!(%err, "Respawned sidecar failed health check");
                         backoff = (backoff * 2).min(backoff_cap);
+                        consecutive_failures += 1;
                     }
-                    Err(err) => {
+                    Ok(Err(err)) => {
                         tracing::error!(%err, "Respawned sidecar health check task panicked");
                         backoff = (backoff * 2).min(backoff_cap);
+                        consecutive_failures += 1;
+                    }
+                    Err(_elapsed) => {
+                        tracing::error!(
+                            timeout_secs = HEALTH_CHECK_TIMEOUT.as_secs(),
+                            "Respawned sidecar health check timed out"
+                        );
+                        backoff = (backoff * 2).min(backoff_cap);
+                        consecutive_failures += 1;
                     }
                 }
             }

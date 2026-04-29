@@ -381,6 +381,20 @@ jobs:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows
+          # Native Windows ARM64 build. Cross-compiled from windows-latest
+          # (x64) using the aarch64-pc-windows-msvc Rust target — Tauri
+          # 2 supports cross-compile for Windows ARM, and NSIS bundling
+          # is a pure-data step that doesn't care about the bundled
+          # binary's arch. The bundled sidecar is the upstream
+          # opencode-windows-arm64.zip (selected by RUST_TARGET in
+          # packages/desktop/scripts/utils.ts:SIDECAR_BINARIES).
+          # Without this, ARM users got the x64 build via Windows'
+          # x86-on-ARM emulator, and bun in that emulator hit the
+          # RADAR_PRE_LEAK_64 memory-leak detector and crashed
+          # mid-session (reproduced 2026-04-29 on Parallels Win 11 ARM).
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+            label: windows-arm
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             label: linux
@@ -440,6 +454,7 @@ jobs:
           UV_SHA_AARCH64_APPLE_DARWIN: 162b328fc63e0075d4267688201de91356e1c1b81db50419fa4466cfe2dfdebc
           UV_SHA_X86_64_APPLE_DARWIN: d676940b51bdd5606b218bc2965fed67731f94ad07926045716acbf78626e09b
           UV_SHA_X86_64_PC_WINDOWS_MSVC: 20d3a420abbf2af9699cd9a02225d9325344046af8deb15563cc451e3c4fd059
+          UV_SHA_AARCH64_PC_WINDOWS_MSVC: 542b318c98b0295dd3d620fbcd63388757f382e14c69c569cb3ce793aa75c975
           UV_SHA_X86_64_UNKNOWN_LINUX_GNU: 17fc118ba4d7e9303f84fcabdc0a593fc3480ba76eb6980668fdbbb96fe88562
           MATRIX_TARGET: ${{ matrix.target }}
           RUNNER_OS: ${{ runner.os }}
@@ -450,6 +465,7 @@ jobs:
             aarch64-apple-darwin)      UV_PLATFORM="aarch64-apple-darwin"     ; EXPECTED_SHA="$UV_SHA_AARCH64_APPLE_DARWIN" ;;
             x86_64-apple-darwin)       UV_PLATFORM="x86_64-apple-darwin"      ; EXPECTED_SHA="$UV_SHA_X86_64_APPLE_DARWIN" ;;
             x86_64-pc-windows-msvc)    UV_PLATFORM="x86_64-pc-windows-msvc"   ; EXPECTED_SHA="$UV_SHA_X86_64_PC_WINDOWS_MSVC" ;;
+            aarch64-pc-windows-msvc)   UV_PLATFORM="aarch64-pc-windows-msvc"  ; EXPECTED_SHA="$UV_SHA_AARCH64_PC_WINDOWS_MSVC" ;;
             x86_64-unknown-linux-gnu)  UV_PLATFORM="x86_64-unknown-linux-gnu" ; EXPECTED_SHA="$UV_SHA_X86_64_UNKNOWN_LINUX_GNU" ;;
             *) echo "::error::unknown uv target: $MATRIX_TARGET"; exit 1 ;;
           esac

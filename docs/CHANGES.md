@@ -1,5 +1,19 @@
 # GPD Desktop App — Changes Log
 
+## Sidecar Watchdog in Release + Native Windows ARM64 Bundle (2026-04-29)
+
+**Date:** 2026-04-29
+**Changes:**
+- `packages/desktop/src-tauri/src/lib.rs`: sidecar watchdog now runs in release builds (was debug-only). Reuses a stable port + basic-auth password across respawns so the webview's cached HTTP client stays valid — no event-channel push to the frontend needed. Adds a 10-respawn / 5-min sliding-window rate cap, 10-consecutive-failure hard cap, and a 60s timeout on each post-respawn health check (so a half-alive sidecar that accepts TCP but never responds can't wedge the watchdog forever). Env builder is now a closure rebuilt per respawn so future config-driven env values aren't frozen at boot.
+- `.github/workflows/gpd-release.yml`: added `aarch64-pc-windows-msvc` to the release matrix, cross-compiled from `windows-latest`. Pinned the matching `uv` SHA256 (542b318c...). Tauri produces `GPD_<ver>_arm64-setup.exe`.
+- `install-gpd/windows_11/install_main.ps1`: ARM64 hosts now prefer the native `_arm64-setup.exe`, with graceful fallback to `_x64-setup.exe` if the native bundle hasn't been published yet.
+- `docs/RELEASING.md`: documented the new ARM64 installer artifact.
+**Bug fixed:**
+- bun under Windows' x86-on-ARM emulator hit the OS' RADAR_PRE_LEAK_64 memory-leak detector mid-session, exiting `opencode-cli.exe` and leaving the GUI stuck on "Could not reach This computer" until manual relaunch (Application event-log id 1001, P1 opencode-cli.exe v1.3.11.0; reproduced on Parallels Win 11 ARM, 2026-04-29). Native ARM64 build avoids the emulator. Watchdog is defense-in-depth so any future sidecar death is auto-recovered without a stuck UI.
+**Out-of-scope (tracked separately):**
+- Watchdog still polls `is_alive()` every 500ms — switching to a wait()-based exit signal would need the Tauri sidecar plugin to expose a wait future.
+- Orphan-child reaping when bun crashes (LSPs / Python / MCP servers reparent to PID 1). Needs Windows Job Objects + Linux PR_SET_CHILD_SUBREAPER.
+
 ## Tauri Native Modal Guard (2026-04-29)
 
 **Date:** 2026-04-29

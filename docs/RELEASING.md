@@ -132,7 +132,8 @@ GPD_aarch64.app.tar.gz(.sig)       # mac-arm updater bundle
 GPD_x64.app.tar.gz(.sig)           # mac-intel updater bundle
 GPD_<ver>_amd64.deb(.sig)          # linux deb
 GPD-<ver>-1.x86_64.rpm(.sig)       # linux rpm
-GPD_<ver>_x64-setup.exe(.sig)      # windows installer
+GPD_<ver>_x64-setup.exe(.sig)      # windows x64 installer
+GPD_<ver>_arm64-setup.exe(.sig)    # windows ARM64 installer (native; avoids x64 emulation memory leak)
 latest.json                         # tauri updater manifest
 ```
 
