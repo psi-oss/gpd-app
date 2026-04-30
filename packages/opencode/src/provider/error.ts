@@ -170,6 +170,35 @@ export namespace ProviderError {
         metadata?: Record<string, string>
       }
 
+  /**
+   * Headers we allow into error logs. Everything else is dropped at
+   * parse time. Rationale: `responseHeaders` propagates through
+   * ParsedAPICallError → message.error → /gpd/log GCS objects, and
+   * proxies (LiteLLM, Railway) attach internal accounting headers
+   * (`x-litellm-key-spend`, `x-litellm-key-max-budget`,
+   * `x-railway-request-id`, etc.) we don't want sitting in long-term
+   * researcher session logs. The allowlist is intentionally small —
+   * if a debugging case demands more, name them here explicitly.
+   */
+  const SAFE_HEADERS = new Set([
+    "content-type",
+    "retry-after",
+    "x-request-id",        // upstream provider request correlation
+    "openai-organization",
+    "openai-version",
+    "anthropic-ratelimit-requests-remaining",
+    "anthropic-ratelimit-tokens-remaining",
+  ])
+
+  function safeHeaders(h: Record<string, string> | undefined): Record<string, string> | undefined {
+    if (!h) return h
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(h)) {
+      if (SAFE_HEADERS.has(k.toLowerCase())) out[k] = v
+    }
+    return Object.keys(out).length > 0 ? out : undefined
+  }
+
   export function parseAPICallError(input: { providerID: ProviderID; error: APICallError }): ParsedAPICallError {
     const m = message(input.providerID, input.error)
     const body = json(input.error.responseBody)
@@ -189,7 +218,7 @@ export namespace ProviderError {
       isRetryable: input.providerID.startsWith("openai")
         ? isOpenAiErrorRetryable(input.error)
         : input.error.isRetryable,
-      responseHeaders: input.error.responseHeaders,
+      responseHeaders: safeHeaders(input.error.responseHeaders),
       responseBody: input.error.responseBody,
       metadata,
     }

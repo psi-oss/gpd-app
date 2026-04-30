@@ -172,17 +172,18 @@ in 32-at-a-time batches.
 Postgres DB. The handler assumes the table exists; the first INSERT
 against a missing table returns `503 tos write failed: ...`.
 
-Apply the DDL **before** the first redeploy that ships the `gpd_tos`
-package:
+Schema is applied automatically by `infra/litellm/gpd_tos/migrate.py`,
+which the LiteLLM worker runs at boot. Migrations live in
+`infra/litellm/gpd_tos/migrations/` and are versioned (`0001_init.sql`,
+`0002_privacy_sha.sql`, …). Workers run pending migrations idempotently
+under an advisory lock, so a multi-replica redeploy is safe.
+
+To apply migrations manually (e.g. against a fresh dev DB):
 
 ```bash
-cat infra/litellm/scripts/create-tos-table.sql | \
-  railway ssh --service litellm \
-    --project "$RAILWAY_PROJECT_ID" \
-    'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f -'
+GPD_AUDIT_DATABASE_URL="$DATABASE_URL" \
+  python -m infra.litellm.gpd_tos.migrate
 ```
-
-Idempotent — safe to re-run.
 
 ### TOS endpoint verification
 

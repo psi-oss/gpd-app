@@ -1,0 +1,141 @@
+name: Audit DB Restore Drill
+
+# Monthly drill: pull the most recent gpd-audit-backups dump, decrypt,
+# restore into a scratch Postgres, sanity-check the row, dump the
+# schema, and diff against the live `gpd_tos_acceptance` schema. Catches:
+#
+#   - encryption-key drift (passphrase rotated without updating the workflow)
+#   - format drift (pg_dump major version mismatch with the server)
+#   - schema drift (a migration shipped that no live restore can replay)
+#   - silent IAM regression (SA can read but objects are zero-byte)
+#
+# This is the partner workflow to audit-db-backup.yml. A backup that
+# you cannot restore is not a backup.
+
+on:
+  schedule:
+    # 09:00 UTC on the 5th of each month — gives backup runs a few days
+    # to settle if anything went wrong over the weekend turn.
+    - cron: '0 9 5 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: audit-db-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: scratch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          # Reuse the backup SA — it has objectViewer on the bucket via
+          # the same role binding (or a sibling SA with viewer-only;
+          # see .planning/AUDIT-BACKUP-SETUP.md for the IAM split).
+          service_account: gpd-audit-backup@gpd-desktop.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install pg client 16
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+
+      - name: Pull latest backup
+        id: pull
+        run: |
+          set -euo pipefail
+          # Bucket lists newest-last by default; reverse-sort to pick the
+          # most recent object. `gcloud storage ls` returns the gs:// path
+          # we can `cp` directly.
+          latest=$(gcloud storage ls --recursive 'gs://gpd-audit-backups/**.dump.gpg' \
+            | sort | tail -1)
+          test -n "$latest"
+          echo "Latest: $latest"
+          echo "object=$latest" >> "$GITHUB_OUTPUT"
+          gcloud storage cp "$latest" /tmp/latest.dump.gpg
+          test -s /tmp/latest.dump.gpg
+
+      - name: Decrypt + restore + verify
+        env:
+          AUDIT_BACKUP_PASSPHRASE: ${{ secrets.AUDIT_BACKUP_PASSPHRASE }}
+          AUDIT_DATABASE_URL: ${{ secrets.GPD_AUDIT_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          # 1. Decrypt
+          gpg --batch --yes --passphrase-fd 3 \
+              --decrypt -o /tmp/latest.dump /tmp/latest.dump.gpg \
+              3<<< "$AUDIT_BACKUP_PASSPHRASE"
+          test -s /tmp/latest.dump
+
+          # 2. Restore into the scratch Postgres service container
+          export PGPASSWORD=drill
+          export PGHOST=127.0.0.1
+          export PGUSER=postgres
+          export PGDATABASE=scratch
+
+          pg_restore --no-owner --no-privileges --no-acl \
+            --dbname=scratch /tmp/latest.dump
+
+          # 3. Row count sanity. >= 1 row means at least one user
+          # acceptance is recoverable. Zero would mean either the dump
+          # is empty (test DB?) or pg_dump filtered everything out.
+          rows=$(psql -At -c 'SELECT COUNT(*) FROM gpd_tos_acceptance;')
+          echo "rows in restored table: $rows"
+          if [ "$rows" -lt 1 ]; then
+            echo "::error::restored gpd_tos_acceptance has 0 rows — backup is empty or schema-only"
+            exit 1
+          fi
+
+          # 4. Schema diff vs live audit DB. Both should match.
+          # `pg_dump --schema-only` on each, normalize, diff.
+          pg_dump --schema-only --no-owner --no-privileges --no-acl \
+            -t public.gpd_tos_acceptance "$AUDIT_DATABASE_URL" \
+            | grep -v -E '^--|^$|^SET ' \
+            > /tmp/live-schema.sql
+          pg_dump --schema-only --no-owner --no-privileges --no-acl \
+            -t public.gpd_tos_acceptance \
+            "postgresql://postgres:drill@127.0.0.1:5432/scratch" \
+            | grep -v -E '^--|^$|^SET ' \
+            > /tmp/restored-schema.sql
+
+          if ! diff -u /tmp/restored-schema.sql /tmp/live-schema.sql; then
+            echo "::error::schema drift detected between latest backup and live DB"
+            exit 1
+          fi
+
+          echo "::notice::Restore drill PASSED. ${{ steps.pull.outputs.object }} restored cleanly with $rows rows; schema matches live."
+
+      - name: Scrub
+        if: always()
+        run: |
+          shred -fuz /tmp/latest.dump /tmp/latest.dump.gpg 2>/dev/null || \
+            rm -f /tmp/latest.dump /tmp/latest.dump.gpg

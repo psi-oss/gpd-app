@@ -67,6 +67,38 @@ function formatInitError(error: InitError, t: Translator): string {
     }
     case "APIError": {
       const message = typeof data.message === "string" ? data.message : t("error.chain.apiError")
+      const responseBody = typeof data.responseBody === "string" ? data.responseBody : ""
+
+      // GPD consent-gate codes. The proxy returns 403 with a stable
+      // machine-parseable prefix in `detail` (see
+      // infra/litellm/gpd_consent/consent_gate.py). When we see one,
+      // wipe the relevant localStorage flag so SetupGate's effects
+      // demote the UI to the welcome / TOS-upgrade gate on next
+      // render. The reload is gentle — we just clear flags; the
+      // existing eff-461 (auth-disagreement demote) and eff-442
+      // (TOS-version mismatch demote) take it from there once the
+      // user navigates back to the home route.
+      if (data.statusCode === 403 && /\btos_version_outdated\b/.test(responseBody)) {
+        try {
+          localStorage.removeItem("gpd.tos.acceptedVersion")
+        } catch {
+          /* private mode / disabled storage — fall through to message */
+        }
+        return t("error.chain.tosVersionOutdated")
+      }
+      if (data.statusCode === 403 && /\bconsent_revoked\b/.test(responseBody)) {
+        try {
+          localStorage.removeItem("gpd.tos.acceptedVersion")
+          localStorage.removeItem("gpd.key.saved")
+        } catch {
+          /* see above */
+        }
+        return t("error.chain.consentRevoked")
+      }
+      if (data.statusCode === 503 && /\bconsent_check_unavailable\b/.test(responseBody)) {
+        return t("error.chain.consentCheckUnavailable")
+      }
+
       const lines: string[] = [message]
 
       if (typeof data.statusCode === "number") {
@@ -77,8 +109,8 @@ function formatInitError(error: InitError, t: Translator): string {
         lines.push(t("error.chain.retryable", { retryable: data.isRetryable }))
       }
 
-      if (typeof data.responseBody === "string" && data.responseBody) {
-        lines.push(t("error.chain.responseBody", { body: data.responseBody }))
+      if (responseBody) {
+        lines.push(t("error.chain.responseBody", { body: responseBody }))
       }
 
       return lines.join("\n")

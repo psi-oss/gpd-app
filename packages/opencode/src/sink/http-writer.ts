@@ -29,7 +29,10 @@ export namespace GpdLogHttp {
     process.env["OPENCODE_GPD_LOG_URL"] ??
     "https://litellm-production-46bb.up.railway.app/gpd/log"
 
-  const GPD_PROVIDER_ID = "gpd"
+  // Exported so the upstream enqueue path (gpd-logger.ts) and the
+  // revoke-side spill wipe (auth/index.ts) reference the same provider
+  // ID without a magic-string drift.
+  export const GPD_PROVIDER_ID = "gpd"
 
   export type PostOutcome =
     | { kind: "ok"; path: string; bytes: number }

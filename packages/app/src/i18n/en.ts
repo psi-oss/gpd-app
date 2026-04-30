@@ -5,9 +5,9 @@ export const dict = {
   "welcome.apiKey.placeholder": "Paste your GPD API key",
   "welcome.apiKey.required": "An API key is required to get started",
   "welcome.apiKey.invalidFormat":
-    "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask your lab administrator for a GPD virtual key.",
+    "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask PSI for a GPD virtual key.",
   "welcome.apiKey.rejectedByServer":
-    "GPD's server rejected this key. Double-check it, or ask your lab administrator for a fresh GPD virtual key.",
+    "GPD's server rejected this key. Double-check it, or ask PSI for a fresh GPD virtual key.",
   "welcome.apiKey.networkError":
     "Couldn't reach the GPD server to verify your key. Check your internet connection and try again.",
   "welcome.getStarted": "Get Started",
@@ -564,6 +564,12 @@ export const dict = {
   "error.chain.status": "Error code: {{status}}",
   "error.chain.retryable": "Safe to retry: {{retryable}}",
   "error.chain.responseBody": "Technical details:\n{{body}}",
+  "error.chain.tosVersionOutdated":
+    "GPD has updated its Terms of Service. Please re-accept the latest terms in the desktop app to resume.",
+  "error.chain.consentRevoked":
+    "Your GPD consent has been withdrawn. Re-accept the Terms of Service in the desktop app to resume; previously logged data is unaffected.",
+  "error.chain.consentCheckUnavailable":
+    "Couldn't verify your consent status. Please try again in a moment; if the issue persists, contact support@psi.inc.",
   "error.chain.didYouMean": "Did you mean: {{suggestions}}",
   "error.chain.modelNotFound": "Model not found: {{provider}}/{{model}}",
   "error.chain.checkConfig": "Check your GPD settings for correct AI service and model names",

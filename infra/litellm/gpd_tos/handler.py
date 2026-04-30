@@ -190,6 +190,22 @@ async def gpd_tos_accept(
         logger.exception("gpd_tos.insert_acceptance failed: %s", e)
         raise HTTPException(503, detail="tos write failed") from None
 
+    # Evict the consent-gate cache entry on THIS worker so a re-accept
+    # under a fresher tos_version is reflected immediately instead of
+    # waiting up to 300s for the TTL to expire. Without this, a TOS
+    # bump → user re-accepts → next LLM call still sees the cached old
+    # ConsentState and gets `tos_version_outdated` (or, conversely,
+    # `consent_revoked` after revoke→accept until TTL expires). Other
+    # workers still lag by ≤ TTL; swap the cache for Redis pub/sub if
+    # legal needs cross-worker-immediate propagation. Local import to
+    # keep gpd_tos independent of the consent package at module load.
+    try:
+        from gpd_consent import cache as consent_cache
+
+        await consent_cache.invalidate(user_id)
+    except Exception:
+        logger.exception("gpd_consent cache invalidate failed (non-fatal)")
+
     return {"ok": True}
 
 

@@ -470,6 +470,42 @@ function SetupGate(props: ParentProps) {
     setHasKey(false)
   })
 
+  // Unconditional FS-backed key check. The two effects above wait for
+  // globalSync (effect-465) or for the upgrade-gate to need the key
+  // (effect-442) before consulting auth.json — and BOTH skip the check
+  // when the user is past TOS and the sync hasn't reported its
+  // provider list yet. Result: a fresh launch with `gpd.key.saved=true`
+  // in localStorage but a missing/empty auth.json renders the main IDE
+  // until the sidecar provider list loads, and any chat send in that
+  // window 401s as "Sign-in failed" with no path back to the welcome
+  // screen. Confirmed 2026-04-29 in `bun tauri dev` on macOS: localStorage
+  // gpd.key.saved=true, gpd.tos.acceptedVersion=1.0, auth.json absent,
+  // user lands in main IDE with a stale-key UI.
+  //
+  // This resource fires on mount regardless of TOS state. If
+  // `readGpdKey` returns null we demote immediately, exactly the same
+  // way handleChangeApiKey does, sending the user to the welcome screen.
+  // Web fallback (no readGpdKey command) leaves the resource undefined
+  // — that case still has eff-465 to catch the desync once globalSync
+  // reports a connected list, which on web is the only authoritative
+  // source anyway.
+  const [authJsonKey] = createResource(
+    () => hasKey() && !!platform.readGpdKey,
+    async () => {
+      if (!platform.readGpdKey) return null
+      return (await platform.readGpdKey()) ?? null
+    },
+  )
+  createEffect(() => {
+    if (!hasKey()) return
+    if (!platform.readGpdKey) return
+    if (authJsonKey.loading) return
+    if (authJsonKey() != null) return
+    setReonboardLatched(true)
+    localStorage.removeItem("gpd.key.saved")
+    setHasKey(false)
+  })
+
   return (
     <Show when={hasKey()} fallback={<WelcomeScreen onComplete={handleApiKeySaved} />}>
       <Show

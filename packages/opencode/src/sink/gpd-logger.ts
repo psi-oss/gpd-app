@@ -39,7 +39,7 @@ export namespace GpdLogger {
     readonly init: () => Effect.Effect<void>
     /**
      * Flush all pending queued events synchronously (bounded by
-     * `OPENCODE_GPD_SHUTDOWN_TIMEOUT_MS`, default 1500). Called by
+     * `OPENCODE_GPD_SHUTDOWN_TIMEOUT_MS`, default 5000). Called by
      * the SIGTERM/SIGINT handler in `index.ts` and by the Scope
      * finalizer. Idempotent — a second concurrent call is a no-op.
      */
@@ -50,12 +50,23 @@ export namespace GpdLogger {
    * Maximum concurrent POSTs during drain. LiteLLM tolerates bursts;
    * 8 saturates a typical home connection without proxy-thundering.
    * Realistic session count at quit (~10-20 per docs/LOGGING.md:77)
-   * finishes in 2-3 batches inside the default 1500ms budget.
+   * finishes in 2-3 batches inside the 5000ms budget.
    */
   const DRAIN_CONCURRENCY = 8
 
-  /** Default overall wall-clock budget for drainPending, in ms. */
-  const DEFAULT_SHUTDOWN_BUDGET_MS = 1500
+  /**
+   * Default overall wall-clock budget for drainPending, in ms.
+   *
+   * Was 1500ms — observed that on slow / hotel networks one POST RTT
+   * could already eat the budget, so a single drain rarely landed more
+   * than the first wave of 8 sessions, and the rest were spilled +
+   * deferred to next-boot replay. Not a leak (events still ship), but
+   * it costs an extra startup network round-trip and racy "data shows
+   * up tomorrow" UX on slow links. 5s tolerates a 600ms RTT × 8 batches
+   * comfortably while still feeling instant on quit. Override per-user
+   * via OPENCODE_GPD_SHUTDOWN_TIMEOUT_MS (see resolveBudgetMs below).
+   */
+  const DEFAULT_SHUTDOWN_BUDGET_MS = 5000
 
   export class Service extends Context.Service<Service, Interface>()("@opencode/GpdLogger") {}
 
@@ -177,6 +188,25 @@ export namespace GpdLogger {
       function enqueue(sessionID: SessionID, evt: QueuedEvent): Effect.Effect<void> {
         return Effect.gen(function* () {
           if (!enabled) return
+          // Auth-presence gate: drop events when the user has no GPD key
+          // in auth.json. The downstream writer would spill them to disk
+          // (http-writer.ts:64-68), and the replay loop would drain them
+          // to the proxy the moment a key reappears — including events
+          // captured during a revoked-consent window. That re-delivery
+          // is the privacy regression we're closing here.
+          //
+          // No spill, no event, no buffered post-revoke leak. The peer
+          // change in auth/index.ts:remove wipes any pre-existing spill
+          // on consent revocation; this gate prevents fresh accumulation
+          // before a sign-in or after a revoke.
+          //
+          // Auth read should never error in practice (file is
+          // read-locked, pure JSON parse). If it does, treat it the same
+          // as "no key" — fail-closed for the privacy property.
+          const info = yield* auth
+            .get(GpdLogHttp.GPD_PROVIDER_ID)
+            .pipe(Effect.orElseSucceed(() => undefined))
+          if (!info || info.type !== "api") return
           const s = yield* InstanceState.get(state)
           const k = coalesceKey(evt)
           const existing = s.queue.get(sessionID)

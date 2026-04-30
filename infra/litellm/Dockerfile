@@ -60,7 +60,9 @@ COPY --from=uvbin /uv /usr/local/bin/uv
 #
 # Target the LiteLLM venv directly via --python: --system would fall
 # back to the Wolfi system python which doesn't have litellm's stack.
-RUN uv pip install --python /app/.venv/bin/python --no-cache-dir asyncpg==0.31.0
+RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
+    asyncpg==0.31.0 \
+    packaging==25.0
 
 # Our hook modules.
 #   gpd_log     → POST /gpd/log (session-event ingest to GCS). See

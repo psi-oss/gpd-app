@@ -4,6 +4,7 @@ import { Effect, Layer, Record, Result, Schema, Context } from "effect"
 import { zod } from "@/util/effect-zod"
 import { Global } from "../global"
 import { AppFileSystem } from "../filesystem"
+import { GpdLogSpill } from "../sink/spill"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -124,6 +125,24 @@ export namespace Auth {
             delete data[key]
             delete data[norm]
             yield* fsys.writeJsonAtomic(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
+            // Wipe queued GPD telemetry on consent revocation. Without
+            // this, any spill files written between the revocation and
+            // the user's next sign-in would replay to the proxy as soon
+            // as a fresh key landed in auth.json — i.e. events captured
+            // under withdrawn consent would still ship. The peer change
+            // in sink/gpd-logger.ts:enqueue prevents new spill, this
+            // closes the window for already-queued items.
+            //
+            // Best-effort: a filesystem failure here must not block the
+            // revoke (the on-disk auth.json delete already succeeded
+            // above, which is the contractual outcome the caller asked
+            // for). The wipe itself is also written to log loudly on
+            // unexpected error inside spill.ts.
+            if (key === "gpd" || norm === "gpd") {
+              yield* Effect.promise(() => GpdLogSpill.wipe()).pipe(
+                Effect.orElseSucceed(() => undefined),
+              )
+            }
           }),
         )
       })

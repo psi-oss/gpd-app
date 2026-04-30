@@ -1,0 +1,138 @@
+name: Audit DB Backup
+
+# Daily encrypted dump of the gpd_tos_acceptance table to GCS with
+# Bucket Lock retention (7 years). The acceptance table is the legal
+# record of "user X agreed to TOS document with hash Y on date Z";
+# losing it means losing every consent defence under GDPR Art. 7(1).
+#
+# Railway's Postgres has automatic snapshots, but the default retention
+# on the paid tier is 7 days — a single redeploy + week of inattention
+# could erase every consent proof. This workflow is the durable archive.
+#
+# Setup contract (one-time, see .planning/AUDIT-BACKUP-SETUP.md):
+#   - GCS bucket `gpd-audit-backups` exists, PAP=enforced, UBLA on,
+#     7-year retention policy locked via `--lock-retention-policy`.
+#   - GCP SA `gpd-audit-backup@gpd-desktop.iam.gserviceaccount.com`
+#     has roles/storage.objectCreator on that bucket only (no overwrite,
+#     no delete — retention policy enforces that anyway).
+#   - Workload Identity Federation provider configured for this repo's
+#     `gpd` branch.
+#   - Repo secrets:
+#       GCP_WIF_PROVIDER          → projects/<num>/locations/global/workloadIdentityPools/...
+#       GPD_AUDIT_DATABASE_URL    → postgres connection string (read-only role)
+#       AUDIT_BACKUP_PASSPHRASE   → 32+ char random; symmetric AES256 key for the dump
+#
+# Failure mode contract: this workflow is allowed to fail noisily — it
+# pages the on-call channel via the failure step at the bottom — but
+# must never silently drop a backup. A successful run posts to the
+# audit channel so absence-of-success is itself the alert.
+
+on:
+  schedule:
+    # Daily at 06:00 UTC. Off-peak across all PSI timezones.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this manually? (audit log)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write          # WIF token mint
+
+concurrency:
+  group: audit-db-backup
+  cancel-in-progress: false  # never cancel a backup in flight
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: gpd-audit-backup@gpd-desktop.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install pg_dump 16
+        # Railway uses Postgres 16; pg_dump must match the server major
+        # version. Ubuntu 22.04 / 24.04 default repos ship pg 14.
+        # apt.postgresql.org is the upstream PGDG mirror.
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          pg_dump --version
+
+      - name: Dump + encrypt + upload
+        env:
+          AUDIT_DATABASE_URL: ${{ secrets.GPD_AUDIT_DATABASE_URL }}
+          AUDIT_BACKUP_PASSPHRASE: ${{ secrets.AUDIT_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077  # tmp files mode 0600
+
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          ymonth=$(date -u +%Y/%m)
+          dump="/tmp/audit-${ts}.dump"
+          enc="/tmp/audit-${ts}.dump.gpg"
+
+          # custom format, compressed, single table only — gpd_tos_acceptance
+          # is the only table this dump is allowed to touch. Restricting via
+          # `-t` plus the read-only DB role belt+braces.
+          pg_dump \
+            --no-owner --no-privileges --no-acl \
+            --format=custom \
+            --compress=9 \
+            -t public.gpd_tos_acceptance \
+            "$AUDIT_DATABASE_URL" \
+            > "$dump"
+
+          # Verify the dump is non-empty + parses as a valid pg_dump file.
+          # pg_restore --list exits non-zero on a corrupt archive.
+          test -s "$dump"
+          pg_restore --list "$dump" > /dev/null
+
+          # Symmetric AES256 with passphrase. We deliberately use
+          # symmetric (not asymmetric) — the passphrase lives in GH
+          # Actions + Vault and the restore drill needs it; an asym
+          # key adds key-management complexity without privacy gain
+          # against an attacker who already has GH+GCS write.
+          gpg --batch --yes \
+              --passphrase-fd 3 \
+              --symmetric --cipher-algo AES256 \
+              -o "$enc" "$dump" 3<<< "$AUDIT_BACKUP_PASSPHRASE"
+
+          test -s "$enc"
+
+          # Upload. Object name encodes timestamp; bucket retention
+          # policy makes it immutable for the configured window.
+          gcloud storage cp "$enc" \
+            "gs://gpd-audit-backups/${ymonth}/audit-${ts}.dump.gpg"
+
+          # Surface the upload path so a human auditor can verify out-of-band.
+          echo "::notice::Backup uploaded: gs://gpd-audit-backups/${ymonth}/audit-${ts}.dump.gpg"
+
+          # Belt+braces: scrub local copies even though /tmp gets nuked
+          # by the runner teardown. Multi-pass shred deters someone
+          # plucking the runner image off a misconfigured cache.
+          shred -fuz "$dump" "$enc" 2>/dev/null || rm -f "$dump" "$enc"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Audit DB backup failed. Investigate within 24h — Railway snapshot retention is 7 days, so we cannot accumulate failed days."
+          # When PSI has a Slack webhook secret, surface it here. For now
+          # the GH Actions failure email + the ::error annotation in the
+          # cron summary are the alert channel.

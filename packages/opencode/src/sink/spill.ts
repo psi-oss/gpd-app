@@ -69,6 +69,28 @@ export namespace GpdLogSpill {
 
   /**
    * Atomically persist one flush to disk. Returns the ULID filename stem.
+   *
+   * Crash-recovery contract: meta-presence is the commit marker. The gz
+   * rename + dir-fsync happens FIRST, then the meta rename + dir-fsync
+   * second. Three reasons:
+   *
+   *   1. A crash AFTER gz rename but BEFORE meta rename leaves an orphan
+   *      gz with no meta. `list()` (below) garbage-collects orphan gz
+   *      files at boot. We lose that one flush — bounded, no replay
+   *      surprise — but never serve half-corrupt data downstream.
+   *
+   *   2. A crash AFTER both renames but BEFORE the meta dir-fsync is
+   *      durable: meta dirent might or might not be visible after
+   *      reboot. If it is, the entry replays normally. If it isn't,
+   *      the orphan-gz path (#1) kicks in. Either way, no torn read.
+   *
+   *   3. The PRIOR ordering wrote both renames before any dir-fsync,
+   *      relying on POSIX dirent batching to publish them together.
+   *      ext4 with `data=ordered` and APFS do NOT guarantee that — a
+   *      crash mid-batch could leave gz visible + meta absent without
+   *      a fsync barrier between them. We saw zero evidence of data
+   *      loss in practice, but the window is real and trivial to
+   *      close (one extra fsync per write, ~1 ms on SSD).
    */
   export async function write(ulid: string, meta: Meta, body: Uint8Array): Promise<string> {
     const d = dir()
@@ -84,7 +106,16 @@ export namespace GpdLogSpill {
     await fsyncAndClose(gzTmp)
     await fs.writeFile(metaTmp, JSON.stringify(meta))
     await fsyncAndClose(metaTmp)
+
+    // Step 1: publish gz, fsync the directory so the dirent is durable
+    // BEFORE the meta dirent lands. After this fsync, an in-progress
+    // `list()` would see gz-only and treat it as orphan (correct).
     await fs.rename(gzTmp, gzPath)
+    await fsyncDir(d)
+
+    // Step 2: publish meta. Dir-fsync makes the meta dirent durable and
+    // commits the entry as a complete flush. From this fsync forward the
+    // entry is recoverable across crashes.
     await fs.rename(metaTmp, metaPath)
     await fsyncDir(d)
 
@@ -182,5 +213,35 @@ export namespace GpdLogSpill {
       fs.unlink(path.join(d, `${ulid}.gz`)).catch(() => undefined),
       fs.unlink(path.join(d, `${ulid}.meta`)).catch(() => undefined),
     ])
+  }
+
+  /**
+   * Drop every entry in the spill dir. Used by Auth.remove("gpd") to
+   * close a privacy-regression window: without this, queued events
+   * captured BETWEEN a consent revocation and the next sign-in would
+   * replay to the proxy as soon as the user re-pasted a key — i.e.
+   * post-revoke buffered events would still ship, defeating the user's
+   * withdrawal.
+   *
+   * Best-effort: a stat / unlink failure does not throw, the caller's
+   * revoke flow must succeed even if the spill dir is unreadable. Future
+   * writes will be re-gated upstream by the auth-presence check in
+   * gpd-logger.ts:enqueue, so a stale entry here cannot reappear without
+   * a fresh sign-in.
+   */
+  export async function wipe(): Promise<void> {
+    const d = dir()
+    let names: string[]
+    try {
+      names = await fs.readdir(d)
+    } catch (e: any) {
+      if (e?.code === "ENOENT") return
+      log.warn("wipe: readdir failed", { error: (e as Error).message })
+      return
+    }
+    await Promise.all(
+      names.map((n) => fs.unlink(path.join(d, n)).catch(() => undefined)),
+    )
+    await fsyncDir(d).catch(() => undefined)
   }
 }

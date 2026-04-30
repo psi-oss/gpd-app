@@ -55,6 +55,21 @@ if not _PEPPER_HEX:
     )
 _PEPPER = bytes.fromhex(_PEPPER_HEX)
 
+# Blocklist of user_ids reserved for CI / smoke testing. These values
+# must NEVER write to the production log bucket. Caller is expected to
+# either use a real virtual-key user_id or hit a dedicated smoke-test
+# endpoint that writes elsewhere. See `gpd-desktop-logs/user=236baedff028ad77/`
+# for the historical pollution we're guarding against (LAUNCH-READINESS.md
+# P0-4).
+_BLOCKED_TEST_USER_IDS = frozenset({
+    "smoke",
+    "smoke-test",
+    "ci",
+    "ses_smoke_ci",
+    "test",
+    "default_user_id",
+})
+
 # Crockford base32 alphabet, as used by ULIDs.
 _ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 # OpenCode session IDs are `ses_<ulid>`-shape; accept alphanumeric + `_-`.
@@ -111,6 +126,24 @@ async def gpd_log(
             401,
             detail="virtual key must carry a user_id (admin keys cannot write logs)",
         )
+
+    # Reject reserved test/CI user_ids. We mistakenly shipped a smoke-CI
+    # workflow that hit `/gpd/log` with `user_id=smoke` in the early
+    # 2026-04-21 / 22 testing wave; the resulting rows are in the prod
+    # bucket as gs://gpd-desktop-logs/user=236baedff028ad77/. Block the
+    # known testing values at the source so the bucket only ever
+    # contains real-user telemetry going forward. Smoke tests should hit
+    # a dedicated test endpoint (or write to a quarantine bucket via a
+    # separate route).
+    if user_id in _BLOCKED_TEST_USER_IDS:
+        raise HTTPException(
+            403,
+            detail=(
+                "user_id is reserved for testing; mint a real virtual key "
+                "or use the dedicated smoke-test endpoint."
+            ),
+        )
+
     user_hash = hmac.new(_PEPPER, user_id.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
     # Build object path.

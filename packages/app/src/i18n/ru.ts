@@ -1150,9 +1150,9 @@ export const dict = {
   "settings.dependencies.toast.repairFailed": "Ошибка восстановления: {{error}}",
 
   "welcome.apiKey.invalidFormat":
-    "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask your lab administrator for a GPD virtual key.",
+    "That doesn't look like a GPD API key. Keys start with \"sk-\". Ask PSI for a GPD virtual key.",
   "welcome.apiKey.rejectedByServer":
-    "GPD's server rejected this key. Double-check it, or ask your lab administrator for a fresh GPD virtual key.",
+    "GPD's server rejected this key. Double-check it, or ask PSI for a fresh GPD virtual key.",
   "welcome.apiKey.networkError":
     "Couldn't reach the GPD server to verify your key. Check your internet connection and try again.",
   "session.tab.unsavedFileEditor": "Unsaved file changes",

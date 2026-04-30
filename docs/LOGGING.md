@@ -23,7 +23,9 @@ single source of truth for *why* the logging stack looks the way it does and
 > (which is what emits Bus events into `gpd-logger.ts`) never starts.
 > Server-side acceptance rows are stored in the
 > `gpd_tos_acceptance` Postgres table (see
-> `infra/litellm/gpd_tos/` and `infra/litellm/scripts/create-tos-table.sql`).
+> `infra/litellm/gpd_tos/` — schema lives under
+> `gpd_tos/migrations/`, applied at worker boot via
+> `gpd_tos/migrate.py`).
 > GDPR deletion cascades through `scripts/delete-user.ts`.
 
 ---
