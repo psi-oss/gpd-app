@@ -280,6 +280,20 @@ when a non-engineer needs self-serve audit.
 | `infra/gcs/lifecycle.json` | 30 d → NEARLINE, 90 d → COLDLINE, 365 d → ARCHIVE, 730 d → Delete. Applied live to `gs://gpd-desktop-logs`. |
 | `scripts/delete-user.ts` | `bun scripts/delete-user.ts --user-id=<id> [--confirm]`. Purges GCS prefix, BQ rows, and LiteLLM virtual keys. Dry-run by default. |
 
+### Audit-DB backup
+
+`gpd_tos_acceptance` (consent records) is dumped daily to a separate
+bucket with locked 7-year retention.
+
+| Item | State |
+|---|---|
+| Bucket | `gs://gpd-audit-backups` (US-CENTRAL1, PAP=enforced, UBLA, soft-delete=30d) |
+| Retention | **7 years, LOCKED 2026-04-30** — irreversible. Every uploaded object is immutable until 2033. |
+| Lifecycle | NEARLINE @30d → COLDLINE @180d → ARCHIVE @1y. No Delete rule. |
+| Daily backup | `.github/workflows/audit-db-backup.yml` — 06:00 UTC, AES256 GPG-encrypted dump |
+| Monthly drill | `.github/workflows/audit-db-restore-drill.yml` — 5th of month, restore + schema diff |
+| Setup runbook | `.planning/AUDIT-BACKUP-SETUP.md` |
+
 ---
 
 ## Current deployed state (as of 2026-04-21)
