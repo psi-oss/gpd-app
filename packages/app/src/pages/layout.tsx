@@ -2544,39 +2544,6 @@ export default function Layout(props: ParentProps) {
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
-      onResetKey={async () => {
-        // Authoritative delete via Tauri FS command; HTTP auth.remove
-        // can hang if sidecar is mid-dispose. See settings-general.tsx
-        // handleChangeApiKey for the full rationale.
-        if (platform.removeGpdKey) {
-          try {
-            await platform.removeGpdKey()
-          } catch (e) {
-            console.error("[gpd] removeGpdKey failed:", e)
-          }
-        } else {
-          const timeout = <T,>(p: Promise<T>) =>
-            Promise.race([
-              p,
-              new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
-            ])
-          await timeout(globalSDK.client.auth.remove({ providerID: "gpd" })).catch((e) =>
-            console.error("[gpd] auth.remove failed:", e),
-          )
-        }
-        void globalSDK.client.global.dispose().catch((e) =>
-          console.error("[gpd] global.dispose failed:", e),
-        )
-        localStorage.removeItem("gpd.key.saved")
-        // Sentinel read by app.tsx on the next mount: pre-latches
-        // reonboardLatched so the provider-connected effect can't
-        // re-promote hasKey from the sidecar's stale in-memory cache
-        // before its /provider read catches up to the just-emptied
-        // auth.json. See app.tsx reonboardLatched doc.
-        localStorage.setItem("gpd.key.resetting", "1")
-        window.location.reload()
-      }}
-      resetKeyLabel={() => language.t("sidebar.resetKey")}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }

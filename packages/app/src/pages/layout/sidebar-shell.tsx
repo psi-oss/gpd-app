@@ -30,8 +30,6 @@ export const SidebarContent = (props: {
   settingsLabel: Accessor<string>
   settingsKeybind: Accessor<string | undefined>
   onOpenSettings: () => void
-  onResetKey?: () => void
-  resetKeyLabel?: Accessor<string>
   renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
@@ -110,17 +108,6 @@ export const SidebarContent = (props: {
               aria-label={props.settingsLabel()}
             />
           </TooltipKeybind>
-          <Show when={props.onResetKey}>
-            <Tooltip placement={placement()} value={props.resetKeyLabel?.() ?? ""}>
-              <IconButton
-                icon="edit-small-2"
-                variant="ghost"
-                size="large"
-                onClick={() => props.onResetKey?.()}
-                aria-label={props.resetKeyLabel?.()}
-              />
-            </Tooltip>
-          </Show>
         </div>
       </div>
 
