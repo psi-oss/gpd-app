@@ -377,7 +377,13 @@ export async function bootstrapDirectory(input: {
 
   const errs = errors(await runAll(fast))
   if (errs.length > 0) {
-    console.error("Failed to bootstrap instance", errs[0])
+    for (const err of errs) {
+      console.error(
+        "[gpd] bootstrapDirectory fast-step failed",
+        err,
+        err instanceof Error ? err.stack : undefined,
+      )
+    }
     const project = getFilename(input.directory)
     showToast({
       variant: "error",
@@ -389,7 +395,13 @@ export async function bootstrapDirectory(input: {
   await waitForPaint()
   const slowErrs = errors(await runAll(slow))
   if (slowErrs.length > 0) {
-    console.error("Failed to finish bootstrap instance", slowErrs[0])
+    for (const err of slowErrs) {
+      console.error(
+        "[gpd] bootstrapDirectory slow-step failed",
+        err,
+        err instanceof Error ? err.stack : undefined,
+      )
+    }
     const project = getFilename(input.directory)
     showToast({
       variant: "error",
@@ -410,7 +422,11 @@ export async function bootstrapDirectory(input: {
     })
     .catch((err) => {
       if (providerRev.get(input.directory) !== rev) return
-      console.error("Failed to refresh provider list", err)
+      console.error(
+        "[gpd] bootstrapDirectory provider.list failed",
+        err,
+        err instanceof Error ? err.stack : undefined,
+      )
       const project = getFilename(input.directory)
       showToast({
         variant: "error",
