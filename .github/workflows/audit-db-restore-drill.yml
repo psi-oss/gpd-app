@@ -117,14 +117,19 @@ jobs:
 
           # 4. Schema diff vs live audit DB. Both should match.
           # `pg_dump --schema-only` on each, normalize, diff.
+          # Filter out:
+          #   - comment / blank / SET lines (cosmetic)
+          #   - \restrict / \unrestrict (pg 16+ emits randomized session
+          #     tokens per dump; differ across runs by design and never
+          #     reflect real schema state)
           pg_dump --schema-only --no-owner --no-privileges --no-acl \
             -t public.gpd_tos_acceptance "$AUDIT_DATABASE_URL" \
-            | grep -v -E '^--|^$|^SET ' \
+            | grep -v -E '^--|^$|^SET |^\\(restrict|unrestrict)\b' \
             > /tmp/live-schema.sql
           pg_dump --schema-only --no-owner --no-privileges --no-acl \
             -t public.gpd_tos_acceptance \
             "postgresql://postgres:drill@127.0.0.1:5432/scratch" \
-            | grep -v -E '^--|^$|^SET ' \
+            | grep -v -E '^--|^$|^SET |^\\(restrict|unrestrict)\b' \
             > /tmp/restored-schema.sql
 
           if ! diff -u /tmp/restored-schema.sql /tmp/live-schema.sql; then
