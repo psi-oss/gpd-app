@@ -2,11 +2,31 @@ import { useMarked } from "../context/marked"
 import { useI18n } from "../context/i18n"
 import DOMPurify from "dompurify"
 import morphdom from "morphdom"
+import { marked as fallbackMarked } from "marked"
 import { checksum } from "@opencode-ai/util/encode"
 import { ComponentProps, createEffect, createResource, createSignal, onCleanup, splitProps } from "solid-js"
 import { isServer } from "solid-js/web"
 import { stream } from "./markdown-stream"
 import { preprocess as preprocessFrontmatter } from "./markdown-frontmatter"
+
+// Lets the component render outside the usual MarkedProvider / I18nProvider
+// wrappers (notably unit-test mounts that don't bring up the full app shell).
+// Real app renders still get shiki + katex via the providers.
+function useMarkedSafe(): { parse: (md: string) => string | Promise<string> } {
+  try {
+    return useMarked()
+  } catch {
+    return fallbackMarked as unknown as { parse: (md: string) => string | Promise<string> }
+  }
+}
+
+function useI18nSafe(): { t: (key: string, vars?: Record<string, unknown>) => string } {
+  try {
+    return useI18n() as { t: (key: string, vars?: Record<string, unknown>) => string }
+  } catch {
+    return { t: (key: string) => key }
+  }
+}
 
 type Entry = {
   hash: string
@@ -248,8 +268,8 @@ export function Markdown(
   },
 ) {
   const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "frontmatter", "class", "classList"])
-  const marked = useMarked()
-  const i18n = useI18n()
+  const marked = useMarkedSafe()
+  const i18n = useI18nSafe()
   const [root, setRoot] = createSignal<HTMLDivElement>()
   const [html] = createResource(
     () => ({
@@ -276,7 +296,7 @@ export function Markdown(
           }
 
           const next = await Promise.resolve(marked.parse(block.src))
-          const safe = sanitize(next)
+          const safe = sanitize(typeof next === "string" ? next.trim() : next)
           if (key && hash) touch(key, { hash, html: safe })
           return safe
         }),
