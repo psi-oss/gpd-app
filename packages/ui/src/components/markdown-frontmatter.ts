@@ -5,10 +5,18 @@
 // front-matter to a fenced ```yaml block before marked sees it so the YAML
 // is rendered as a syntax-highlighted code block and the markdown body
 // stays untouched.
+//
+// As a second pass we escape unknown HTML-like tags in the body. GPD plan
+// files lean on custom <objective> / <task> / <verify> / <done> containers
+// that DOMPurify silently strips — escaping their `<` and `>` makes them
+// render as visible literal markup instead of smushing nested children into
+// one paragraph.
+
+import { escapeUnknownTags } from "./markdown-escape-tags"
 
 const KEY_LINE = /^[A-Za-z_][\w.-]*\s*:/
 
-export function preprocess(text: string): string {
+function rewriteFrontmatter(text: string): string {
   if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) return text
 
   // Closed front-matter: --- ... --- followed by markdown body.
@@ -26,4 +34,8 @@ export function preprocess(text: string): string {
   const firstLine = rest.split(/\r?\n/).find((l) => l.trim() !== "") ?? ""
   if (!KEY_LINE.test(firstLine)) return text
   return "```yaml\n" + rest + "\n```"
+}
+
+export function preprocess(text: string): string {
+  return escapeUnknownTags(rewriteFrontmatter(text))
 }
