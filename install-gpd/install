@@ -1437,14 +1437,14 @@ print_success() {
         printf "  Open the ${BOLD}GPD${RESET} app from your applications menu to get started.\n"
         printf "  ${DIM}First launch will walk you through TOS acceptance + your PSI key.${RESET}\n"
     else
-        # The auto-install of the desktop bundle didn't run (network, draft
-        # release, unsupported arch). Send the user at the manual download
-        # rather than telling them to type `gpd` in a terminal — the CLI
-        # exists but isn't the supported entry point.
-        printf "  Download the ${BOLD}GPD${RESET} desktop app from\n"
-        printf "  ${BOLD}https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest${RESET}\n"
-        printf "  then open it from your applications menu.\n"
-        printf "  ${DIM}First launch will walk you through TOS acceptance + your PSI key.${RESET}\n"
+        # Mirrors the Windows installer: the desktop bundle is the only
+        # supported entry point, so a missing /Applications/GPD.app (or
+        # /usr/bin/GPD on Linux) means the desktop step failed earlier.
+        # Surface that loudly rather than papering it over with CLI advice.
+        printf "  ${RED}GPD desktop app NOT installed.${RESET}\n"
+        printf "  ${RED}The desktop installer step failed earlier — re-run the installer, or${RESET}\n"
+        printf "  ${RED}open an issue at https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/issues${RESET}\n"
+        printf "  ${RED}with the log above.${RESET}\n"
     fi
     printf "\n"
     printf "  ${DIM}Installed to: %s${RESET}\n" "$GPD_HOME"
