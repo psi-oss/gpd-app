@@ -784,7 +784,7 @@ install_uv_bootstrap() {
     fi
 
     mkdir -p "$uv_dir"
-    log "Installing uv (manages app-local Python)..."
+    log "Installing uv (manages app-local Python)..." >&2
     if ! INSTALLER_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$uv_dir" \
             UV_UNMANAGED_INSTALL="$uv_dir" \
             sh -c "curl -LsSf '$UV_INSTALLER_URL' | sh" >&2; then
@@ -1419,10 +1419,9 @@ configure_gpd_runtime() {
 # ── Success ──────────────────────────────────────────────────────────────
 
 print_success() {
-    # Detect a working desktop bundle so the success message can point at
-    # it instead of the CLI. The desktop app is the primary surface for
-    # PSI professors; the `gpd` CLI is a power-user shortcut. Linux's
-    # .deb lands GPD at /usr/bin/GPD; macOS's .dmg at /Applications/GPD.app.
+    # The desktop app is the only supported surface for end users — PSI
+    # professors run GPD as a GUI, never as a CLI. Linux's .deb lands GPD
+    # at /usr/bin/GPD; macOS's .dmg at /Applications/GPD.app.
     local has_desktop=false
     if [[ "$os" == "darwin" && -d "/Applications/GPD.app" ]]; then
         has_desktop=true
@@ -1438,7 +1437,14 @@ print_success() {
         printf "  Open the ${BOLD}GPD${RESET} app from your applications menu to get started.\n"
         printf "  ${DIM}First launch will walk you through TOS acceptance + your PSI key.${RESET}\n"
     else
-        printf "  Run GPD: open a ${BOLD}new terminal${RESET}, then type ${BOLD}gpd${RESET}\n"
+        # The auto-install of the desktop bundle didn't run (network, draft
+        # release, unsupported arch). Send the user at the manual download
+        # rather than telling them to type `gpd` in a terminal — the CLI
+        # exists but isn't the supported entry point.
+        printf "  Download the ${BOLD}GPD${RESET} desktop app from\n"
+        printf "  ${BOLD}https://github.com/${OPENCODE_ORG}/${OPENCODE_REPO}/releases/latest${RESET}\n"
+        printf "  then open it from your applications menu.\n"
+        printf "  ${DIM}First launch will walk you through TOS acceptance + your PSI key.${RESET}\n"
     fi
     printf "\n"
     printf "  ${DIM}Installed to: %s${RESET}\n" "$GPD_HOME"
