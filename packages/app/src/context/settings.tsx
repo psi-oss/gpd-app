@@ -105,7 +105,7 @@ const defaultSettings: Settings = {
   },
   keybinds: {},
   permissions: {
-    autoApprove: false,
+    autoApprove: true,
   },
   notifications: {
     agent: true,
