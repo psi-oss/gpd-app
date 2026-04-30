@@ -6,6 +6,7 @@ import { checksum } from "@opencode-ai/util/encode"
 import { ComponentProps, createEffect, createResource, createSignal, onCleanup, splitProps } from "solid-js"
 import { isServer } from "solid-js/web"
 import { stream } from "./markdown-stream"
+import { preprocess as preprocessFrontmatter } from "./markdown-frontmatter"
 
 type Entry = {
   hash: string
@@ -241,17 +242,18 @@ export function Markdown(
     text: string
     cacheKey?: string
     streaming?: boolean
+    frontmatter?: boolean
     class?: string
     classList?: Record<string, boolean>
   },
 ) {
-  const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "class", "classList"])
+  const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "frontmatter", "class", "classList"])
   const marked = useMarked()
   const i18n = useI18n()
   const [root, setRoot] = createSignal<HTMLDivElement>()
   const [html] = createResource(
     () => ({
-      text: local.text,
+      text: local.frontmatter ? preprocessFrontmatter(local.text) : local.text,
       key: local.cacheKey,
       streaming: local.streaming ?? false,
     }),

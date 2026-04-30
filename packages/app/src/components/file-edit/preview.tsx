@@ -4,7 +4,7 @@ import { Markdown } from "@opencode-ai/ui/markdown"
 import { useLanguage } from "@/context/language"
 
 export type EditorMode = "source" | "preview"
-export type PreviewKind = "markdown" | "json" | "bib" | "tex"
+export type PreviewKind = "markdown" | "json" | "bib" | "tex" | "yaml"
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
@@ -15,6 +15,7 @@ export function previewKind(path: string | undefined): PreviewKind | undefined {
   if (lower.endsWith(".json")) return "json"
   if (lower.endsWith(".bib") || lower.endsWith(".bibtex")) return "bib"
   if (lower.endsWith(".tex")) return "tex"
+  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml"
 }
 
 function json(value: unknown): value is Json {
@@ -177,7 +178,10 @@ export function FilePreview(props: {
     <div class="h-full min-h-0 overflow-auto bg-background">
       <Switch>
         <Match when={props.kind === "markdown"}>
-          <Markdown text={props.content} class="p-6 text-13-regular" />
+          <Markdown text={props.content} frontmatter class="p-6 text-13-regular" />
+        </Match>
+        <Match when={props.kind === "yaml"}>
+          <Markdown text={`\`\`\`yaml\n${props.content}\n\`\`\``} class="p-6 text-13-regular" />
         </Match>
         <Match when={props.kind === "json"}>
           <div class="p-4">

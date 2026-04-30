@@ -7,6 +7,8 @@ describe("file editor preview helpers", () => {
     expect(previewKind("data.json")).toBe("json")
     expect(previewKind("refs.bib")).toBe("bib")
     expect(previewKind("paper.tex")).toBe("tex")
+    expect(previewKind("plan.yaml")).toBe("yaml")
+    expect(previewKind("plan.yml")).toBe("yaml")
     expect(previewKind("src/app.ts")).toBeUndefined()
   })
 
