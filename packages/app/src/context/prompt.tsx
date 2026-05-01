@@ -185,11 +185,11 @@ function createPromptSession(dir: string, id: string | undefined) {
 
   return {
     ready,
-    current: createMemo(() => store.prompt),
-    cursor: createMemo(() => store.cursor),
-    dirty: createMemo(() => !isPromptEqual(store.prompt, DEFAULT_PROMPT)),
+    current: () => store.prompt,
+    cursor: () => store.cursor,
+    dirty: () => !isPromptEqual(store.prompt, DEFAULT_PROMPT),
     context: {
-      items: createMemo(() => store.context.items),
+      items: () => store.context.items,
       add(item: ContextItem) {
         const key = contextItemKey(item)
         if (store.context.items.find((x) => x.key === key)) return

@@ -26,7 +26,6 @@ import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Select } from "@opencode-ai/ui/select"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { ModelSelectorPopover } from "@/components/dialog-select-model"
 import { useProviders } from "@/hooks/use-providers"
 import { useCommand } from "@/context/command"
 import { Persist, persisted } from "@/utils/persist"
@@ -294,6 +293,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
   const stopping = createMemo(() => working() && blank())
+  const ready = createMemo(() => !!local.model.current() && !!local.agent.current())
+  const disabled = createMemo(() => {
+    if (store.mode !== "normal") return true
+    if (stopping()) return false
+    if (!ready()) return true
+    return !working() && blank()
+  })
   const tip = () => {
     if (stopping()) {
       return (
@@ -302,6 +308,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <span class="text-icon-base text-12-medium text-[10px]!">{language.t("common.key.esc")}</span>
         </div>
       )
+    }
+
+    if (!ready()) {
+      return <span>{language.t("prompt.toast.modelAgentRequired.description")}</span>
     }
 
     return (
@@ -779,15 +789,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const reconcile = (input: Prompt) => {
+    const dom = parseFromDOM()
     if (mirror.input) {
       mirror.input = false
-      if (isNormalizedEditor()) return
+      if (isNormalizedEditor() && isPromptEqual(input, dom)) return
 
       renderEditorWithCursor(input)
       return
     }
 
-    const dom = parseFromDOM()
     if (isNormalizedEditor() && isPromptEqual(input, dom)) return
 
     renderEditorWithCursor(input)
@@ -1311,6 +1321,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ) {
         return
       }
+      if (!ready()) return
       handleSubmit(event)
     }
   }
@@ -1454,7 +1465,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={store.mode !== "normal" || (!working() && blank())}
+                  disabled={disabled()}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : "arrow-up"}
                   variant="primary"
@@ -1556,57 +1567,19 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <Show
                       when={providers.paid().length > 0}
                       fallback={
-                        <TooltipKeybind
-                          placement="top"
-                          gutter={4}
-                          title={language.t("command.model.choose")}
-                          keybind={command.keybind("model.choose")}
-                        >
-                          <Button
-                            data-action="prompt-model"
-                            as="div"
-                            variant="ghost"
-                            size="normal"
-                            class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
-                            style={control()}
-                            onClick={() => {
-                              void import("@/components/dialog-select-model-unpaid").then((x) => {
-                                dialog.show(() => <x.DialogSelectModelUnpaid model={local.model} />)
-                              })
-                            }}
-                          >
-                            <Show when={local.model.current()?.provider?.id}>
-                              <ProviderIcon
-                                id={local.model.current()?.provider?.id ?? ""}
-                                class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
-                                style={{ "will-change": "opacity", transform: "translateZ(0)" }}
-                              />
-                            </Show>
-                            <span class="truncate">
-                              {local.model.current()?.name ?? language.t("dialog.model.select.title")}
-                            </span>
-                            <Icon name="chevron-down" size="small" class="shrink-0" />
-                          </Button>
-                        </TooltipKeybind>
-                      }
-                    >
-                      <TooltipKeybind
-                        placement="top"
-                        gutter={4}
-                        title={language.t("command.model.choose")}
-                        keybind={command.keybind("model.choose")}
-                      >
-                        <ModelSelectorPopover
-                          model={local.model}
-                          triggerAs={Button}
-                          triggerProps={{
-                            variant: "ghost",
-                            size: "normal",
-                            style: control(),
-                            class: "min-w-0 max-w-[320px] text-13-regular text-text-base group",
-                            "data-action": "prompt-model",
+                        <Button
+                          data-action="prompt-model"
+                          as="div"
+                          variant="ghost"
+                          size="normal"
+                          class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
+                          style={control()}
+                          title={`${language.t("command.model.choose")} ${command.keybind("model.choose")}`}
+                          onClick={() => {
+                            void import("@/components/dialog-select-model-unpaid").then((x) => {
+                              dialog.show(() => <x.DialogSelectModelUnpaid model={local.model} />)
+                            })
                           }}
-                          onClose={restoreFocus}
                         >
                           <Show when={local.model.current()?.provider?.id}>
                             <ProviderIcon
@@ -1619,8 +1592,36 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             {local.model.current()?.name ?? language.t("dialog.model.select.title")}
                           </span>
                           <Icon name="chevron-down" size="small" class="shrink-0" />
-                        </ModelSelectorPopover>
-                      </TooltipKeybind>
+                        </Button>
+                      }
+                    >
+                      <Button
+                        data-action="prompt-model"
+                        type="button"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
+                        style={control()}
+                        title={`${language.t("command.model.choose")} ${command.keybind("model.choose")}`}
+                        onClick={() => {
+                          void import("@/components/dialog-select-model").then((x) => {
+                            dialog.show(() => <x.DialogSelectModel model={local.model} />)
+                            restoreFocus()
+                          })
+                        }}
+                      >
+                        <Show when={local.model.current()?.provider?.id}>
+                          <ProviderIcon
+                            id={local.model.current()?.provider?.id ?? ""}
+                            class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
+                            style={{ "will-change": "opacity", transform: "translateZ(0)" }}
+                          />
+                        </Show>
+                        <span class="truncate">
+                          {local.model.current()?.name ?? language.t("dialog.model.select.title")}
+                        </span>
+                        <Icon name="chevron-down" size="small" class="shrink-0" />
+                      </Button>
                     </Show>
                   </div>
                   <Show when={variants().length > 0}>
@@ -1660,7 +1661,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         class="text-13-regular text-text-base"
                         onClick={() => {
                           void import("@/components/dialog-gpd-skills").then((x) => {
-                            dialog.show(() => <x.DialogGpdSkills />)
+                            dialog.show(() => <x.DialogGpdSkills commands={sync.data.command} />)
                           })
                         }}
                         aria-label={language.t("dock.gpdSkills")}
