@@ -594,7 +594,17 @@ export default function Page() {
   }
 
   const loadVcs = (mode: VcsMode, force = false) => {
-    if (sync.project?.vcs !== "git") return Promise.resolve()
+    const vcsKind = sync.project?.vcs
+    // sync.project is async-loaded by bootstrapDirectory. While it's still
+    // undefined, leave `ready=false` so the panel keeps its loading state
+    // and the effect re-fires once project metadata lands. When the
+    // project finishes loading and is non-git, mark ready so the panel
+    // shows the empty/no-changes state instead of an infinite spinner.
+    if (vcsKind === undefined) return Promise.resolve()
+    if (vcsKind !== "git") {
+      if (!vcs.ready[mode]) setVcs("ready", mode, true)
+      return Promise.resolve()
+    }
     if (!force && vcs.ready[mode]) return Promise.resolve()
 
     if (force) {
@@ -1078,6 +1088,11 @@ export default function Page() {
 
   createEffect(() => {
     const mode = vcsMode()
+    // Track sync.project?.vcs so that when project metadata finishes
+    // loading after the initial mount (async bootstrapDirectory), loadVcs
+    // re-fires and the review panel exits its loading state.
+    const _vcsKind = sync.project?.vcs
+    void _vcsKind
     if (!mode) return
     if (!wantsReview()) return
     void loadVcs(mode)

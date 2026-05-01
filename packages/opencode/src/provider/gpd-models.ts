@@ -41,6 +41,16 @@ export type GpdModelMetadata = {
   attachment?: boolean
   temperature?: boolean
   limit?: { context?: number; output?: number }
+  // Per-million-token pricing surfaced into Model.cost so the session
+  // total-cost panel ($X.XX) stops reporting $0.00. Keep in lockstep with
+  // models-snapshot.js cost blocks for the upstream provider/model id;
+  // LiteLLM bills the upstream price 1:1 (no PSI markup at this layer).
+  cost?: {
+    input?: number
+    output?: number
+    cache_read?: number
+    cache_write?: number
+  }
 }
 
 // Per-model `reasoning_effort` tier overrides. Empirically probed against
@@ -115,6 +125,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 131_072 },
+    cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   },
   "claude-opus-4-6": {
     name: "Claude Opus 4.6",
@@ -123,6 +134,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 131_072 },
+    cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   },
   "claude-sonnet-4-6": {
     name: "Claude Sonnet 4.6",
@@ -131,6 +143,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 65_536 },
+    cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   },
   "claude-haiku-4-5": {
     name: "Claude Haiku 4.5",
@@ -139,6 +152,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 200_000, output: 65_536 },
+    cost: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
   },
   "gpt-5.5": {
     name: "GPT 5.5",
@@ -147,6 +161,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 5, output: 30, cache_read: 0.5 },
   },
   "gpt-5.5-pro": {
     name: "GPT 5.5 Pro",
@@ -155,6 +170,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 30, output: 180 },
   },
   "gpt-5.4": {
     name: "GPT 5.4",
@@ -163,6 +179,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 131_072 },
+    cost: { input: 2.5, output: 15, cache_read: 0.25 },
   },
   "gpt-5.4-mini": {
     name: "GPT 5.4 mini",
@@ -171,6 +188,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 131_072 },
+    cost: { input: 0.75, output: 4.5, cache_read: 0.075 },
   },
   "gpt-5.4-nano": {
     name: "GPT 5.4 nano",
@@ -179,6 +197,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 131_072 },
+    cost: { input: 0.2, output: 1.25, cache_read: 0.02 },
   },
   "gpt-5.4-pro": {
     name: "GPT 5.4 Pro",
@@ -187,6 +206,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_050_000, output: 131_072 },
+    cost: { input: 30, output: 180 },
   },
   "gpt-5.3-codex": {
     name: "GPT 5.3 Codex",
@@ -199,6 +219,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 32_768 },
+    cost: { input: 1.75, output: 14, cache_read: 0.175 },
   },
   "gemini-3.1-pro-preview": {
     name: "Gemini 3.1 Pro",
@@ -207,6 +228,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 65_536 },
+    cost: { input: 2, output: 12, cache_read: 0.2 },
   },
   "gemini-3.1-flash-lite-preview": {
     name: "Gemini 3.1 Flash-Lite",
@@ -219,6 +241,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     attachment: true,
     temperature: true,
     limit: { context: 1_000_000, output: 65_536 },
+    cost: { input: 0.25, output: 1.5, cache_read: 0.025, cache_write: 1 },
   },
 }
 
