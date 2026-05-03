@@ -109,7 +109,6 @@ export default function Layout(props: ParentProps) {
 
   let scrollContainerRef: HTMLDivElement | undefined
   let dialogRun = 0
-  let dialogDead = false
 
   const params = useParams()
   const globalSDK = useGlobalSDK()
@@ -199,7 +198,6 @@ export default function Layout(props: ParentProps) {
   })
 
   onCleanup(() => {
-    dialogDead = true
     dialogRun += 1
     if (navLeave.current !== undefined) clearTimeout(navLeave.current)
     clearTimeout(sortNowTimeout)
@@ -1311,7 +1309,7 @@ export default function Layout(props: ParentProps) {
   function connectProvider() {
     const run = ++dialogRun
     void import("@/components/dialog-select-provider").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogRun !== run) return
       dialog.show(() => <x.DialogSelectProvider />)
     })
   }
@@ -1319,7 +1317,7 @@ export default function Layout(props: ParentProps) {
   function openServer() {
     const run = ++dialogRun
     void import("@/components/dialog-select-server").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogRun !== run) return
       dialog.show(() => <x.DialogSelectServer />)
     })
   }
@@ -1327,7 +1325,7 @@ export default function Layout(props: ParentProps) {
   function openSettings() {
     const run = ++dialogRun
     void import("@/components/dialog-settings").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogRun !== run) return
       dialog.show(() => <x.DialogSettings />)
     })
   }
@@ -1581,7 +1579,7 @@ export default function Layout(props: ParentProps) {
   const showEditProjectDialog = (project: LocalProject) => {
     const run = ++dialogRun
     void import("@/components/dialog-edit-project").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogRun !== run) return
       dialog.show(() => <x.DialogEditProject project={project} />)
     })
   }
@@ -1589,7 +1587,7 @@ export default function Layout(props: ParentProps) {
   const showDeleteProjectDialog = (project: LocalProject) => {
     const run = ++dialogRun
     void import("@/components/dialog-confirm-delete-project").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogRun !== run) return
       dialog.show(() => (
         <x.DialogConfirmDeleteProject
           project={project}
@@ -1622,7 +1620,7 @@ export default function Layout(props: ParentProps) {
     } else {
       const run = ++dialogRun
       void import("@/components/dialog-select-directory").then((x) => {
-        if (dialogDead || dialogRun !== run) return
+        if (dialogRun !== run) return
         dialog.show(
           () => <x.DialogSelectDirectory multiple={true} onSelect={resolve} />,
           () => resolve(null),
@@ -1646,7 +1644,7 @@ export default function Layout(props: ParentProps) {
     } else {
       const run = ++dialogRun
       void import("@/components/dialog-select-directory").then((x) => {
-        if (dialogDead || dialogRun !== run) return
+        if (dialogRun !== run) return
         dialog.show(
           () => (
             <x.DialogSelectDirectory

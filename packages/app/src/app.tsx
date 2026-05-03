@@ -1,17 +1,4 @@
 import "@/index.css"
-
-if (typeof window !== "undefined" && !(window as any).__gpdDebugHooked) {
-  ;(window as any).__gpdDebugHooked = true
-  window.addEventListener("unhandledrejection", (e) => {
-    const r: any = e.reason
-    // eslint-disable-next-line no-console
-    console.error("[gpd-dbg] unhandledrejection name=", r?.name, "msg=", r?.message, "\nFULL STACK:\n", r?.stack, "\ncause=", r?.cause)
-  })
-  window.addEventListener("error", (e) => {
-    // eslint-disable-next-line no-console
-    console.error("[gpd-dbg] window.error msg=", e.message, "file=", e.filename, ":", e.lineno, "error.stack=", (e.error as any)?.stack)
-  })
-}
 import { I18nProvider } from "@opencode-ai/ui/context"
 import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { FileComponentProvider } from "@opencode-ai/ui/context/file"
@@ -65,6 +52,7 @@ import {
 } from "./components/tos-content"
 import { TosUpgradeGate } from "./components/tos-upgrade-gate"
 import { usePlatform } from "./context/platform"
+import { shouldBootForSavedKeyValidation, validateGpdKey } from "./lib/gpd-key-validate"
 import { useCheckServerHealth } from "./utils/server-health"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
@@ -420,6 +408,29 @@ function SetupGate(props: ParentProps) {
   // Seeded from localStorage so there's no render flash of the main IDE
   // before the gate kicks in.
   const platform = usePlatform()
+
+  async function bootOutInvalidSavedKey(detail?: string) {
+    // Do not print the key. The validation detail is proxy-supplied text
+    // such as "key revoked" / "no model access", not credential material.
+    console.warn(
+      "[gpd] saved API key failed startup validation; returning to welcome screen.",
+      detail ?? "",
+    )
+    setReonboardLatched(true)
+    localStorage.removeItem("gpd.key.saved")
+    setHasKey(false)
+    if (platform.removeGpdKey) {
+      try {
+        await platform.removeGpdKey()
+      } catch (e) {
+        console.error("[gpd] removeGpdKey failed after invalid startup validation:", e)
+      }
+    }
+    void globalSDK.client.global.dispose().catch((e) =>
+      console.error("[gpd] global.dispose failed after invalid startup validation:", e),
+    )
+  }
+
   const [tosAcceptedVersion, setTosAcceptedVersion] = createSignal<string | null>(
     localStorage.getItem(TOS_ACCEPTED_VERSION_STORAGE_KEY),
   )
@@ -506,23 +517,68 @@ function SetupGate(props: ParentProps) {
     setHasKey(false)
   })
 
+  // Live startup validation for a saved key. `readGpdKey` only proves a
+  // credential exists on disk; it does not prove LiteLLM still accepts it
+  // after revocation, expiry, or access-group changes. Probe the same
+  // `/v1/models` surface used by first-run onboarding. Only explicit
+  // invalid-key responses boot the user out; network/proxy failures are
+  // intentionally non-fatal so offline users and backend outages do not
+  // erase a valid local credential.
+  const [savedKeyValidation] = createResource(
+    () => {
+      if (!hasKey()) return undefined
+      if (!platform.readGpdKey) return undefined
+      return authJsonKey() ?? undefined
+    },
+    async (key) => validateGpdKey(key),
+  )
+  createEffect(() => {
+    if (!hasKey()) return
+    if (!platform.readGpdKey) return
+    if (authJsonKey.loading || savedKeyValidation.loading) return
+    const result = savedKeyValidation()
+    if (!shouldBootForSavedKeyValidation(result)) return
+    void bootOutInvalidSavedKey(result.detail)
+  })
+
+  const waitingForSavedKeyCheck = () => {
+    if (!hasKey()) return false
+    if (!platform.readGpdKey) return false
+    // Disk presence is the only blocking startup check. The live LiteLLM
+    // validity probe still starts on load, but it must not hold the whole
+    // UI hostage behind a splash when the network/proxy is slow; explicit
+    // invalid-key results boot the user out asynchronously in the effect
+    // above.
+    if (authJsonKey.loading) return true
+    return false
+  }
+
   return (
-    <Show when={hasKey()} fallback={<WelcomeScreen onComplete={handleApiKeySaved} />}>
-      <Show
-        when={tosUpToDate()}
-        fallback={
-          <Show when={keyResource()}>
-            {(apiKey) => (
-              <TosUpgradeGate
-                apiKey={apiKey()}
-                isUpgrade={!!tosAcceptedVersion()}
-                onAccepted={() => setTosAcceptedVersion(CURRENT_TOS_VERSION)}
-              />
-            )}
-          </Show>
-        }
-      >
-        {props.children}
+    <Show
+      when={!waitingForSavedKeyCheck()}
+      fallback={
+        <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+        </div>
+      }
+    >
+      <Show when={hasKey()} fallback={<WelcomeScreen onComplete={handleApiKeySaved} />}>
+        <Show
+          when={tosUpToDate()}
+          fallback={
+            <Show when={keyResource()}>
+              {(apiKey) => (
+                <TosUpgradeGate
+                  apiKey={apiKey()}
+                  isUpgrade={!!tosAcceptedVersion()}
+                  onAccepted={() => setTosAcceptedVersion(CURRENT_TOS_VERSION)}
+                />
+              )}
+            </Show>
+          }
+        >
+          {props.children}
+        </Show>
       </Show>
     </Show>
   )

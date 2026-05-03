@@ -33,3 +33,8 @@ tsconfig.tsbuildinfo
 .tmp-plan/
 .claude/worktrees/
 .mcp.json
+
+# Browser/devtool runtime traces
+.playwright-mcp/
+console-debug.log
+*.console.log

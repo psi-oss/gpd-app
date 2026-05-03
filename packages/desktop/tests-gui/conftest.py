@@ -731,7 +731,8 @@ def pytest_runtest_setup(item):
     # Activate GPD for any test that uses the MCP bridge.
     markers = {m.name for m in item.iter_markers()}
     if not markers.isdisjoint({"smoke", "surfaces", "ipc", "flows",
-                                "regression", "broad", "lifecycle"}):
+                                "regression", "broad", "lifecycle",
+                                "explorer"}):
         try:
             import subprocess as _sp
             from gpd_tests.pages.app_state import _APP_NAME

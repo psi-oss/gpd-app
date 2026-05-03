@@ -129,6 +129,12 @@ stage_fixture "$DIRTY"
 printf '\nif [[ unclosed\n' >> "$DIRTY/install-gpd/install"
 expect_dirty "$DIRTY" "bash syntax error in install" "bash syntax error"
 
+# Gate 5b: stdout pollution inside command-substitution helper
+DIRTY="$ROOT_TMP/dirty-uv-stdout"
+stage_fixture "$DIRTY"
+perl -0pi -e 's/log "Installing uv \(manages app-local Python\)\.\.\." >&2/log "Installing uv (manages app-local Python)..."/' "$DIRTY/install-gpd/install"
+expect_dirty "$DIRTY" "install_uv_bootstrap stdout pollution" "stdout"
+
 # Gate 7: README references unmapped URL
 DIRTY="$ROOT_TMP/dirty-readme-unmapped"
 stage_fixture "$DIRTY"

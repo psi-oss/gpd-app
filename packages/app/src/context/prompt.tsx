@@ -147,7 +147,7 @@ function createPromptActions(
 }
 
 const WORKSPACE_KEY = "__workspace__"
-const MAX_PROMPT_SESSIONS = 20
+export const MAX_PROMPT_SESSIONS = 20
 
 type PromptSession = ReturnType<typeof createPromptSession>
 
@@ -159,6 +159,21 @@ type Scope = {
 type PromptCacheEntry = {
   value: PromptSession
   dispose: VoidFunction
+}
+
+export const promptScopeKey = (dir: string, id: string | undefined) => `${dir}:${id ?? WORKSPACE_KEY}`
+
+export function prunePromptCache(
+  cache: Map<string, { dispose: VoidFunction }>,
+  activeKey: string | undefined,
+  max = MAX_PROMPT_SESSIONS,
+) {
+  while (cache.size > max) {
+    const victim = Array.from(cache.keys()).find((key) => key !== activeKey)
+    if (!victim) return
+    cache.get(victim)?.dispose()
+    cache.delete(victim)
+  }
 }
 
 function createPromptSession(dir: string, id: string | undefined) {
@@ -240,19 +255,12 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
 
     onCleanup(disposeAll)
 
-    const prune = () => {
-      while (cache.size > MAX_PROMPT_SESSIONS) {
-        const first = cache.keys().next().value
-        if (!first) return
-        const entry = cache.get(first)
-        entry?.dispose()
-        cache.delete(first)
-      }
-    }
+    const activeKey = () => (params.dir ? promptScopeKey(params.dir, params.id) : undefined)
+    const prune = () => prunePromptCache(cache, activeKey())
 
     const owner = getOwner()
     const load = (dir: string, id: string | undefined) => {
-      const key = `${dir}:${id ?? WORKSPACE_KEY}`
+      const key = promptScopeKey(dir, id)
       const existing = cache.get(key)
       if (existing) {
         cache.delete(key)

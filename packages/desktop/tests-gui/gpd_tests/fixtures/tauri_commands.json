@@ -16,112 +16,112 @@
   {
     "name": "install_git_windows",
     "file": "dependencies.rs",
-    "line": 74,
+    "line": 76,
     "signature": "pub async fn install_git_windows() -> Result<InstallResult, String>",
     "async": true
   },
   {
     "name": "linux_install_hint",
     "file": "dependencies.rs",
-    "line": 114,
+    "line": 116,
     "signature": "pub fn linux_install_hint(tool: String) -> String",
     "async": false
   },
   {
     "name": "repair_gpd_venv",
     "file": "gpd_setup.rs",
-    "line": 153,
+    "line": 167,
     "signature": "pub async fn repair_gpd_venv(app: tauri::AppHandle) -> Result<(), String>",
     "async": true
   },
   {
     "name": "kill_sidecar",
     "file": "lib.rs",
-    "line": 78,
+    "line": 80,
     "signature": "fn kill_sidecar(app: AppHandle)",
     "async": false
   },
   {
     "name": "await_initialization",
     "file": "lib.rs",
-    "line": 110,
+    "line": 112,
     "signature": "async fn await_initialization(\n    state: State<'_, SidecarReady>,\n    init_state: State<'_, InitState>,\n    events: Channel<InitStep>,\n) -> Result<ServerReadyData, String>",
     "async": true
   },
   {
     "name": "check_app_exists",
     "file": "lib.rs",
-    "line": 147,
+    "line": 149,
     "signature": "fn check_app_exists(app_name: &str) -> bool",
     "async": false
   },
   {
     "name": "resolve_app_path",
     "file": "lib.rs",
-    "line": 166,
+    "line": 168,
     "signature": "fn resolve_app_path(app_name: &str) -> Option<String>",
     "async": false
   },
   {
     "name": "open_path",
     "file": "lib.rs",
-    "line": 182,
+    "line": 184,
     "signature": "fn open_path(_app: AppHandle, path: String, app_name: Option<String>) -> Result<(), String>",
     "async": false
   },
   {
     "name": "get_display_backend",
     "file": "lib.rs",
-    "line": 245,
+    "line": 251,
     "signature": "fn get_display_backend() -> Option<LinuxDisplayBackend>",
     "async": false
   },
   {
     "name": "set_display_backend",
     "file": "lib.rs",
-    "line": 262,
+    "line": 268,
     "signature": "fn set_display_backend(_app: AppHandle, _backend: LinuxDisplayBackend) -> Result<(), String>",
     "async": false
   },
   {
     "name": "read_third_party_notices",
     "file": "lib.rs",
-    "line": 286,
+    "line": 292,
     "signature": "fn read_third_party_notices(app: AppHandle) -> Result<String, String>",
     "async": false
   },
   {
     "name": "read_license",
     "file": "lib.rs",
-    "line": 293,
+    "line": 299,
     "signature": "fn read_license(app: AppHandle) -> Result<String, String>",
     "async": false
   },
   {
     "name": "quit_app",
     "file": "lib.rs",
-    "line": 304,
+    "line": 310,
     "signature": "fn quit_app(app: AppHandle)",
     "async": false
   },
   {
     "name": "read_gpd_key",
     "file": "lib.rs",
-    "line": 328,
+    "line": 334,
     "signature": "fn read_gpd_key() -> Result<Option<String>, String>",
     "async": false
   },
   {
     "name": "remove_gpd_key",
     "file": "lib.rs",
-    "line": 362,
+    "line": 368,
     "signature": "fn remove_gpd_key() -> Result<(), String>",
     "async": false
   },
   {
     "name": "wsl_path",
     "file": "lib.rs",
-    "line": 418,
+    "line": 468,
     "signature": "fn wsl_path(path: String, mode: Option<WslPathMode>) -> Result<String, String>",
     "async": false
   },
@@ -142,14 +142,14 @@
   {
     "name": "check_project_accessible",
     "file": "project_fs.rs",
-    "line": 53,
+    "line": 59,
     "signature": "pub fn check_project_accessible(path: String) -> Result<String, String>",
     "async": false
   },
   {
     "name": "canonicalize_project_path",
     "file": "project_fs.rs",
-    "line": 90,
+    "line": 96,
     "signature": "pub fn canonicalize_project_path(path: String) -> Result<String, String>",
     "async": false
   },
@@ -184,56 +184,56 @@
   {
     "name": "install_tectonic",
     "file": "tectonic.rs",
-    "line": 69,
+    "line": 67,
     "signature": "pub async fn install_tectonic(app: AppHandle) -> Result<String, String>",
     "async": true
   },
   {
     "name": "detect_tex_root",
     "file": "tex_compiler.rs",
-    "line": 178,
+    "line": 172,
     "signature": "pub fn detect_tex_root(start_file: String) -> String",
     "async": false
   },
   {
     "name": "detect_tex_compiler",
     "file": "tex_compiler.rs",
-    "line": 227,
+    "line": 221,
     "signature": "pub fn detect_tex_compiler() -> TexCompilerInfo",
     "async": false
   },
   {
     "name": "compile_tex",
     "file": "tex_compiler.rs",
-    "line": 249,
+    "line": 243,
     "signature": "pub async fn compile_tex(\n    app: AppHandle,\n    state: tauri::State<'_, TexCompileState>,\n    project_id: String,\n    tex_file: String,\n    root_file: Option<String>,\n) -> Result<TexCompileResult, String>",
     "async": true
   },
   {
     "name": "synctex_forward",
     "file": "tex_compiler.rs",
-    "line": 418,
+    "line": 415,
     "signature": "pub async fn synctex_forward(\n    synctex_path: String,\n    page: u32,\n    x: f64,\n    y: f64,\n) -> Result<SyncTexResult, String>",
     "async": true
   },
   {
     "name": "synctex_reverse",
     "file": "tex_compiler.rs",
-    "line": 465,
+    "line": 462,
     "signature": "pub async fn synctex_reverse(\n    synctex_path: String,\n    source_file: String,\n    line: u32,\n) -> Result<SyncTexResult, String>",
     "async": true
   },
   {
     "name": "read_tex_artifact_base64",
     "file": "tex_compiler.rs",
-    "line": 517,
+    "line": 514,
     "signature": "pub fn read_tex_artifact_base64(path: String) -> Result<String, String>",
     "async": false
   },
   {
     "name": "parse_tex_log",
     "file": "tex_compiler.rs",
-    "line": 577,
+    "line": 579,
     "signature": "pub fn parse_tex_log(log_path: String) -> Result<TexLogParseResult, String>",
     "async": false
   }

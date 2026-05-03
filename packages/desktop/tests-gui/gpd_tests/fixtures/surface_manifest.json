@@ -1,0 +1,845 @@
+{
+  "actions": [
+    {
+      "files": [
+        "packages/app/src/components/dialog-connect-provider.tsx"
+      ],
+      "id": "connect-provider-back"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-manage-models.tsx"
+      ],
+      "id": "manage-model-toggle"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-manage-models.tsx"
+      ],
+      "id": "manage-provider-toggle"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-select-mcp.tsx"
+      ],
+      "id": "mcp-toggle"
+    },
+    {
+      "files": [
+        "packages/app/src/components/titlebar.tsx",
+        "packages/app/src/pages/layout/sidebar-items.tsx"
+      ],
+      "id": "new-session"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-open-or-create-project.tsx"
+      ],
+      "id": "openorcreate-create"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-open-or-create-project.tsx"
+      ],
+      "id": "openorcreate-existing"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-open-or-create-project.tsx"
+      ],
+      "id": "openorcreate-name-input"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-open-or-create-project.tsx"
+      ],
+      "id": "openorcreate-parent-button"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-open-or-create-project.tsx"
+      ],
+      "id": "openorcreate-submit"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout.tsx",
+        "packages/app/src/pages/layout/sidebar-project.tsx"
+      ],
+      "id": "project-clear-notifications"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout.tsx",
+        "packages/app/src/pages/layout/sidebar-project.tsx"
+      ],
+      "id": "project-close-menu"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout.tsx",
+        "packages/app/src/pages/layout/sidebar-project.tsx"
+      ],
+      "id": "project-delete-menu"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout.tsx"
+      ],
+      "id": "project-menu"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout/sidebar-project.tsx"
+      ],
+      "id": "project-switch"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout.tsx",
+        "packages/app/src/pages/layout/sidebar-project.tsx"
+      ],
+      "id": "project-workspaces-toggle"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-agent"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-attach"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-equation"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-gpd-skills"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-model"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-model-variant"
+    },
+    {
+      "files": [
+        "packages/app/src/components/prompt-input.tsx"
+      ],
+      "id": "prompt-submit"
+    },
+    {
+      "files": [
+        "packages/app/src/components/dialog-select-model.tsx"
+      ],
+      "id": "provider-connect"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-delete-confirm"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-menu-archive"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-menu-delete"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-menu-open"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-menu-rename"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/message-timeline.tsx"
+      ],
+      "id": "session-title-input"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/composer/session-todo-dock.tsx"
+      ],
+      "id": "session-todo-toggle"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/session/composer/session-todo-dock.tsx"
+      ],
+      "id": "session-todo-toggle-button"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-auto-accept-permissions"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-code-font"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-color-scheme"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-experimental-file-editor"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-feed-edit-tool-parts-expanded"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-feed-reasoning-summaries"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-feed-shell-tool-parts-expanded"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-language"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-notifications-agent"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-notifications-errors"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-notifications-permissions"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-release-notes"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-sounds-agent"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-sounds-errors"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-sounds-permissions"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-theme"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-ui-font"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-updates-startup"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-wayland"
+    },
+    {
+      "files": [
+        "packages/app/src/components/settings-general.tsx"
+      ],
+      "id": "settings-wsl"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout/sidebar-workspace.tsx"
+      ],
+      "id": "workspace-menu"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout/sidebar-workspace.tsx"
+      ],
+      "id": "workspace-new-session"
+    },
+    {
+      "files": [
+        "packages/app/src/pages/layout/sidebar-workspace.tsx"
+      ],
+      "id": "workspace-toggle"
+    }
+  ],
+  "surfaces": {
+    "dialogs": [
+      {
+        "id": "dialog-confirm-delete-project",
+        "path": "packages/app/src/components/dialog-confirm-delete-project.tsx"
+      },
+      {
+        "id": "dialog-connect-provider",
+        "path": "packages/app/src/components/dialog-connect-provider.tsx"
+      },
+      {
+        "id": "dialog-edit-project",
+        "path": "packages/app/src/components/dialog-edit-project.tsx"
+      },
+      {
+        "id": "dialog-equation-editor",
+        "path": "packages/app/src/components/dialog-equation-editor.tsx"
+      },
+      {
+        "id": "dialog-fork",
+        "path": "packages/app/src/components/dialog-fork.tsx"
+      },
+      {
+        "id": "dialog-gpd-skills",
+        "path": "packages/app/src/components/dialog-gpd-skills.tsx"
+      },
+      {
+        "id": "dialog-manage-models",
+        "path": "packages/app/src/components/dialog-manage-models.tsx"
+      },
+      {
+        "id": "dialog-open-or-create-project",
+        "path": "packages/app/src/components/dialog-open-or-create-project.tsx"
+      },
+      {
+        "id": "dialog-release-notes",
+        "path": "packages/app/src/components/dialog-release-notes.tsx"
+      },
+      {
+        "id": "dialog-select-directory",
+        "path": "packages/app/src/components/dialog-select-directory.tsx"
+      },
+      {
+        "id": "dialog-select-file",
+        "path": "packages/app/src/components/dialog-select-file.tsx"
+      },
+      {
+        "id": "dialog-select-mcp",
+        "path": "packages/app/src/components/dialog-select-mcp.tsx"
+      },
+      {
+        "id": "dialog-select-model-unpaid",
+        "path": "packages/app/src/components/dialog-select-model-unpaid.tsx"
+      },
+      {
+        "id": "dialog-select-model",
+        "path": "packages/app/src/components/dialog-select-model.tsx"
+      },
+      {
+        "id": "dialog-select-provider",
+        "path": "packages/app/src/components/dialog-select-provider.tsx"
+      },
+      {
+        "id": "dialog-select-server",
+        "path": "packages/app/src/components/dialog-select-server.tsx"
+      },
+      {
+        "id": "dialog-settings",
+        "path": "packages/app/src/components/dialog-settings.tsx"
+      }
+    ],
+    "fileEditor": [
+      {
+        "id": "close-tab-dialog",
+        "path": "packages/app/src/components/file-edit/close-tab-dialog.tsx"
+      },
+      {
+        "id": "conflict-dialog",
+        "path": "packages/app/src/components/file-edit/conflict-dialog.tsx"
+      },
+      {
+        "id": "editor-registry",
+        "path": "packages/app/src/components/file-edit/editor-registry.tsx"
+      },
+      {
+        "id": "editor-search.test",
+        "path": "packages/app/src/components/file-edit/editor-search.test.ts"
+      },
+      {
+        "id": "editor-search",
+        "path": "packages/app/src/components/file-edit/editor-search.ts"
+      },
+      {
+        "id": "editor-theme",
+        "path": "packages/app/src/components/file-edit/editor-theme.ts"
+      },
+      {
+        "id": "eligibility.test",
+        "path": "packages/app/src/components/file-edit/eligibility.test.ts"
+      },
+      {
+        "id": "eligibility",
+        "path": "packages/app/src/components/file-edit/eligibility.ts"
+      },
+      {
+        "id": "file-editor",
+        "path": "packages/app/src/components/file-edit/file-editor.tsx"
+      },
+      {
+        "id": "preview.test",
+        "path": "packages/app/src/components/file-edit/preview.test.ts"
+      },
+      {
+        "id": "preview",
+        "path": "packages/app/src/components/file-edit/preview.tsx"
+      },
+      {
+        "id": "stale-banner",
+        "path": "packages/app/src/components/file-edit/stale-banner.tsx"
+      }
+    ],
+    "pages": [
+      {
+        "id": "directory-layout",
+        "path": "packages/app/src/pages/directory-layout.tsx"
+      },
+      {
+        "id": "error",
+        "path": "packages/app/src/pages/error.tsx"
+      },
+      {
+        "id": "home",
+        "path": "packages/app/src/pages/home.tsx"
+      },
+      {
+        "id": "inline-editor",
+        "path": "packages/app/src/pages/layout/inline-editor.tsx"
+      },
+      {
+        "id": "sidebar-items",
+        "path": "packages/app/src/pages/layout/sidebar-items.tsx"
+      },
+      {
+        "id": "sidebar-project",
+        "path": "packages/app/src/pages/layout/sidebar-project.tsx"
+      },
+      {
+        "id": "sidebar-shell",
+        "path": "packages/app/src/pages/layout/sidebar-shell.tsx"
+      },
+      {
+        "id": "sidebar-workspace",
+        "path": "packages/app/src/pages/layout/sidebar-workspace.tsx"
+      },
+      {
+        "id": "layout",
+        "path": "packages/app/src/pages/layout.tsx"
+      },
+      {
+        "id": "session-composer-region",
+        "path": "packages/app/src/pages/session/composer/session-composer-region.tsx"
+      },
+      {
+        "id": "session-followup-dock",
+        "path": "packages/app/src/pages/session/composer/session-followup-dock.tsx"
+      },
+      {
+        "id": "session-permission-dock",
+        "path": "packages/app/src/pages/session/composer/session-permission-dock.tsx"
+      },
+      {
+        "id": "session-question-dock.backnav.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.backnav.test.tsx"
+      },
+      {
+        "id": "session-question-dock.click-regression.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.click-regression.test.tsx"
+      },
+      {
+        "id": "session-question-dock.custom.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.custom.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-edges.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-edges.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-enter.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-enter.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-keys.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-keys.test.tsx"
+      },
+      {
+        "id": "session-question-dock.focus-badge.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.focus-badge.test.tsx"
+      },
+      {
+        "id": "session-question-dock.free-text.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.free-text.test.tsx"
+      },
+      {
+        "id": "session-question-dock.multi-digit.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.multi-digit.test.tsx"
+      },
+      {
+        "id": "session-question-dock.stress.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.stress.test.tsx"
+      },
+      {
+        "id": "session-question-dock.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.test.tsx"
+      },
+      {
+        "id": "session-question-dock",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.tsx"
+      },
+      {
+        "id": "session-revert-dock",
+        "path": "packages/app/src/pages/session/composer/session-revert-dock.tsx"
+      },
+      {
+        "id": "session-todo-dock",
+        "path": "packages/app/src/pages/session/composer/session-todo-dock.tsx"
+      },
+      {
+        "id": "file-tabs",
+        "path": "packages/app/src/pages/session/file-tabs.tsx"
+      },
+      {
+        "id": "message-timeline",
+        "path": "packages/app/src/pages/session/message-timeline.tsx"
+      },
+      {
+        "id": "review-tab",
+        "path": "packages/app/src/pages/session/review-tab.tsx"
+      },
+      {
+        "id": "session-side-panel",
+        "path": "packages/app/src/pages/session/session-side-panel.tsx"
+      },
+      {
+        "id": "terminal-panel",
+        "path": "packages/app/src/pages/session/terminal-panel.tsx"
+      },
+      {
+        "id": "tex-build-pane",
+        "path": "packages/app/src/pages/session/tex-build-pane.tsx"
+      },
+      {
+        "id": "tex-error-list",
+        "path": "packages/app/src/pages/session/tex-error-list.tsx"
+      },
+      {
+        "id": "tex-pdf-viewer",
+        "path": "packages/app/src/pages/session/tex-pdf-viewer.tsx"
+      },
+      {
+        "id": "use-session-commands",
+        "path": "packages/app/src/pages/session/use-session-commands.tsx"
+      },
+      {
+        "id": "use-tex-compiler",
+        "path": "packages/app/src/pages/session/use-tex-compiler.tsx"
+      },
+      {
+        "id": "session",
+        "path": "packages/app/src/pages/session.tsx"
+      }
+    ],
+    "promptInput": [
+      {
+        "id": "attachments.test",
+        "path": "packages/app/src/components/prompt-input/attachments.test.ts"
+      },
+      {
+        "id": "attachments",
+        "path": "packages/app/src/components/prompt-input/attachments.ts"
+      },
+      {
+        "id": "build-request-parts.test",
+        "path": "packages/app/src/components/prompt-input/build-request-parts.test.ts"
+      },
+      {
+        "id": "build-request-parts",
+        "path": "packages/app/src/components/prompt-input/build-request-parts.ts"
+      },
+      {
+        "id": "context-items",
+        "path": "packages/app/src/components/prompt-input/context-items.tsx"
+      },
+      {
+        "id": "drag-overlay",
+        "path": "packages/app/src/components/prompt-input/drag-overlay.tsx"
+      },
+      {
+        "id": "editor-dom.test",
+        "path": "packages/app/src/components/prompt-input/editor-dom.test.ts"
+      },
+      {
+        "id": "editor-dom",
+        "path": "packages/app/src/components/prompt-input/editor-dom.ts"
+      },
+      {
+        "id": "files",
+        "path": "packages/app/src/components/prompt-input/files.ts"
+      },
+      {
+        "id": "history.test",
+        "path": "packages/app/src/components/prompt-input/history.test.ts"
+      },
+      {
+        "id": "history",
+        "path": "packages/app/src/components/prompt-input/history.ts"
+      },
+      {
+        "id": "image-attachments",
+        "path": "packages/app/src/components/prompt-input/image-attachments.tsx"
+      },
+      {
+        "id": "paste",
+        "path": "packages/app/src/components/prompt-input/paste.ts"
+      },
+      {
+        "id": "placeholder.test",
+        "path": "packages/app/src/components/prompt-input/placeholder.test.ts"
+      },
+      {
+        "id": "placeholder",
+        "path": "packages/app/src/components/prompt-input/placeholder.ts"
+      },
+      {
+        "id": "slash-popover",
+        "path": "packages/app/src/components/prompt-input/slash-popover.tsx"
+      },
+      {
+        "id": "submit.test",
+        "path": "packages/app/src/components/prompt-input/submit.test.ts"
+      },
+      {
+        "id": "submit",
+        "path": "packages/app/src/components/prompt-input/submit.ts"
+      }
+    ],
+    "session": [
+      {
+        "id": "session-context-tab",
+        "path": "packages/app/src/components/session/session-context-tab.tsx"
+      },
+      {
+        "id": "session-header",
+        "path": "packages/app/src/components/session/session-header.tsx"
+      },
+      {
+        "id": "session-new-view",
+        "path": "packages/app/src/components/session/session-new-view.tsx"
+      },
+      {
+        "id": "session-sortable-tab",
+        "path": "packages/app/src/components/session/session-sortable-tab.tsx"
+      },
+      {
+        "id": "session-sortable-terminal-tab",
+        "path": "packages/app/src/components/session/session-sortable-terminal-tab.tsx"
+      },
+      {
+        "id": "session-composer-region",
+        "path": "packages/app/src/pages/session/composer/session-composer-region.tsx"
+      },
+      {
+        "id": "session-followup-dock",
+        "path": "packages/app/src/pages/session/composer/session-followup-dock.tsx"
+      },
+      {
+        "id": "session-permission-dock",
+        "path": "packages/app/src/pages/session/composer/session-permission-dock.tsx"
+      },
+      {
+        "id": "session-question-dock.backnav.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.backnav.test.tsx"
+      },
+      {
+        "id": "session-question-dock.click-regression.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.click-regression.test.tsx"
+      },
+      {
+        "id": "session-question-dock.custom.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.custom.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-edges.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-edges.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-enter.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-enter.test.tsx"
+      },
+      {
+        "id": "session-question-dock.digit-keys.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.digit-keys.test.tsx"
+      },
+      {
+        "id": "session-question-dock.focus-badge.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.focus-badge.test.tsx"
+      },
+      {
+        "id": "session-question-dock.free-text.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.free-text.test.tsx"
+      },
+      {
+        "id": "session-question-dock.multi-digit.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.multi-digit.test.tsx"
+      },
+      {
+        "id": "session-question-dock.stress.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.stress.test.tsx"
+      },
+      {
+        "id": "session-question-dock.test",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.test.tsx"
+      },
+      {
+        "id": "session-question-dock",
+        "path": "packages/app/src/pages/session/composer/session-question-dock.tsx"
+      },
+      {
+        "id": "session-revert-dock",
+        "path": "packages/app/src/pages/session/composer/session-revert-dock.tsx"
+      },
+      {
+        "id": "session-todo-dock",
+        "path": "packages/app/src/pages/session/composer/session-todo-dock.tsx"
+      },
+      {
+        "id": "file-tabs",
+        "path": "packages/app/src/pages/session/file-tabs.tsx"
+      },
+      {
+        "id": "message-timeline",
+        "path": "packages/app/src/pages/session/message-timeline.tsx"
+      },
+      {
+        "id": "review-tab",
+        "path": "packages/app/src/pages/session/review-tab.tsx"
+      },
+      {
+        "id": "session-side-panel",
+        "path": "packages/app/src/pages/session/session-side-panel.tsx"
+      },
+      {
+        "id": "terminal-panel",
+        "path": "packages/app/src/pages/session/terminal-panel.tsx"
+      },
+      {
+        "id": "tex-build-pane",
+        "path": "packages/app/src/pages/session/tex-build-pane.tsx"
+      },
+      {
+        "id": "tex-error-list",
+        "path": "packages/app/src/pages/session/tex-error-list.tsx"
+      },
+      {
+        "id": "tex-pdf-viewer",
+        "path": "packages/app/src/pages/session/tex-pdf-viewer.tsx"
+      },
+      {
+        "id": "use-session-commands",
+        "path": "packages/app/src/pages/session/use-session-commands.tsx"
+      },
+      {
+        "id": "use-tex-compiler",
+        "path": "packages/app/src/pages/session/use-tex-compiler.tsx"
+      }
+    ],
+    "settings": [
+      {
+        "id": "settings-dependencies",
+        "path": "packages/app/src/components/settings-dependencies.tsx"
+      },
+      {
+        "id": "settings-general",
+        "path": "packages/app/src/components/settings-general.tsx"
+      },
+      {
+        "id": "settings-keybinds",
+        "path": "packages/app/src/components/settings-keybinds.tsx"
+      },
+      {
+        "id": "settings-licenses",
+        "path": "packages/app/src/components/settings-licenses.tsx"
+      },
+      {
+        "id": "settings-list",
+        "path": "packages/app/src/components/settings-list.tsx"
+      },
+      {
+        "id": "settings-models",
+        "path": "packages/app/src/components/settings-models.tsx"
+      },
+      {
+        "id": "settings-providers",
+        "path": "packages/app/src/components/settings-providers.tsx"
+      }
+    ]
+  }
+}

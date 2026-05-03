@@ -107,8 +107,8 @@ export const DialogEquationEditor: Component<Props> = (props) => {
 
   const handleInsert = () => {
     const latex = mathField ? mathField.getValue("latex") : ""
-    if (latex.trim().length > 0) props.onInsert(latex)
     dialog.close()
+    if (latex.trim().length > 0) setTimeout(() => props.onInsert(latex), 0)
   }
 
   // Two-stage Escape: if MathLive has an active popover or virtual keyboard,

@@ -1,0 +1,115 @@
+name: GPD Manual Full Exploration
+
+on:
+  workflow_dispatch:
+    inputs:
+      depth:
+        description: "How much of the mac harness to run"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - inventory
+          - surfaces
+          - flows
+          - full
+      max_actions:
+        description: "Maximum reversible explorer clicks"
+        required: true
+        default: "200"
+      run_destructive:
+        description: "Include restart/lifecycle tests"
+        required: true
+        default: false
+        type: boolean
+      run_real_backend:
+        description: "Include live-backend tests when secrets are available"
+        required: true
+        default: false
+        type: boolean
+      strict:
+        description: "Fail when expected explorer classes are absent"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpd-manual-full-exploration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    name: macOS manual full exploration
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build native sidecar for this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./packages/opencode/script/build.ts --single
+          case "$(uname -m)" in
+            arm64)
+              TARGET="aarch64-apple-darwin"
+              DIST="opencode-darwin-arm64"
+              ;;
+            x86_64)
+              TARGET="x86_64-apple-darwin"
+              DIST="opencode-darwin-x64"
+              ;;
+            *)
+              echo "::error::unsupported mac arch: $(uname -m)"
+              exit 1
+              ;;
+          esac
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "packages/opencode/dist/$DIST/bin/opencode" "packages/desktop/src-tauri/sidecars/opencode-cli-$TARGET"
+          chmod +x "packages/desktop/src-tauri/sidecars/opencode-cli-$TARGET"
+          mkdir -p packages/desktop/src-tauri/uv-bundle
+          cp "$(command -v uv)" packages/desktop/src-tauri/uv-bundle/uv
+          chmod +x packages/desktop/src-tauri/uv-bundle/uv
+
+      - name: Build debug desktop app
+        working-directory: packages/desktop
+        run: bun run tauri build --debug --bundles app
+
+      - name: Run manual full exploration
+        shell: bash
+        env:
+          GPD_EXPLORER_DEPTH: ${{ inputs.depth }}
+          GPD_EXPLORER_MAX_ACTIONS: ${{ inputs.max_actions }}
+          GPD_EXPLORER_RUN_DESTRUCTIVE: ${{ inputs.run_destructive && '1' || '0' }}
+          GPD_EXPLORER_RUN_REAL_BACKEND: ${{ inputs.run_real_backend && '1' || '0' }}
+          GPD_EXPLORER_STRICT: ${{ inputs.strict && '1' || '0' }}
+          GPD_EXPLORER_REQUIRE_KEY: "1"
+          GPD_EXPLORER_QUIT_APP: "1"
+          GPD_EXPLORER_KEY: ${{ secrets.GPD_SMOKE_KEY }}
+          GPD_TEST_ANTHROPIC_KEY: ${{ secrets.GPD_TEST_ANTHROPIC_KEY }}
+        run: bash packages/desktop/tests-gui/scripts/run_manual_full_exploration.sh
+
+      - name: Upload exploration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpd-manual-full-exploration
+          path: packages/desktop/tests-gui/artifacts/manual-full-*

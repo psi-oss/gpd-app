@@ -7,6 +7,7 @@ internal DOMProbe so no live GPD or MCP bridge is required.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -224,9 +225,7 @@ def test_enter_api_key_escapes_backslash_and_quote_in_key() -> None:
     page._probe.eval.return_value = ["form-submitted", key]
     page.enter_api_key(key)
     js = page._probe.eval.call_args.args[0]
-    # The raw backslash and single quote must have been escaped for JS.
-    # Source transformation: \\ -> \\\\ and ' -> \'.
-    assert "sk-\\\\\\'danger\\'" in js
+    assert json.dumps(key) in js
 
 
 # ---------------------------------------------------------------------------

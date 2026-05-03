@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { canDisposeDirectory, pickDirectoriesToEvict } from "./global-sync/eviction"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
+import { normalizeAgentList } from "./global-sync/utils"
 
 describe("pickDirectoriesToEvict", () => {
   test("keeps pinned stores and evicts idle stores", () => {
@@ -118,5 +119,32 @@ describe("canDisposeDirectory", () => {
         loadingSessions: false,
       }),
     ).toBe(true)
+  })
+})
+
+describe("normalizeAgentList", () => {
+  test("keeps UI metadata but drops large prompt bodies before storing agents reactively", () => {
+    const [agent] = normalizeAgentList([
+      {
+        name: "gpd-planner",
+        description: "Plans work",
+        mode: "all",
+        color: "#abc123",
+        hidden: false,
+        model: { providerID: "gpd", modelID: "gpt-5.5" },
+        variant: "high",
+        prompt: "x".repeat(100_000),
+        permission: [{ permission: "edit", type: "allow" }],
+        options: { effort: "high" },
+      },
+    ])
+
+    expect(agent?.name).toBe("gpd-planner")
+    expect(agent?.description).toBe("Plans work")
+    expect(agent?.model).toEqual({ providerID: "gpd", modelID: "gpt-5.5" })
+    expect(agent?.variant).toBe("high")
+    expect(agent?.prompt).toBeUndefined()
+    expect(agent?.permission).toEqual([])
+    expect(agent?.options).toEqual({})
   })
 })

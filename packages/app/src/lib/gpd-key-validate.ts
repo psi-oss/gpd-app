@@ -27,6 +27,12 @@ export type KeyValidationResult =
   | { ok: false; reason: "invalid_key"; httpStatus: number; detail?: string }
   | { ok: false; reason: "network_error"; httpStatus?: number; detail?: string }
 
+export function shouldBootForSavedKeyValidation(
+  result: KeyValidationResult | undefined,
+): result is Extract<KeyValidationResult, { ok: false; reason: "invalid_key" }> {
+  return !!result && !result.ok && result.reason === "invalid_key"
+}
+
 /**
  * Probe LiteLLM `/v1/models` with the candidate key. Returns:
  *   - { ok: true } when 200 + at least one model is visible.

@@ -11,7 +11,7 @@ import { Plugin } from "../plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "./models"
-import { resolveGpdProviderModels } from "./gpd-models"
+import { gpdUsesResponsesApi, resolveGpdProviderModels } from "./gpd-models"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
@@ -225,6 +225,26 @@ export namespace Provider {
           async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
             if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
             return shouldUseCopilotResponsesApi(modelID) ? sdk.responses(modelID) : sdk.chat(modelID)
+          },
+          options: {},
+        }),
+      // GPD provider: per-model SDK selection between OpenAI Responses API
+      // (for GPT-5.x reasoning models, where summary text only streams via
+      // `/v1/responses`) and the default openai-compatible chat path (for
+      // Claude/Gemini and any non-reasoning OpenAI variant). The two GPT-5
+      // families (5.4*, 5.5*) plus gpt-5.3-codex are listed in
+      // `gpdUsesResponsesApi`; everything else falls through to chat. The
+      // SDK is `@ai-sdk/openai` whenever Responses is needed (assigned in
+      // the per-model `npm` resolution loop further down) and
+      // `@ai-sdk/openai-compatible` otherwise. LiteLLM proxies both
+      // endpoint shapes faithfully against the same `LITELLM_URL/v1` base
+      // and the same virtual key — no auth/identifier changes.
+      gpd: () =>
+        Effect.succeed({
+          autoload: false,
+          async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
+            if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
+            return gpdUsesResponsesApi(modelID) ? sdk.responses(modelID) : sdk.chat(modelID)
           },
           options: {},
         }),
@@ -1142,12 +1162,21 @@ export namespace Provider {
                 if (model.id && model.id !== modelID) return modelID
                 return existingModel?.name ?? modelID
               })
+              const resolvedApiId = model.id ?? existingModel?.api.id ?? modelID
+              // GPD GPT-5.x reasoning models must go through `@ai-sdk/openai`
+              // (which exposes `.responses()`) instead of the default
+              // `@ai-sdk/openai-compatible` (chat-completions only) so the
+              // session-summary stream chunks emitted by OpenAI reach the UI.
+              // See `gpdUsesResponsesApi` + the `gpd` entry in `custom()`.
+              const gpdResponsesNpm =
+                providerID === "gpd" && gpdUsesResponsesApi(resolvedApiId) ? "@ai-sdk/openai" : undefined
               const parsedModel: Model = {
                 id: ModelID.make(modelID),
                 api: {
-                  id: model.id ?? existingModel?.api.id ?? modelID,
+                  id: resolvedApiId,
                   npm:
                     model.provider?.npm ??
+                    gpdResponsesNpm ??
                     provider.npm ??
                     existingModel?.api.npm ??
                     modelsDev[providerID]?.npm ??

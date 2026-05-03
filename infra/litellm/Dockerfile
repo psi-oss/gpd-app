@@ -17,7 +17,7 @@
 #   5. Commit.
 #
 # Current pin: v1.83.14.rc.1 (release candidate). Bumped from
-# v1.83.7-stable to pick up the GPT-5.5 / GPT-5.5 Pro model registry
+# v1.83.7-stable to pick up the GPT 5.5 / GPT 5.5 Pro model registry
 # entries — without this, LiteLLM 1.83.7 doesn't know `gpt-5.5`
 # exists, falls through to the GPT-5 base path's "supported_params"
 # stripping, and rejects

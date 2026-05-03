@@ -112,6 +112,32 @@ export function gpdReasoningEffortsFor(apiId: string): readonly string[] | undef
   return GPD_MODEL_REASONING_EFFORTS[apiId]
 }
 
+// Whether to route a GPD model through OpenAI's `/v1/responses` endpoint
+// (vs `/v1/chat/completions`). The Responses API is the only path that
+// surfaces `reasoning_summary_text.delta` chunks for OpenAI's GPT-5.x and
+// o-series reasoning models — chat.completions returns `reasoning_tokens`
+// counts but no streaming summary text. Empirically verified against the
+// LiteLLM proxy on 2026-05-03: gpt-5.4*, gpt-5.5*, and gpt-5.3-codex all
+// stream non-empty summaries via `/v1/responses`. Claude/Gemini accept
+// `/v1/responses` too but LiteLLM's translator strips their thinking
+// content, so they must stay on chat.completions where their native
+// thinking/reasoning blocks come through. o4-mini / gpt-4.1 family were
+// not provisioned for the test key and are conservatively omitted; add
+// them here once the access group is widened.
+const GPD_RESPONSES_API_MODELS: ReadonlySet<string> = new Set([
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.4-pro",
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.3-codex",
+])
+
+export function gpdUsesResponsesApi(apiId: string): boolean {
+  return GPD_RESPONSES_API_MODELS.has(apiId)
+}
+
 // Single source of truth for GPD model display names and capability
 // flags. Keep ids aligned with LiteLLM proxy model_name (not upstream
 // Anthropic/OpenAI names — LiteLLM remaps). Add new entries whenever

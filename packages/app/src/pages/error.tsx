@@ -14,6 +14,7 @@ export type InitError = {
 
 type Translator = ReturnType<typeof useLanguage>["t"]
 const CHAIN_SEPARATOR = "\n" + "─".repeat(40) + "\n"
+const MAX_ERROR_CAUSE_DEPTH = 12
 
 function isIssue(value: unknown): value is { message: string; path: string[] } {
   if (!value || typeof value !== "object") return false
@@ -175,9 +176,24 @@ function formatInitError(error: InitError, t: Translator): string {
   }
 }
 
-function formatErrorChain(error: unknown, t: Translator, depth = 0, parentMessage?: string): string {
+function formatErrorChain(
+  error: unknown,
+  t: Translator,
+  depth = 0,
+  parentMessage?: string,
+  seen = new WeakSet<object>(),
+): string {
   const json = (value: unknown) => safeJson(value, t("error.page.circular"))
   if (!error) return t("error.chain.unknown")
+  if (depth > MAX_ERROR_CAUSE_DEPTH) return t("error.page.circular")
+
+  if (typeof error === "object" && error !== null) {
+    if (seen.has(error)) {
+      const indent = depth > 0 ? `\n${CHAIN_SEPARATOR}${t("error.chain.causedBy")}\n` : ""
+      return indent + t("error.page.circular")
+    }
+    seen.add(error)
+  }
 
   if (isInitError(error)) {
     const message = formatInitError(error, t)
@@ -222,7 +238,7 @@ function formatErrorChain(error: unknown, t: Translator, depth = 0, parentMessag
     }
 
     if (error.cause) {
-      const causeResult = formatErrorChain(error.cause, t, depth + 1, error.message)
+      const causeResult = formatErrorChain(error.cause, t, depth + 1, error.message, seen)
       if (causeResult) {
         parts.push(causeResult)
       }

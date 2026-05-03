@@ -223,6 +223,27 @@ for f in "${SERVED_POSIX[@]}"; do
 done
 [[ $fails -eq $prev_fails ]] && ok "POSIX bash installers parse cleanly"
 
+# ── Gate 5b: stdout-clean command-substitution helpers ─────────────────────
+# install_uv_bootstrap is called as `uv_bin="$(install_uv_bootstrap)"`.
+# stdout is therefore its return channel and must contain only the uv path.
+# Any status log on stdout pollutes `uv_bin` and turns the next exec into
+# "Installing uv... /path/to/uv: No such file or directory" on fresh macOS.
+prev_fails=$fails
+uv_stdout_logs="$(
+  awk '
+    /^install_uv_bootstrap\(\)[[:space:]]*\{/ { in_fn = 1 }
+    in_fn && /^[[:space:]]*\}/ { in_fn = 0 }
+    in_fn && /^[[:space:]]*(log|warn|success|error)[[:space:]]/ && $0 !~ />&2/ {
+      printf "%d:%s\n", NR, $0
+    }
+  ' install-gpd/install
+)"
+if [[ -n "$uv_stdout_logs" ]]; then
+  fail "install_uv_bootstrap writes status logs to stdout; redirect logs to stderr to keep command substitution clean:"
+  echo "$uv_stdout_logs" | sed 's/^/  install-gpd\/install:/'
+fi
+[[ $fails -eq $prev_fails ]] && ok "install_uv_bootstrap stdout is path-only"
+
 # ── Gate 6: manifest schema round-trip ────────────────────────────────────
 # The uninstaller parses the gpd-file-manifest.json that the python
 # writer emits. Schema drifted from list-of-strings to dict-of-path→sha256

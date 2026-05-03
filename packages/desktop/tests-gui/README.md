@@ -55,6 +55,25 @@ uv run pytest -m "smoke or restart"                 # full Phase 1 (CI / pre-rel
 uv run pytest -m "not real_backend"                 # skip tests that need a real LLM key
 ```
 
+### Manual Full Exploration
+
+For release hardening, run the opt-in inventory/crawler harness from the repo
+root:
+
+```bash
+GPD_EXPLORER_KEY="$GPD_TEST_KEY" \
+bash packages/desktop/tests-gui/scripts/run_manual_full_exploration.sh
+```
+
+This visits seeded macOS app states, inventories visible controls, clicks
+reversible controls, exercises inputs, opens/cancels confirmable controls, and
+fails on native modal APIs or uncaught JS errors. Full details:
+`docs/GPD_MANUAL_FULL_EXPLORATION.md`.
+
+The key is required by default; without it the runner exits instead of doing a
+misleading logged-out/API-key-page-only crawl. Local runs leave GPD open for
+manual inspection unless `GPD_EXPLORER_QUIT_APP=1` is set.
+
 ### Phase 3 (flows)
 
 > All paths below assume `cwd = packages/desktop/tests-gui/`.
@@ -118,6 +137,16 @@ PYTEST_RELEASE_BUILD=1 uv run pytest tests/smoke/test_release_no_mcp.py -v
 
 Both assertions must pass: the Rust-side plugin is absent (no socket) **and** the Vite tree-shake worked (no vendored code in release `dist/`). These are the regression-safety net for the security fix in `src-tauri/src/lib.rs:351` plus the `__GPD_TAURI_DEBUG__` define in `vite.config.ts`.
 
+For the installer-backed macOS release lane, also run the AX consent-gate smoke
+test. It is destructive by design, so only enable it in a dedicated VM:
+
+```bash
+GPD_APP_PATH=/Applications/GPD.app \
+PYTEST_RELEASE_BUILD=1 \
+GPD_RELEASE_ONBOARDING_RESET=1 \
+uv run pytest tests/smoke/test_release_no_mcp.py tests/smoke/test_release_tos_ax.py -m smoke -v
+```
+
 ### Environment variables
 
 - `GPD_APP_PATH` — path to the `.app` bundle. Defaults to `/Applications/GPD.app`.
@@ -128,6 +157,7 @@ Both assertions must pass: the Rust-side plugin is absent (no socket) **and** th
 - `PYTEST_QUIT_GPD=1` — quit GPD at end of session (default: leave running).
 - `PYTEST_COLD_START=1` — kill stale GPD/opencode-cli before launching (use in CI; avoid locally).
 - `PYTEST_RUN_DESTRUCTIVE_FLOWS=1` — opt in to the onboarding flow (mutates `~/.config/gpd` and `auth.json`).
+- `GPD_RELEASE_ONBOARDING_RESET=1` — opt in to release-mode onboarding/TOS reset for `test_release_tos_ax.py`; use only in a disposable VM.
 - `GPD_TEST_SEED_ONBOARDING=1` — seed `auth.json` + sentinel for the session (requires `GPD_TEST_ANTHROPIC_KEY`). Both flags must be set; the two-flag guard avoids surprise writes on a developer's laptop.
 
 ## Layout
@@ -218,7 +248,7 @@ The workflow is defined at `.github/workflows/gpd-tests-gui.yml`.
 |-----|-----|-----|
 | `gpd-tests-real-backend.yml` | Nightly (`42 6 * * *`) | Runs `flows and real_backend` against live Anthropic backend. Exits 78 (neutral) if `GPD_TEST_ANTHROPIC_KEY` is missing. |
 | `gpd-tests-flakiness.yml` | Daily (`17 7 * * *`) | 10× parallel smoke matrix + flakiness aggregator. |
-| `gpd-tests-release.yml` | Weekly (planned) | Release-mode build + security assertions (`tests/smoke/test_release_no_mcp.py`). |
+| `gpd-tests-release.yml` | Weekly (planned) | Release-mode build + security assertions (`tests/smoke/test_release_no_mcp.py`) plus installer-backed macOS consent AX smoke (`tests/smoke/test_release_tos_ax.py`) on a disposable runner. |
 
 **Coverage floor:** target **85%** branch coverage for `gpd_tests/` across the unit + smoke + flows matrix. The current `--cov-fail-under=55` on the `unit` job is a lower bar kept during ramp-up; raise toward 85% as coverage expansion phases land.
 

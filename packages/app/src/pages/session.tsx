@@ -516,7 +516,7 @@ export default function Page() {
   const [store, setStore] = createStore({
     messageId: undefined as string | undefined,
     mobileTab: "session" as "session" | "changes",
-    changes: "git" as ChangeMode,
+    changes: "turn" as ChangeMode,
     newSessionWorktree: "main",
     deferRender: false,
   })

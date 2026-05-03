@@ -91,8 +91,8 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 | Anthropic | Claude Opus 4.6 | `claude-opus-4-6` |
 | Anthropic | Claude Sonnet 4.6 | `claude-sonnet-4-6` |
 | Anthropic | Claude Haiku 4.5 | `claude-haiku-4-5` |
-| OpenAI | GPT-5.5 | `gpt-5.5` |
-| OpenAI | GPT-5.5 Pro | `gpt-5.5-pro` |
+| OpenAI | GPT 5.5 | `gpt-5.5` |
+| OpenAI | GPT 5.5 Pro | `gpt-5.5-pro` |
 | OpenAI | GPT-5.4 | `gpt-5.4` |
 | OpenAI | GPT-5.4 mini | `gpt-5.4-mini` |
 | OpenAI | GPT-5.4 nano | `gpt-5.4-nano` |

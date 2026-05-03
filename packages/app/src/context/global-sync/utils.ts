@@ -9,11 +9,33 @@ function isAgent(input: unknown): input is Agent {
   return item.mode === "subagent" || item.mode === "primary" || item.mode === "all"
 }
 
+function compactAgent(input: Agent): Agent {
+  return Object.freeze({
+    name: input.name,
+    description: input.description,
+    mode: input.mode,
+    native: input.native,
+    hidden: input.hidden,
+    topP: input.topP,
+    temperature: input.temperature,
+    color: input.color,
+    model: input.model ? { ...input.model } : undefined,
+    variant: input.variant,
+    steps: input.steps,
+    permission: Object.freeze([]) as unknown as Agent["permission"],
+    options: Object.freeze({}) as Agent["options"],
+  }) as Agent
+}
+
 export function normalizeAgentList(input: unknown): Agent[] {
-  if (Array.isArray(input)) return input.filter(isAgent)
-  if (isAgent(input)) return [input]
-  if (!input || typeof input !== "object") return []
-  return Object.values(input).filter(isAgent)
+  const agents = Array.isArray(input)
+    ? input.filter(isAgent).map(compactAgent)
+    : isAgent(input)
+      ? [compactAgent(input)]
+      : input && typeof input === "object"
+        ? Object.values(input).filter(isAgent).map(compactAgent)
+        : []
+  return Object.freeze(agents) as Agent[]
 }
 
 export function normalizeProviderList(input: ProviderListResponse): ProviderListResponse {

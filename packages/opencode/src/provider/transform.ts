@@ -6,7 +6,7 @@ import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
-import { gpdReasoningEffortsFor } from "./gpd-models"
+import { gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -382,7 +382,20 @@ export namespace ProviderTransform {
       // openai-compatible AI SDK driver maps `reasoningEffort` to the
       // OpenAI-style param; LiteLLM rewrites server-side per its
       // adapter, so a uniform `reasoningEffort` here works for both.
-      return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]))
+      //
+      // GPT-5.x reasoning models route through `@ai-sdk/openai` /
+      // `.responses()` (see gpd entry in custom() + npm override in
+      // resolution loop). For those, also request `reasoningSummary:
+      // "auto"` so OpenAI emits `response.reasoning_summary_text.delta`
+      // chunks — without this the Responses API call returns a reasoning
+      // block with an empty summary array and the UI shows nothing.
+      const usesResponses = gpdUsesResponsesApi(model.api.id)
+      return Object.fromEntries(
+        efforts.map((effort) => [
+          effort,
+          usesResponses ? { reasoningEffort: effort, reasoningSummary: "auto" } : { reasoningEffort: effort },
+        ]),
+      )
     }
 
     const id = model.id.toLowerCase()

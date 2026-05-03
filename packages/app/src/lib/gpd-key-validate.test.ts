@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { validateGpdKey } from "./gpd-key-validate"
+import { shouldBootForSavedKeyValidation, validateGpdKey } from "./gpd-key-validate"
 
 const ENDPOINT =
   "https://litellm-production-46bb.up.railway.app/v1/models"
@@ -207,5 +207,26 @@ describe("validateGpdKey", () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toBe("network_error")
+  })
+})
+
+describe("shouldBootForSavedKeyValidation", () => {
+  test("boots only for explicit invalid-key validation results", () => {
+    expect(shouldBootForSavedKeyValidation(undefined)).toBe(false)
+    expect(shouldBootForSavedKeyValidation({ ok: true })).toBe(false)
+    expect(
+      shouldBootForSavedKeyValidation({
+        ok: false,
+        reason: "network_error",
+        detail: "offline",
+      }),
+    ).toBe(false)
+    expect(
+      shouldBootForSavedKeyValidation({
+        ok: false,
+        reason: "invalid_key",
+        httpStatus: 401,
+      }),
+    ).toBe(true)
   })
 })

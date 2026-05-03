@@ -563,10 +563,12 @@ export const SettingsGeneral: Component = () => {
 
   const AccountSection = () => {
     const [revoking, setRevoking] = createSignal(false)
+    const [confirmingKey, setConfirmingKey] = createSignal(false)
     const [confirming, setConfirming] = createSignal(false)
     const [revokeError, setRevokeError] = createSignal<string | undefined>()
 
     const handleChangeApiKey = async () => {
+      setConfirmingKey(false)
       // Deliberately DO NOT clear gpd.tos.acceptedVersion — changing key
       // on the same device keeps prior version acceptance valid. Revoke
       // Consent is the explicit path for wiping it.
@@ -715,11 +717,35 @@ export const SettingsGeneral: Component = () => {
             <Button
               size="small"
               variant="secondary"
-              onClick={handleChangeApiKey}
+              disabled={confirmingKey() || revoking()}
+              onClick={() => setConfirmingKey(true)}
             >
               {language.t("sidebar.resetKey")}
             </Button>
           </SettingsRow>
+          <Show when={confirmingKey()}>
+            <div class="mx-4 mb-3 flex flex-col gap-3 rounded-md border border-border-weak-base bg-surface-base p-3">
+              <p class="text-13-regular text-text-base">
+                {language.t("settings.account.accessKey.description")}
+              </p>
+              <div class="flex justify-end gap-2">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  onClick={() => setConfirmingKey(false)}
+                >
+                  {language.t("common.cancel")}
+                </Button>
+                <Button
+                  size="small"
+                  variant="primary"
+                  onClick={() => void handleChangeApiKey()}
+                >
+                  {language.t("sidebar.resetKey")}
+                </Button>
+              </div>
+            </div>
+          </Show>
           <SettingsRow
             title={language.t("settings.account.revokeConsent.title")}
             description={language.t("settings.account.revokeConsent.description")}

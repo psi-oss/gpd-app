@@ -1,4 +1,5 @@
 import type {
+  Agent,
   Config,
   OpencodeClient,
   Path,
@@ -98,8 +99,90 @@ export function clearProviderRev(directory: string) {
   providerRev.delete(directory)
 }
 
-function runAll(list: Array<() => Promise<unknown>>) {
-  return Promise.allSettled(list.map((item) => item()))
+type BootstrapTask = {
+  name: string
+  run: () => Promise<unknown>
+}
+
+type BootstrapFailureRecord = {
+  stage: string
+  directory?: string
+  task?: string
+  message: string
+  stack?: string
+  causeMessage?: string
+  causeStack?: string
+  time: number
+}
+
+class BootstrapTaskError extends Error {
+  readonly task: string
+  readonly cause: unknown
+
+  constructor(task: string, cause: unknown) {
+    super(`${task}: ${errorMessage(cause)}`)
+    this.name = "BootstrapTaskError"
+    this.task = task
+    this.cause = cause
+  }
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error) return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function stackOf(error: unknown) {
+  return error instanceof Error ? error.stack : undefined
+}
+
+function taskName(error: unknown) {
+  return error instanceof BootstrapTaskError ? error.task : undefined
+}
+
+function taskCause(error: unknown) {
+  return error instanceof BootstrapTaskError ? error.cause : undefined
+}
+
+function recordBootstrapFailure(stage: string, directory: string | undefined, error: unknown) {
+  const cause = taskCause(error)
+  const record: BootstrapFailureRecord = {
+    stage,
+    directory,
+    task: taskName(error),
+    message: errorMessage(error),
+    stack: stackOf(error),
+    causeMessage: cause === undefined ? undefined : errorMessage(cause),
+    causeStack: stackOf(cause),
+    time: Date.now(),
+  }
+
+  console.error("[gpd] bootstrap failure", record, error)
+
+  if (!import.meta.env.DEV || typeof window === "undefined") return
+  const target = window as typeof window & { __gpdBootstrapFailures?: BootstrapFailureRecord[] }
+  const failures = target.__gpdBootstrapFailures ?? []
+  failures.push(record)
+  target.__gpdBootstrapFailures = failures.slice(-50)
+}
+
+function task(name: string, run: () => Promise<unknown>): BootstrapTask {
+  return { name, run }
+}
+
+function runAll(list: BootstrapTask[]) {
+  return Promise.allSettled(
+    list.map((item) =>
+      item.run().catch((err) => {
+        throw new BootstrapTaskError(item.name, err)
+      }),
+    ),
+  )
 }
 
 function showErrors(input: {
@@ -126,28 +209,31 @@ export async function bootstrapGlobal(input: {
   setGlobalStore: SetStoreFunction<GlobalStore>
 }) {
   const fast = [
-    () =>
+    task("global.config.get", () =>
       retry(() =>
         input.globalSDK.global.config.get().then((x) => {
           input.setGlobalStore("config", x.data!)
         }),
       ),
-    () =>
+    ),
+    task("global.provider.list", () =>
       retry(() =>
         input.globalSDK.provider.list().then((x) => {
           input.setGlobalStore("provider", normalizeProviderList(x.data!))
         }),
       ),
+    ),
   ]
 
   const slow = [
-    () =>
+    task("global.path.get", () =>
       retry(() =>
         input.globalSDK.path.get().then((x) => {
           input.setGlobalStore("path", x.data!)
         }),
       ),
-    () =>
+    ),
+    task("global.project.list", () =>
       retry(() =>
         input.globalSDK.project.list().then((x) => {
           const projects = (x.data ?? [])
@@ -158,6 +244,7 @@ export async function bootstrapGlobal(input: {
           input.setGlobalStore("project", projects)
         }),
       ),
+    ),
   ]
   await runAll(fast)
   // showErrors({
@@ -225,6 +312,55 @@ function warmSessions(input: {
   ).then(() => undefined)
 }
 
+function agentKey(agent: Agent) {
+  return [
+    agent.name,
+    agent.description ?? "",
+    agent.mode,
+    agent.native ? "1" : "0",
+    agent.hidden ? "1" : "0",
+    agent.color ?? "",
+    agent.model?.providerID ?? "",
+    agent.model?.modelID ?? "",
+    agent.variant ?? "",
+  ].join("\u0000")
+}
+
+function sameAgents(a: Agent[], b: Agent[]) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (agentKey(a[i]!) !== agentKey(b[i]!)) return false
+  }
+  return true
+}
+
+function setAgents(input: { store: Store<State>; setStore: SetStoreFunction<State> }, agents: Agent[]) {
+  if (sameAgents(input.store.agent, agents)) return
+  input.setStore("agent", agents)
+}
+
+async function loadAgents(input: { sdk: OpencodeClient; store: Store<State>; setStore: SetStoreFunction<State> }) {
+  const response = await input.sdk.app.agents().catch((err) => {
+    throw new Error(`fetch agents: ${errorMessage(err)}`, { cause: err })
+  })
+  const agents = (() => {
+    try {
+      return normalizeAgentList(response.data)
+    } catch (err) {
+      throw new Error(`normalize agents: ${errorMessage(err)}`, { cause: err })
+    }
+  })()
+  try {
+    setAgents(input, agents)
+  } catch (err) {
+    if (sameAgents(input.store.agent, agents)) {
+      console.warn("[gpd] agent metadata stored after subscriber cleanup error", err)
+      return
+    }
+    throw new Error(`store agents: ${errorMessage(err)}`, { cause: err })
+  }
+}
+
 export async function bootstrapDirectory(input: {
   directory: string
   sdk: OpencodeClient
@@ -265,17 +401,22 @@ export async function bootstrapDirectory(input: {
   if (loading) input.setStore("status", "partial")
 
   const fast = [
-    () => retry(() => input.sdk.app.agents().then((x) => input.setStore("agent", normalizeAgentList(x.data)))),
-    () => retry(() => input.sdk.config.get().then((x) => input.setStore("config", x.data!))),
-    () => retry(() => input.sdk.session.status().then((x) => input.setStore("session_status", x.data!))),
+    task("app.agents", () =>
+      retry(() => loadAgents(input)),
+    ),
+    task("config.get", () => retry(() => input.sdk.config.get().then((x) => input.setStore("config", x.data!)))),
+    task("session.status", () =>
+      retry(() => input.sdk.session.status().then((x) => input.setStore("session_status", x.data!))),
+    ),
   ]
 
   const slow = [
-    () =>
+    task("project.current", () =>
       seededProject
         ? Promise.resolve()
         : retry(() => input.sdk.project.current()).then((x) => input.setStore("project", x.data!.id)),
-    () =>
+    ),
+    task("path.get", () =>
       seededPath
         ? Promise.resolve()
         : retry(() =>
@@ -285,7 +426,8 @@ export async function bootstrapDirectory(input: {
               if (next) input.setStore("project", next)
             }),
           ),
-    () =>
+    ),
+    task("vcs.get", () =>
       retry(() =>
         input.sdk.vcs.get().then((x) => {
           const next = x.data ?? input.store.vcs
@@ -293,8 +435,11 @@ export async function bootstrapDirectory(input: {
           if (next) input.vcsCache.setStore("value", next)
         }),
       ),
-    () => retry(() => input.sdk.command.list().then((x) => input.setStore("command", x.data ?? []))),
-    () =>
+    ),
+    task("command.list", () =>
+      retry(() => input.sdk.command.list().then((x) => input.setStore("command", x.data ?? []))),
+    ),
+    task("permission.list", () =>
       retry(() =>
         input.sdk.permission.list().then((x) => {
           const ids = (x.data ?? []).map((perm) => perm?.sessionID).filter((id): id is string => !!id)
@@ -321,7 +466,8 @@ export async function bootstrapDirectory(input: {
           )
         }),
       ),
-    () =>
+    ),
+    task("question.list", () =>
       retry(() =>
         input.sdk.question.list().then((x) => {
           const ids = (x.data ?? []).map((question) => question?.sessionID).filter((id): id is string => !!id)
@@ -346,8 +492,9 @@ export async function bootstrapDirectory(input: {
           )
         }),
       ),
-    () => Promise.resolve(input.loadSessions(input.directory)),
-    () =>
+    ),
+    task("session.list", () => Promise.resolve(input.loadSessions(input.directory))),
+    task("mcp.status", () =>
       retry(() =>
         input.sdk.mcp.status().then((x) => {
           const status = x.data!
@@ -373,16 +520,13 @@ export async function bootstrapDirectory(input: {
           }
         }),
       ),
+    ),
   ]
 
   const errs = errors(await runAll(fast))
   if (errs.length > 0) {
     for (const err of errs) {
-      console.error(
-        "[gpd] bootstrapDirectory fast-step failed",
-        err,
-        err instanceof Error ? err.stack : undefined,
-      )
+      recordBootstrapFailure("directory.fast", input.directory, err)
     }
     const project = getFilename(input.directory)
     showToast({
@@ -396,11 +540,7 @@ export async function bootstrapDirectory(input: {
   const slowErrs = errors(await runAll(slow))
   if (slowErrs.length > 0) {
     for (const err of slowErrs) {
-      console.error(
-        "[gpd] bootstrapDirectory slow-step failed",
-        err,
-        err instanceof Error ? err.stack : undefined,
-      )
+      recordBootstrapFailure("directory.slow", input.directory, err)
     }
     const project = getFilename(input.directory)
     showToast({
@@ -422,11 +562,7 @@ export async function bootstrapDirectory(input: {
     })
     .catch((err) => {
       if (providerRev.get(input.directory) !== rev) return
-      console.error(
-        "[gpd] bootstrapDirectory provider.list failed",
-        err,
-        err instanceof Error ? err.stack : undefined,
-      )
+      recordBootstrapFailure("directory.provider", input.directory, err)
       const project = getFilename(input.directory)
       showToast({
         variant: "error",

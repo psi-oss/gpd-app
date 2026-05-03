@@ -51,6 +51,27 @@ def _gpd_pid() -> int | None:
     return pids[0] if pids else None
 
 
+def _contains_any(path: Path, needles: tuple[bytes, ...]) -> bytes | None:
+    """Return the first matching needle in path without shelling out to CLT tools.
+
+    Clean macOS VMs do not have Xcode Command Line Tools. Commands like
+    `/usr/bin/strings` are CLT stubs and open a GUI installer prompt, which
+    invalidates release-lane tests. Scan bytes directly instead.
+    """
+    window = max(len(n) for n in needles) - 1
+    tail = b""
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                return None
+            data = tail + chunk
+            for needle in needles:
+                if needle in data:
+                    return needle
+            tail = data[-window:] if window > 0 else b""
+
+
 @pytest.mark.smoke
 @pytest.mark.skipif(
     not RELEASE_BUILD,
@@ -93,17 +114,25 @@ def test_release_build_frontend_bundle_has_no_vendor_code():
     assets, our defense-in-depth guarantee weakens — even without the
     Rust-side plugin, the addEventListener monkey-patch would still ship.
     """
-    dist = Path(__file__).resolve().parent.parent.parent.parent / "dist" / "assets"
-    if not dist.exists():
-        pytest.skip(f"frontend dist/ not present at {dist}; build first")
+    app_path = os.environ.get("GPD_APP_PATH", "")
+    if not app_path:
+        pytest.skip("GPD_APP_PATH not set; cannot locate release bundle")
+    app = Path(app_path)
+    if not app.exists():
+        pytest.skip(f"GPD_APP_PATH does not exist: {app}")
 
-    sentinels = ("__TAURI_MCP_LISTENER_PATCH__", "setupPluginListeners")
+    sentinels = (b"__TAURI_MCP_LISTENER_PATCH__", b"setupPluginListeners")
+    scan_roots = [
+        app / "Contents" / "MacOS" / "GPD",
+        app / "Contents" / "Resources",
+    ]
     offenders: list[tuple[str, str]] = []
-    for path in dist.glob("*.js"):
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for needle in sentinels:
-            if needle in text:
-                offenders.append((path.name, needle))
+    for root in scan_roots:
+        paths = [root] if root.is_file() else [p for p in root.rglob("*") if p.is_file()]
+        for path in paths:
+            hit = _contains_any(path, sentinels)
+            if hit:
+                offenders.append((str(path.relative_to(app)), hit.decode()))
     assert not offenders, (
         "SECURITY REGRESSION: vendored tauri-plugin-mcp leaked into the "
         f"release frontend bundle. Offenders: {offenders}. Verify the "
