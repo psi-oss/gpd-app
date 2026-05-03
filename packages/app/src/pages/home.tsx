@@ -9,7 +9,6 @@ import { usePlatform } from "@/context/platform"
 import { DateTime } from "luxon"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogSelectDirectory } from "@/components/dialog-select-directory"
-import { DialogOpenOrCreateProject } from "@/components/dialog-open-or-create-project"
 import { useServer } from "@/context/server"
 import { useGlobalSync } from "@/context/global-sync"
 import { useLanguage } from "@/context/language"
@@ -65,15 +64,6 @@ export default function Home() {
     }
   }
 
-  function openOrCreateProject() {
-    dialog.show(() => (
-      <DialogOpenOrCreateProject
-        onResolved={(directory) => openProject(directory)}
-        onOpenExisting={chooseProject}
-      />
-    ))
-  }
-
   return (
     <div class="mx-auto mt-55 w-full md:w-auto px-4">
       <Logo class="md:w-xl opacity-12" />
@@ -83,7 +73,7 @@ export default function Home() {
             <div class="flex gap-2 items-center justify-between pl-3">
               <div class="text-14-medium text-text-strong">{language.t("home.recentProjects")}</div>
               <div class="flex gap-2">
-                <Button icon="plus" size="normal" class="pl-2 pr-3" onClick={openOrCreateProject}>
+                <Button icon="plus" size="normal" class="pl-2 pr-3" onClick={chooseProject}>
                   {language.t("home.openOrCreate")}
                 </Button>
               </div>
@@ -111,7 +101,7 @@ export default function Home() {
           <div class="mt-30 mx-auto flex flex-col items-center gap-3">
             <div class="text-12-regular text-text-weak">{language.t("common.loading")}</div>
             <div class="flex gap-2">
-              <Button icon="plus" class="px-3" onClick={openOrCreateProject}>
+              <Button icon="plus" class="px-3" onClick={chooseProject}>
                 {language.t("home.openOrCreate")}
               </Button>
             </div>
@@ -125,7 +115,7 @@ export default function Home() {
               <div class="text-12-regular text-text-weak">{language.t("home.empty.description")}</div>
             </div>
             <div class="flex gap-2 mt-1">
-              <Button icon="plus" class="px-3" onClick={openOrCreateProject}>
+              <Button icon="plus" class="px-3" onClick={chooseProject}>
                 {language.t("home.openOrCreate")}
               </Button>
             </div>

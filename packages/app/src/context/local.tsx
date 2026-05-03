@@ -19,26 +19,42 @@ type State = {
 }
 
 type Saved = {
+  project?: State
   session: Record<string, State | undefined>
 }
 
 const WORKSPACE_KEY = "__workspace__"
 const handoff = new Map<string, State>()
+let lastProjectSelection: State | undefined
 
 const handoffKey = (dir: string, id: string) => `${dir}\n${id}`
 
-const migrate = (value: unknown) => {
+const hasOwn = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key)
+
+const stateFrom = (value: unknown): State | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return value as State
+}
+
+export const migrateModelSelection = (value: unknown): Saved => {
   if (!value || typeof value !== "object") return { session: {} }
 
   const item = value as {
+    project?: State
     session?: Record<string, State | undefined>
     pick?: Record<string, State | undefined>
   }
 
-  if (item.session && typeof item.session === "object") return { session: item.session }
+  if (item.session && typeof item.session === "object") {
+    return {
+      project: stateFrom(item.project),
+      session: item.session,
+    }
+  }
   if (!item.pick || typeof item.pick !== "object") return { session: {} }
 
   return {
+    project: stateFrom(item.pick[WORKSPACE_KEY]),
     session: Object.fromEntries(Object.entries(item.pick).filter(([key]) => key !== WORKSPACE_KEY)),
   }
 }
@@ -49,6 +65,20 @@ const clone = (value: State | undefined) => {
     ...value,
     model: value.model ? { ...value.model } : undefined,
   } satisfies State
+}
+
+export const shouldPersistProjectModelSelection = (next: Partial<State>) =>
+  hasOwn(next, "model") || hasOwn(next, "variant")
+
+export const applyProjectModelSelection = (current: State | undefined, next: Partial<State>): State | undefined => {
+  const result: State = clone(current) ?? {}
+  if (hasOwn(next, "model")) {
+    if (next.model) result.model = { ...next.model }
+    else delete result.model
+  }
+  if (hasOwn(next, "variant")) result.variant = next.variant ?? null
+  if (!result.model) return undefined
+  return result
 }
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
@@ -64,12 +94,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const list = createMemo(() => sync.data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
     const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
 
-    const [saved, setSaved] = persisted(
+    const [saved, setSaved, , savedReady] = persisted(
       {
         ...Persist.workspace(sdk.directory, "model-selection", ["model-selection.v1"]),
-        migrate,
+        migrate: migrateModelSelection,
       },
       createStore<Saved>({
+        project: undefined,
         session: {},
       }),
     )
@@ -174,7 +205,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const agent = {
       list,
       current() {
-        return pickAgent(scope()?.agent ?? store.current)
+        return pickAgent(scope()?.agent ?? saved.project?.agent ?? store.current)
       },
       set(name: string | undefined) {
         const item = pickAgent(name)
@@ -224,6 +255,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const current = () => {
       const item = firstModel(
         () => scope()?.model,
+        () => saved.project?.model,
         () => agent.current()?.model,
         fallback,
       )
@@ -241,7 +273,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     }
 
-    const selected = () => scope()?.variant
+    const selected = () => scope()?.variant ?? saved.project?.variant
 
     const snapshot = () => {
       const model = current()
@@ -252,18 +284,60 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       } satisfies State
     }
 
+    const setProjectSelection = (patch: Partial<State>, resolved: State) => {
+      if (!shouldPersistProjectModelSelection(patch)) return
+      // Initialise the project branch if missing. setSaved("project", obj)
+      // (replacing the whole branch) triggers a reactive cascade in the
+      // persisted-store wrapper that desynced downstream consumers and
+      // forced a full app refresh to recover. Path-based writes
+      // (setSaved("project", "model", value)) keep Solid's fine-grained
+      // proxy reactivity intact.
+      if (!saved.project) {
+        const seed: State = {}
+        if (hasOwn(patch, "model") && patch.model) seed.model = { ...patch.model }
+        else if (hasOwn(patch, "variant") && resolved.model) seed.model = { ...resolved.model }
+        if (hasOwn(patch, "variant")) seed.variant = patch.variant ?? null
+        if (!seed.model) return
+        setSaved("project", seed)
+        lastProjectSelection = clone(seed)
+        return
+      }
+      if (hasOwn(patch, "model")) {
+        if (patch.model) setSaved("project", "model", { ...patch.model })
+        else setSaved("project", "model", undefined)
+      }
+      if (hasOwn(patch, "variant")) {
+        setSaved("project", "variant", patch.variant ?? null)
+        if (!saved.project.model && resolved.model) {
+          setSaved("project", "model", { ...resolved.model })
+        }
+      }
+      lastProjectSelection = clone(saved.project)
+    }
+
     const write = (next: Partial<State>) => {
+      const base = scope() ?? { agent: agent.current()?.name }
       const state = {
-        ...(scope() ?? { agent: agent.current()?.name }),
+        ...base,
         ...next,
+        model: next.model ? { ...next.model } : hasOwn(next, "model") ? undefined : base.model,
       } satisfies State
 
       const session = id()
-      if (session) {
-        setSaved("session", session, state)
-        return
-      }
-      setStore("draft", state)
+      // Batch session/draft + project writes so consumers (e.g. firstModel
+      // in current()) never see a half-applied state where scope.model is
+      // still old but saved.project.model is already new (or vice versa).
+      // Without batching, the two setSaved/setStore calls each fire a
+      // reactive cascade independently, which made model-switches in a
+      // fresh draft only "stick" after a full app reload.
+      batch(() => {
+        setProjectSelection(next, state)
+        if (session) {
+          setSaved("session", session, state)
+          return
+        }
+        setStore("draft", state)
+      })
     }
 
     const recent = createMemo(() => models.recent.list().map(models.find).filter(Boolean))

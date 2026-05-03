@@ -6,12 +6,13 @@
 // is rendered as a syntax-highlighted code block and the markdown body
 // stays untouched.
 //
-// As a second pass we escape unknown HTML-like tags in the body. GPD plan
-// files lean on custom <objective> / <task> / <verify> / <done> containers
-// that DOMPurify silently strips — escaping their `<` and `>` makes them
-// render as visible literal markup instead of smushing nested children into
-// one paragraph.
+// As a second pass we rewrite GPD agent-prompt containers
+// (<objective>, <context>, <tasks>, <task>, ...) into proper markdown
+// sections, then escape any other unknown HTML-like tags so they at
+// least render as literal text instead of being silently stripped by
+// DOMPurify.
 
+import { rewriteAgentTags } from "./markdown-agent-tags"
 import { escapeUnknownTags } from "./markdown-escape-tags"
 
 const KEY_LINE = /^[A-Za-z_][\w.-]*\s*:/
@@ -37,5 +38,5 @@ function rewriteFrontmatter(text: string): string {
 }
 
 export function preprocess(text: string): string {
-  return escapeUnknownTags(rewriteFrontmatter(text))
+  return escapeUnknownTags(rewriteAgentTags(rewriteFrontmatter(text)))
 }

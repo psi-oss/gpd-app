@@ -1,5 +1,5 @@
 [package]
-name = "opencode-desktop"
+name = "gpd-dev"
 version = "0.0.0"
 description = "The open source AI coding agent"
 authors = ["Anomaly Innovations", "PSI Inc"]

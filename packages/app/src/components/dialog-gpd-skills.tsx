@@ -2,7 +2,6 @@ import { Component, createMemo, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { useSync } from "@/context/sync"
 import { usePrompt } from "@/context/prompt"
 import { useLanguage } from "@/context/language"
 
@@ -14,6 +13,9 @@ const CATEGORY_GETTING_STARTED = [
   "gpd-new-project",
   "gpd-suggest-next",
   "gpd-settings",
+  "gpd-set-tier-models",
+  "gpd-start",
+  "gpd-update",
 ]
 
 const CATEGORY_RESEARCH_PLANNING = [
@@ -28,6 +30,8 @@ const CATEGORY_RESEARCH_PLANNING = [
   "gpd-plan-milestone-gaps",
   "gpd-branch-hypothesis",
   "gpd-discover",
+  "gpd-map-research",
+  "gpd-list-phase-assumptions",
 ]
 
 const CATEGORY_EXECUTION = [
@@ -36,6 +40,11 @@ const CATEGORY_EXECUTION = [
   "gpd-check-todos",
   "gpd-add-todo",
   "gpd-record-insight",
+  "gpd-autonomous",
+  "gpd-route",
+  "gpd-tangent",
+  "gpd-reapply-patches",
+  "gpd-undo",
 ]
 
 const CATEGORY_ANALYSIS = [
@@ -48,6 +57,8 @@ const CATEGORY_ANALYSIS = [
   "gpd-error-propagation",
   "gpd-compare-experiment",
   "gpd-compare-branches",
+  "gpd-compare-results",
+  "gpd-explain",
 ]
 
 const CATEGORY_VERIFICATION = [
@@ -56,6 +67,7 @@ const CATEGORY_VERIFICATION = [
   "gpd-regression-check",
   "gpd-error-patterns",
   "gpd-health",
+  "gpd-debug",
 ]
 
 const CATEGORY_WRITING = [
@@ -63,8 +75,19 @@ const CATEGORY_WRITING = [
   "gpd-arxiv-submission",
   "gpd-peer-review",
   "gpd-respond-to-referees",
-  "gpd-literature-review",
   "gpd-export",
+  "gpd-slides",
+]
+
+const CATEGORY_LITERATURE = [
+  "gpd-literature-review",
+  "gpd-arxiv:compare_papers",
+  "gpd-arxiv:deep-paper-analysis",
+  "gpd-arxiv:literature_review",
+  "gpd-arxiv:literature-synthesis",
+  "gpd-arxiv:research-discovery",
+  "gpd-arxiv:research-question",
+  "gpd-arxiv:summarize_paper",
 ]
 
 const CATEGORY_PROJECT_MANAGEMENT = [
@@ -79,9 +102,16 @@ const CATEGORY_PROJECT_MANAGEMENT = [
   "gpd-compact-state",
   "gpd-graph",
   "gpd-decisions",
+  "gpd-export-logs",
+  "gpd-record-backtrack",
 ]
 
-const CATEGORY_KNOWLEDGE = ["gpd-map-theory", "gpd-set-profile"]
+const CATEGORY_KNOWLEDGE = [
+  "gpd-map-theory",
+  "gpd-set-profile",
+  "gpd-digest-knowledge",
+  "gpd-review-knowledge",
+]
 
 type CategoryKey =
   | "gettingStarted"
@@ -90,6 +120,7 @@ type CategoryKey =
   | "analysis"
   | "verification"
   | "writing"
+  | "literature"
   | "projectManagement"
   | "knowledge"
   | "more"
@@ -101,6 +132,7 @@ const CATEGORY_ORDER: CategoryKey[] = [
   "analysis",
   "verification",
   "writing",
+  "literature",
   "projectManagement",
   "knowledge",
   "more",
@@ -113,6 +145,7 @@ const CATEGORY_I18N: Record<CategoryKey, string> = {
   analysis: "gpdSkills.category.analysis",
   verification: "gpdSkills.category.verification",
   writing: "gpdSkills.category.writing",
+  literature: "gpdSkills.category.literature",
   projectManagement: "gpdSkills.category.projectManagement",
   knowledge: "gpdSkills.category.knowledge",
   more: "gpdSkills.category.more",
@@ -126,6 +159,7 @@ const CATEGORY_COLOR: Record<CategoryKey, string> = {
   analysis: "#f59e0b",
   verification: "#10b981",
   writing: "#ec4899",
+  literature: "#a78bfa",
   projectManagement: "#94a3b8",
   knowledge: "#22d3ee",
   more: "#64748b",
@@ -142,6 +176,7 @@ function membershipMap(): Record<string, CategoryKey> {
   push(CATEGORY_ANALYSIS, "analysis")
   push(CATEGORY_VERIFICATION, "verification")
   push(CATEGORY_WRITING, "writing")
+  push(CATEGORY_LITERATURE, "literature")
   push(CATEGORY_PROJECT_MANAGEMENT, "projectManagement")
   push(CATEGORY_KNOWLEDGE, "knowledge")
   return out
@@ -155,14 +190,20 @@ interface GpdCommandItem {
   category: CategoryKey
 }
 
-export const DialogGpdSkills: Component = () => {
-  const sync = useSync()
+interface Props {
+  commands: readonly {
+    name: string
+    description?: string
+  }[]
+}
+
+export const DialogGpdSkills: Component<Props> = (props) => {
   const prompt = usePrompt()
   const dialog = useDialog()
   const language = useLanguage()
 
   const items = createMemo<GpdCommandItem[]>(() => {
-    return sync.data.command
+    return props.commands
       .filter((cmd) => cmd.name.startsWith("gpd-"))
       .map((cmd) => ({
         name: cmd.name,

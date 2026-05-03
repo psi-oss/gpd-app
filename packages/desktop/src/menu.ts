@@ -83,16 +83,16 @@ export async function createMenu(trigger: (id: string) => void) {
       }),
       await Submenu.new({
         text: t("desktop.menu.edit"),
+        // Intentionally NO Undo/Redo PredefinedMenuItem entries here.
+        // macOS routes Cmd+Z/Cmd+Shift+Z to those menu items, which dispatch
+        // `undo:`/`redo:` selectors to the focused responder — i.e. WKWebView's
+        // native undo manager. The CodeMirror file editor (and any other
+        // in-app contenteditable backed by Solid + custom history) tracks
+        // its own undo state that the native manager has no visibility
+        // into, so the menu items effectively swallow Cmd+Z without doing
+        // anything. Removing them lets the keystroke fall through to the
+        // webview and reach CodeMirror's `historyKeymap`.
         items: [
-          await PredefinedMenuItem.new({
-            item: "Undo",
-          }),
-          await PredefinedMenuItem.new({
-            item: "Redo",
-          }),
-          await PredefinedMenuItem.new({
-            item: "Separator",
-          }),
           await PredefinedMenuItem.new({
             item: "Cut",
           }),

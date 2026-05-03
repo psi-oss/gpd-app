@@ -405,6 +405,46 @@ function renderMathInText(text: string): string {
     }
   })
 
+  // Bare-bracket math fallbacks. Some chat models emit display math as
+  // `[ ... ]` and inline math as `( ... )` instead of `\[...\]` / `\(...\)`
+  // / `$$...$$` / `$...$`. Markdown wouldn't touch a bracket block whose
+  // closing `]` is not followed by `(`, so by the time we see this text
+  // the brackets and the LaTeX inside are still intact. We only treat a
+  // bracket block as math when it contains at least one LaTeX command
+  // (`\<letters>`); otherwise it's left alone so prose like
+  // "see [section] (above)" or markdown link syntax keeps working.
+  const looksLikeLatex = (math: string) => /\\[a-zA-Z]/.test(math)
+
+  // Display: `[ ... ]` not followed by `(` (which would make it a link).
+  const bracketDisplayMathRegex = /\[\s*([\s\S]*?)\s*\](?!\()/g
+  result = result.replace(bracketDisplayMathRegex, (match, math) => {
+    if (!looksLikeLatex(math)) return match
+    try {
+      return katex.renderToString(math, {
+        displayMode: true,
+        throwOnError: false,
+      })
+    } catch {
+      return match
+    }
+  })
+
+  // Inline: `( ... )` only when content carries a LaTeX command. Plain
+  // parenthetical prose never contains a backslash command, so the
+  // false-positive risk is bounded.
+  const parenInlineMathRegex = /\(\s*([^()\n]*?\\[a-zA-Z][^()\n]*?)\s*\)/g
+  result = result.replace(parenInlineMathRegex, (match, math) => {
+    if (!looksLikeLatex(math)) return match
+    try {
+      return katex.renderToString(math, {
+        displayMode: false,
+        throwOnError: false,
+      })
+    } catch {
+      return match
+    }
+  })
+
   return result
 }
 

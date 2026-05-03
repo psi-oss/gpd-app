@@ -1154,6 +1154,7 @@ export const dict = {
   "gpdSkills.category.analysis": "Analysis",
   "gpdSkills.category.verification": "Verification",
   "gpdSkills.category.writing": "Writing",
+  "gpdSkills.category.literature": "Literature",
   "gpdSkills.category.projectManagement": "Project Management",
   "gpdSkills.category.knowledge": "Knowledge",
   "gpdSkills.category.more": "More",

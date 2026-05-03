@@ -26,7 +26,7 @@ jobs:
           mkdir -p sidecars uv-bundle
           touch sidecars/opencode-cli-x86_64-unknown-linux-gnu
           chmod +x sidecars/opencode-cli-x86_64-unknown-linux-gnu
-      - run: cargo test -p opencode-desktop --lib
+      - run: cargo test -p gpd-dev --lib
         working-directory: packages/desktop/src-tauri
 
   smoke-test:
@@ -75,7 +75,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         working-directory: packages/desktop/src-tauri
-        run: cargo test -p opencode-desktop --lib
+        run: cargo test -p gpd-dev --lib
 
       # --- Download and install uv (simulates bundled uv) ---
       - name: Install uv
