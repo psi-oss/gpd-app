@@ -114,9 +114,9 @@ const defaultSettings: Settings = {
   },
   sounds: {
     agentEnabled: true,
-    agent: "staplebops-01",
+    agent: "bip-bop-05",
     permissionsEnabled: true,
-    permissions: "staplebops-02",
+    permissions: "bip-bop-09",
     errorsEnabled: true,
     errors: "nope-03",
   },

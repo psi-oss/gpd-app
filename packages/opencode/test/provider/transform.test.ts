@@ -1351,6 +1351,26 @@ describe("ProviderTransform.message - GPD OpenAI Responses tool call ids", () =>
     expect(call).toMatch(/^[a-zA-Z0-9_-]+$/)
     expect(call).not.toBe(longGeminiCallID)
   })
+
+  test("strips advanced regex patterns that trip GPT 5.5 Responses tool schemas", () => {
+    const result = ProviderTransform.schema(gpdResponsesModel, {
+      type: "object",
+      properties: {
+        project_dir: {
+          type: "string",
+          pattern: "^/",
+        },
+        value: {
+          type: "string",
+          pattern: "^(?!\\s*(?:null|none|undefined)\\s*$)\\S(?:.*\\S)?$",
+        },
+      },
+      required: ["project_dir", "value"],
+    }) as any
+
+    expect(result.properties.project_dir.pattern).toBe("^/")
+    expect(result.properties.value.pattern).toBeUndefined()
+  })
 })
 
 describe("ProviderTransform.message - strip openai metadata when store=false", () => {

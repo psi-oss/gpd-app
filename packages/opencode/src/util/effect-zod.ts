@@ -10,7 +10,13 @@ function walk(ast: SchemaAST.AST): z.ZodTypeAny {
   const desc = SchemaAST.resolveDescription(ast)
   const ref = SchemaAST.resolveIdentifier(ast)
   const next = desc ? out.describe(desc) : out
-  return ref ? next.meta({ ref }) : next
+  // `ref` propagates to JSON Schema as a non-standard `ref` keyword (vs `$ref`).
+  // OpenAI's Responses API rejects requests with high/xhigh reasoning_effort
+  // when tool schemas contain it (server_error at SSE seq=3, deterministic).
+  // Confirmed by curl-replay: removing the `ref` keyword from the `question`
+  // tool schema fixed the failure end-to-end. Use `title` instead — valid
+  // JSON Schema annotation, accepted by OpenAI in every reasoning tier.
+  return ref ? next.meta({ title: ref }) : next
 }
 
 function body(ast: SchemaAST.AST): z.ZodTypeAny {

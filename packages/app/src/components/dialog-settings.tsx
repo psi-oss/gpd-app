@@ -15,14 +15,14 @@ import { SettingsProviders } from "./settings-providers"
 import { SettingsModels } from "./settings-models"
 import { SettingsStats } from "./settings-stats"
 
-export const DialogSettings: Component = () => {
+export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
   const language = useLanguage()
   const platform = usePlatform()
   const dialog = useDialog()
 
   return (
     <Dialog size="x-large" transition>
-      <Tabs orientation="vertical" variant="settings" defaultValue="general" class="h-full settings-dialog" style={{ position: "relative" }}>
+      <Tabs orientation="vertical" variant="settings" defaultValue={props.defaultTab ?? "general"} class="h-full settings-dialog" style={{ position: "relative" }}>
         <IconButton
           icon="close"
           variant="ghost"

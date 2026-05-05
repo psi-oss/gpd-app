@@ -112,8 +112,8 @@ export function ModelSelectorPopover(props: {
 
   const handleManage = () => {
     close("manage")
-    void import("./dialog-manage-models").then((x) => {
-      dialog.show(() => <x.DialogManageModels />)
+    void import("./dialog-settings").then((x) => {
+      dialog.show(() => <x.DialogSettings defaultTab="models" />)
     })
   }
 
@@ -208,8 +208,8 @@ export const DialogSelectModel: Component<{ provider?: string; model?: ModelStat
   }
 
   const manage = () => {
-    void import("./dialog-manage-models").then((x) => {
-      dialog.show(() => <x.DialogManageModels />)
+    void import("./dialog-settings").then((x) => {
+      dialog.show(() => <x.DialogSettings defaultTab="models" />)
     })
   }
 

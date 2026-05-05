@@ -476,6 +476,8 @@ export namespace LLM {
                   (ctrl) => Effect.sync(() => ctrl.abort()),
                 )
 
+                const totalRetries = Math.max(0, Math.min(input.retries ?? 3, 5))
+
                 const attempt = (remaining: number): Stream.Stream<Event, unknown> =>
                   Stream.unwrap(
                     Effect.gen(function* () {
@@ -493,14 +495,28 @@ export namespace LLM {
                           sessionID: input.sessionID,
                           code: err.code,
                           remaining: remaining - 1,
+                          // The upstream error block can carry a provider
+                          // request id; stringify defensively so logging
+                          // never crashes this catch handler.
+                          causeEvent: safeStringify(err.causeEvent).slice(0, 1500),
                         })
                         return attempt(remaining - 1)
+                      }
+                      if (err instanceof RetryableEarlyStreamError) {
+                        log.error("early stream error final (no retries left)", {
+                          providerID: input.model.providerID,
+                          modelID: input.model.id,
+                          sessionID: input.sessionID,
+                          code: err.code,
+                          aborted: ctrl.signal.aborted,
+                          causeEvent: safeStringify(err.causeEvent).slice(0, 2000),
+                        })
                       }
                       return Stream.fail(err)
                     }),
                   )
 
-                return attempt(input.retries ?? 3)
+                return attempt(totalRetries)
               }),
             ),
           )
@@ -525,6 +541,19 @@ export namespace LLM {
     ) {
       super(`Retryable early stream error: ${code}`)
       this.name = "RetryableEarlyStreamError"
+    }
+  }
+
+  function safeStringify(value: unknown): string {
+    try {
+      if (typeof value === "string") return value
+      return JSON.stringify(value, (_k, v) => (v instanceof Error ? { name: v.name, message: v.message } : v))
+    } catch {
+      try {
+        return String(value)
+      } catch {
+        return "<unserializable>"
+      }
     }
   }
 
@@ -578,7 +607,16 @@ export namespace LLM {
   }
 
   function retryableStreamErrorCode(input: unknown): string | undefined {
-    const candidates = [input, (input as any)?.error, (input as any)?.cause]
+    const candidates = [
+      input,
+      (input as any)?.error,
+      (input as any)?.cause,
+      (input as any)?.data,
+      (input as any)?.responseBody,
+      (input as any)?.data?.responseBody,
+      (input as any)?.error?.responseBody,
+      (input as any)?.cause?.responseBody,
+    ]
     for (const candidate of candidates) {
       const code = retryableStreamErrorCodeFromPayload(candidate)
       if (code) return code
@@ -587,6 +625,13 @@ export namespace LLM {
   }
 
   function retryableStreamErrorCodeFromPayload(payload: unknown): string | undefined {
+    if (typeof payload === "string") {
+      try {
+        return retryableStreamErrorCodeFromPayload(JSON.parse(payload))
+      } catch {
+        return undefined
+      }
+    }
     if (!payload || typeof payload !== "object") return undefined
     const event = payload as any
     if (event.type !== "error") return undefined

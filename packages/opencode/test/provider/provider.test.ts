@@ -57,6 +57,36 @@ function paid(providers: Awaited<ReturnType<typeof list>>) {
   return Object.values(item.models).filter((model) => model.cost.input > 0).length
 }
 
+test("normalizes overlong OpenAI Responses call_id values in serialized request bodies", () => {
+  const longCallID = `call_f583f01eaee245ffa1488bf407da__thought__${"abc/+".repeat(340)}`
+  const body = JSON.stringify({
+    model: "gpt-5.5",
+    input: [
+      {
+        type: "function_call",
+        call_id: longCallID,
+        name: "skill",
+        arguments: "{}",
+      },
+      {
+        type: "function_call_output",
+        call_id: longCallID,
+        output: "loaded",
+      },
+    ],
+  })
+
+  const result = Provider.normalizeOpenAIResponsesCallIds(body)
+  expect(result?.changed).toBe(true)
+  expect(result?.summary.overlong).toBe(2)
+
+  const parsed = JSON.parse(result?.body ?? "{}")
+  expect(parsed.input[0].call_id).toBe(parsed.input[1].call_id)
+  expect(parsed.input[0].call_id).not.toBe(longCallID)
+  expect(parsed.input[0].call_id.length).toBeLessThanOrEqual(64)
+  expect(parsed.input[0].call_id).toMatch(/^[a-zA-Z0-9_-]+$/)
+})
+
 test("provider loaded from env variable", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

@@ -4,11 +4,14 @@
 
 import { invoke } from "@tauri-apps/api/core"
 import { type as ostype } from "@tauri-apps/plugin-os"
-import { createSignal } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 
 const OS_NAME = ostype()
 
-const [webviewZoom, setWebviewZoom] = createSignal(1)
+const [webviewZoom, setWebviewZoom] = createRoot((dispose) => {
+  if (import.meta.hot) import.meta.hot.dispose(dispose)
+  return createSignal(1)
+})
 
 const MAX_ZOOM_LEVEL = 10
 const MIN_ZOOM_LEVEL = 0.2
@@ -22,7 +25,7 @@ const applyZoom = (next: number) => {
   })
 }
 
-window.addEventListener("keydown", (event) => {
+const handleKeyDown = (event: KeyboardEvent) => {
   if (!(OS_NAME === "macos" ? event.metaKey : event.ctrlKey)) return
 
   let newZoom = webviewZoom()
@@ -32,6 +35,14 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "0") newZoom = 1
 
   applyZoom(clamp(newZoom))
-})
+}
+
+window.addEventListener("keydown", handleKeyDown)
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    window.removeEventListener("keydown", handleKeyDown)
+  })
+}
 
 export { webviewZoom }

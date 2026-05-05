@@ -86,6 +86,33 @@ type TabHandoff = {
 
 export type LocalProject = Partial<Project> & { worktree: string; expanded: boolean }
 
+type StableProjectEntry<T> = {
+  signature: string
+  project: T
+}
+
+export function stableProjectList<T extends { worktree: string }>(
+  cache: Map<string, StableProjectEntry<T>>,
+  projects: T[],
+): T[] {
+  const seen = new Set<string>()
+
+  const next = projects.map((project) => {
+    seen.add(project.worktree)
+    const signature = JSON.stringify(project)
+    const cached = cache.get(project.worktree)
+    if (cached?.signature === signature) return cached.project
+    cache.set(project.worktree, { signature, project })
+    return project
+  })
+
+  for (const key of cache.keys()) {
+    if (!seen.has(key)) cache.delete(key)
+  }
+
+  return next
+}
+
 export type ReviewDiffStyle = "unified" | "split"
 
 export function ensureSessionKey(key: string, touch: (key: string) => void, seed: (key: string) => void) {
@@ -520,6 +547,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       })
     })
 
+    const projectListCache = new Map<string, StableProjectEntry<LocalProject>>()
     const enriched = createMemo(() =>
       server.projects
         .list()
@@ -528,12 +556,15 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     )
     const list = createMemo(() => {
       const projects = enriched()
-      return projects.map((project) => {
-        const color = project.icon?.color ?? colors[project.worktree]
-        if (!color) return project
-        const icon = project.icon ? { ...project.icon, color } : { color }
-        return { ...project, icon }
-      })
+      return stableProjectList(
+        projectListCache,
+        projects.map((project) => {
+          const color = project.icon?.color ?? colors[project.worktree]
+          if (!color) return project
+          const icon = project.icon ? { ...project.icon, color } : { color }
+          return { ...project, icon }
+        }),
+      )
     })
 
     createEffect(() => {

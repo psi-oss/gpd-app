@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, createSignal } from "solid-js"
-import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./layout"
+import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys, stableProjectList } from "./layout"
 
 describe("layout session-key helpers", () => {
   test("couples touch and scroll seed in order", () => {
@@ -65,5 +65,31 @@ describe("pruneSessionKeys", () => {
     })
 
     expect(drop).toEqual([])
+  })
+})
+
+describe("stableProjectList", () => {
+  test("preserves object identity for unchanged projects and prunes removed entries", () => {
+    const cache = new Map()
+    const first = stableProjectList(cache, [
+      { worktree: "/a", expanded: true, icon: { color: "red" } },
+      { worktree: "/b", expanded: false },
+    ])
+
+    const second = stableProjectList(cache, [
+      { worktree: "/a", expanded: true, icon: { color: "red" } },
+      { worktree: "/b", expanded: true },
+    ])
+
+    expect(second[0]).toBe(first[0])
+    expect(second[1]).not.toBe(first[1])
+    expect(cache.has("/a")).toBe(true)
+    expect(cache.has("/b")).toBe(true)
+
+    const third = stableProjectList(cache, [{ worktree: "/b", expanded: true }])
+
+    expect(third[0]).toBe(second[1])
+    expect(cache.has("/a")).toBe(false)
+    expect(cache.has("/b")).toBe(true)
   })
 })

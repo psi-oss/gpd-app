@@ -94,6 +94,104 @@ export namespace Provider {
     return typeof input === "string" ? input.length : 0
   }
 
+  function requestPath(input: RequestInfo | URL) {
+    let path = String(input)
+    try {
+      path = new URL(String(input)).pathname
+    } catch {}
+    return path
+  }
+
+  function isOpenAIResponsesPost(input: RequestInfo | URL, opts: BunFetchRequestInit) {
+    return opts.method === "POST" && requestPath(input).endsWith("/responses")
+  }
+
+  function summarizeCallIds(input: unknown) {
+    const summary = {
+      total: 0,
+      normalized: 0,
+      overlong: 0,
+      invalidChars: 0,
+      maxChars: 0,
+      samplePaths: [] as string[],
+    }
+
+    function scan(value: unknown, path: string) {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => scan(item, `${path}[${index}]`))
+        return
+      }
+      if (!value || typeof value !== "object") return
+
+      for (const [key, child] of Object.entries(value)) {
+        const childPath = path ? `${path}.${key}` : key
+        if (key === "call_id" && typeof child === "string") {
+          summary.total++
+          summary.maxChars = Math.max(summary.maxChars, child.length)
+          if (child.length > ProviderTransform.OPENAI_RESPONSES_TOOL_CALL_ID_MAX) summary.overlong++
+          if (!/^[a-zA-Z0-9_-]+$/.test(child)) summary.invalidChars++
+          const normalized = ProviderTransform.normalizeOpenAIResponsesToolCallId(child)
+          if (normalized !== child) {
+            summary.normalized++
+            if (summary.samplePaths.length < 5) summary.samplePaths.push(childPath)
+          }
+          continue
+        }
+        scan(child, childPath)
+      }
+    }
+
+    scan(input, "")
+    return summary
+  }
+
+  export function normalizeOpenAIResponsesCallIds(rawBody: unknown) {
+    if (typeof rawBody !== "string") return undefined
+
+    let body: any
+    try {
+      body = JSON.parse(rawBody)
+    } catch {
+      return undefined
+    }
+
+    const ids = new Map<string, string>()
+    const normalize = (id: string) => {
+      const existing = ids.get(id)
+      if (existing) return existing
+      const next = ProviderTransform.normalizeOpenAIResponsesToolCallId(id)
+      ids.set(id, next)
+      return next
+    }
+
+    function scan(value: unknown) {
+      if (Array.isArray(value)) {
+        for (const item of value) scan(item)
+        return
+      }
+      if (!value || typeof value !== "object") return
+
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "call_id" && typeof child === "string") {
+          const record = value as Record<string, unknown>
+          record[key] = normalize(child)
+          continue
+        }
+        scan(child)
+      }
+    }
+
+    const before = summarizeCallIds(body)
+    if (before.normalized === 0) return { body: rawBody, summary: before, changed: false }
+
+    scan(body)
+    return {
+      body: JSON.stringify(body),
+      summary: before,
+      changed: true,
+    }
+  }
+
   function summarizeProviderRequestBody(rawBody: unknown) {
     if (typeof rawBody !== "string") {
       return {
@@ -227,6 +325,7 @@ export namespace Provider {
       store: body.store,
       parallelToolCalls: body.parallel_tool_calls,
       toolChoice: body.tool_choice,
+      callIds: summarizeCallIds(body),
       metadataKeys: body.metadata && typeof body.metadata === "object" ? Object.keys(body.metadata).sort() : undefined,
       previousResponseId: typeof body.previous_response_id === "string" ? "<present>" : undefined,
     }
@@ -1671,29 +1770,80 @@ export namespace Provider {
             // Confirmed against the gpt-5.5 Responses endpoint: identical
             // body returns 500 with store=false+stripped ids vs 200 with
             // store=true.
-            if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
-              const body = JSON.parse(opts.body as string)
+            if (
+              model.api.npm === "@ai-sdk/openai" &&
+              opts.body &&
+              typeof opts.body === "string" &&
+              isOpenAIResponsesPost(input, opts)
+            ) {
+              const normalized = normalizeOpenAIResponsesCallIds(opts.body)
+              if (normalized?.changed) {
+                opts.body = normalized.body
+                log.warn("normalized OpenAI Responses call_id values", {
+                  providerID: model.providerID,
+                  modelID: model.id,
+                  apiModelID: model.api.id,
+                  path: requestPath(input),
+                  callIds: normalized.summary,
+                })
+              }
+            }
+
+            if (model.api.npm === "@ai-sdk/openai" && typeof opts.body === "string" && opts.method === "POST") {
+              const body = JSON.parse(opts.body)
               const stripIds = body.store === true
+              let mutated = false
               if (stripIds && Array.isArray(body.input)) {
                 for (const item of body.input) {
                   if ("id" in item) {
                     delete item.id
                   }
                 }
+                mutated = true
+              }
+              if (mutated) {
                 opts.body = JSON.stringify(body)
               }
             }
 
+            // claude-opus-4-7 ships with `thinking.display = "omitted"` as
+            // its default, which is a silent change from claude-opus-4-6's
+            // `"summarized"` default — thinking blocks come back with an
+            // empty `thinking` field and a populated `signature`. The
+            // `@ai-sdk/openai-compatible` driver gates reasoning-event
+            // emission on a truthy check of `delta.reasoning_content`, so
+            // the empty string drops every reasoning event and the UI
+            // never renders the panel. Setting `thinking.display` to
+            // `"summarized"` restores Anthropic's plaintext thinking
+            // summaries (per the official adaptive-thinking docs at
+            // https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking).
+            // Anthropic confirms full plaintext chain-of-thought is never
+            // available on Claude 4 — only the summarized variant — so
+            // `"summarized"` is the strongest visible setting we can ask
+            // for. If the body already specifies `display`, leave it.
+            if (
+              model.providerID === "gpd" &&
+              model.api.id === "claude-opus-4-7" &&
+              model.api.npm === "@ai-sdk/openai-compatible" &&
+              opts.body &&
+              opts.method === "POST"
+            ) {
+              const body = JSON.parse(opts.body as string)
+              const existing = body.thinking
+              if (!existing || typeof existing !== "object") {
+                body.thinking = { type: "adaptive", display: "summarized" }
+              } else if (existing.display === undefined) {
+                body.thinking = { ...existing, display: "summarized" }
+              }
+              opts.body = JSON.stringify(body)
+            }
+
             if (shouldLogGpdRequestShape(model) && opts.body && opts.method === "POST") {
-              let path = String(input)
-              try {
-                path = new URL(String(input)).pathname
-              } catch {}
               log.warn("gpd request shape", {
                 providerID: model.providerID,
                 modelID: model.id,
                 apiModelID: model.api.id,
-                path,
+                path: requestPath(input),
                 request: summarizeProviderRequestBody(opts.body),
               })
             }

@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 
 export type EditorStatus = "clean" | "dirty" | "saving" | "stale" | "conflict"
 
@@ -20,7 +20,10 @@ export interface RegisteredEditor {
 }
 
 const editors = new Map<string, RegisteredEditor>()
-const [version, setVersion] = createSignal(0)
+const [version, setVersion] = createRoot((dispose) => {
+  if (import.meta.hot) import.meta.hot.dispose(dispose)
+  return createSignal(0)
+})
 
 let unload = false
 

@@ -8,6 +8,32 @@ import { type LocalProject } from "@/context/layout"
 import { useLanguage } from "@/context/language"
 import { displayName } from "@/pages/layout/helpers"
 
+function isNotFoundError(error: unknown) {
+  if (typeof error !== "object" || error === null) return false
+  const data = error as { name?: unknown; message?: unknown }
+  if (data.name === "NotFoundError") return true
+  return typeof data.message === "string" && /\b(Project not found|NotFoundError)\b/.test(data.message)
+}
+
+export async function deleteProjectMetadata(input: {
+  project: LocalProject
+  deleteProject: (input: { projectID: string; directory: string }) => Promise<unknown>
+}) {
+  if (!input.project.id || input.project.id === "global") return
+
+  try {
+    await input.deleteProject({
+      projectID: input.project.id,
+      directory: input.project.worktree,
+    })
+  } catch (err) {
+    // The sidebar can outlive the project DB row after a prior delete,
+    // server reset, or stale persisted state. Treat 404 as already gone
+    // and still remove the local sidebar entry.
+    if (!isNotFoundError(err)) throw err
+  }
+}
+
 export function DialogConfirmDeleteProject(props: {
   project: LocalProject
   onDeleted?: (project: LocalProject) => void
@@ -20,13 +46,9 @@ export function DialogConfirmDeleteProject(props: {
 
   const deleteMutation = useMutation(() => ({
     mutationFn: async () => {
-      if (!props.project.id || props.project.id === "global") {
-        dialog.close()
-        return
-      }
-      await globalSDK.client.project.delete({
-        projectID: props.project.id,
-        directory: props.project.worktree,
+      await deleteProjectMetadata({
+        project: props.project,
+        deleteProject: (input) => globalSDK.client.project.delete(input),
       })
       dialog.close()
       props.onDeleted?.(props.project)

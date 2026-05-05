@@ -195,9 +195,9 @@ export namespace ProviderTransform {
     return msgs
   }
 
-  const OPENAI_RESPONSES_TOOL_CALL_ID_MAX = 64
+  export const OPENAI_RESPONSES_TOOL_CALL_ID_MAX = 64
 
-  function normalizeOpenAIResponsesToolCallId(id: string) {
+  export function normalizeOpenAIResponsesToolCallId(id: string) {
     const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_")
     if (sanitized.length > 0 && sanitized.length <= OPENAI_RESPONSES_TOOL_CALL_ID_MAX) return sanitized
 
@@ -1166,6 +1166,27 @@ export namespace ProviderTransform {
       }
 
       schema = sanitizeGemini(schema)
+    }
+
+    if (model.providerID === "gpd" && model.api.npm === "@ai-sdk/openai" && gpdUsesResponsesApi(model.api.id)) {
+      const sanitizeOpenAIResponses = (node: unknown): unknown => {
+        if (Array.isArray(node)) return node.map(sanitizeOpenAIResponses)
+        if (!node || typeof node !== "object") return node
+
+        const result: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(node)) {
+          // GPT 5.5 Responses currently emits a provider-side server_error
+          // for advanced ECMA regex constructs in tool JSON Schema patterns.
+          // Keep simple patterns, but drop lookaround / non-capturing group
+          // forms that include "(?" so one fragile MCP schema cannot break
+          // the entire first turn.
+          if (key === "pattern" && typeof value === "string" && value.includes("(?")) continue
+          result[key] = sanitizeOpenAIResponses(value)
+        }
+        return result
+      }
+
+      schema = sanitizeOpenAIResponses(schema) as JSONSchema.BaseSchema | JSONSchema7
     }
 
     return schema as JSONSchema7
