@@ -2,7 +2,6 @@ import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "sol
 import type { SessionStatus } from "@opencode-ai/sdk/v2/client"
 import { useI18n, type UiI18nKey } from "../context/i18n"
 import { Card } from "./card"
-import { Tooltip } from "./tooltip"
 import { Spinner } from "./spinner"
 import { classifyError } from "@opencode-ai/util/classify-error"
 
@@ -34,17 +33,7 @@ export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
     }
     const key = classifyError(current.message) as UiI18nKey
     if (key !== "error.classified.unknown") return i18n.t(key)
-    // Fall back to truncated raw message for unclassified errors
-    if (current.message.length > 80) return current.message.slice(0, 80) + "..."
     return current.message
-  })
-  const truncated = createMemo(() => {
-    const current = retry()
-    if (!current) return false
-    const key = classifyError(current.message) as UiI18nKey
-    // Classified messages are never truncated; only raw fallback messages may be
-    if (key !== "error.classified.unknown") return false
-    return current.message.length > 80
   })
   const info = createMemo(() => {
     const current = retry()
@@ -64,13 +53,7 @@ export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
           <div class="flex items-start gap-2">
             <Spinner class="size-4 mt-0.5" />
             <div class="min-w-0">
-              <Show when={truncated()} fallback={<div data-slot="session-turn-retry-message">{message()}</div>}>
-                <Tooltip value={retry()?.message ?? ""} placement="top">
-                  <div data-slot="session-turn-retry-message" class="cursor-help truncate">
-                    {message()}
-                  </div>
-                </Tooltip>
-              </Show>
+              <div data-slot="session-turn-retry-message">{message()}</div>
               <Show when={info()}>{(line) => <div data-slot="session-turn-retry-info">{line()}</div>}</Show>
             </div>
           </div>

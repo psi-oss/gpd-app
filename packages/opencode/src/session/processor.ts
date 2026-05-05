@@ -124,6 +124,7 @@ export namespace SessionProcessor {
           reasoningMap: {},
         }
         let aborted = false
+        let retrySafe = true
         const slog = log.clone().tag("sessionID", input.sessionID).tag("messageID", input.assistantMessage.id)
 
         const parse = (e: unknown) =>
@@ -215,6 +216,7 @@ export namespace SessionProcessor {
         })
 
         const handleEvent = Effect.fn("SessionProcessor.handleEvent")(function* (value: StreamEvent) {
+          if (commitsVisibleOutput(value)) retrySafe = false
           switch (value.type) {
             case "start":
               yield* status.set(ctx.sessionID, { type: "busy" })
@@ -567,6 +569,7 @@ export namespace SessionProcessor {
               Effect.retry(
                 SessionRetry.policy({
                   parse,
+                  shouldRetry: () => retrySafe,
                   set: (info) =>
                     status.set(ctx.sessionID, {
                       type: "retry",
@@ -599,6 +602,26 @@ export namespace SessionProcessor {
       return Service.of({ create })
     }),
   )
+
+  function commitsVisibleOutput(event: Event): boolean {
+    switch (event.type) {
+      case "text-delta":
+        return eventText(event).length > 0
+      case "reasoning-delta":
+        return eventText(event).length > 0
+      case "tool-call":
+      case "tool-result":
+      case "tool-error":
+        return true
+      default:
+        return false
+    }
+  }
+
+  function eventText(event: Event): string {
+    const value = event as any
+    return typeof value.text === "string" ? value.text : typeof value.delta === "string" ? value.delta : ""
+  }
 
   export const defaultLayer = Layer.suspend(() =>
     layer.pipe(

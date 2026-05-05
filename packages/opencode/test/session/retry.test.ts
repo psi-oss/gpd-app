@@ -121,6 +121,52 @@ describe("session.retry.delay", () => {
       },
     })
   })
+
+  test("policy stops after five retry attempts", async () => {
+    const error = apiError({ "retry-after-ms": "0" })
+    const attempts: number[] = []
+    let executions = 0
+
+    const effect = Effect.sync(() => {
+      executions++
+    }).pipe(
+      Effect.flatMap(() => Effect.fail(error)),
+      Effect.retry(
+        SessionRetry.policy({
+          parse: (err) => err as MessageV2.APIError,
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+        }),
+      ),
+    )
+
+    await expect(Effect.runPromise(effect)).rejects.toBeDefined()
+    expect(executions).toBe(6)
+    expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
+  })
+
+  test("policy does not retry after caller marks the attempt unsafe", async () => {
+    const error = apiError({ "retry-after-ms": "0" })
+    let executions = 0
+
+    const effect = Effect.sync(() => {
+      executions++
+    }).pipe(
+      Effect.flatMap(() => Effect.fail(error)),
+      Effect.retry(
+        SessionRetry.policy({
+          parse: (err) => err as MessageV2.APIError,
+          shouldRetry: () => false,
+          set: () => Effect.void,
+        }),
+      ),
+    )
+
+    await expect(Effect.runPromise(effect)).rejects.toBeDefined()
+    expect(executions).toBe(1)
+  })
 })
 
 describe("session.retry.retryable", () => {

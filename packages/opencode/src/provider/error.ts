@@ -112,7 +112,7 @@ export namespace ProviderError {
     | {
         type: "api_error"
         message: string
-        isRetryable: false
+        isRetryable: boolean
         responseBody: string
       }
 
@@ -123,7 +123,11 @@ export namespace ProviderError {
     const responseBody = JSON.stringify(body)
     if (body.type !== "error") return
 
-    switch (body?.error?.code) {
+    const error = json(body.error) ?? body
+    const code = typeof error.code === "string" ? error.code : typeof error.type === "string" ? error.type : ""
+    const message = typeof error.message === "string" ? error.message : typeof body.message === "string" ? body.message : ""
+
+    switch (code) {
       case "context_length_exceeded":
         return {
           type: "context_overflow",
@@ -147,8 +151,18 @@ export namespace ProviderError {
       case "invalid_prompt":
         return {
           type: "api_error",
-          message: typeof body?.error?.message === "string" ? body?.error?.message : "Invalid prompt.",
+          message: message || "Invalid prompt.",
           isRetryable: false,
+          responseBody,
+        }
+      case "server_error":
+      case "internal_server_error":
+      case "overloaded_error":
+      case "temporarily_unavailable":
+        return {
+          type: "api_error",
+          message: message || "The model provider is temporarily unavailable.",
+          isRetryable: true,
           responseBody,
         }
     }

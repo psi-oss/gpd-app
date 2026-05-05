@@ -69,6 +69,174 @@ export namespace Provider {
     return Number(match[1]) >= 5 && !modelID.startsWith("gpt-5-mini")
   }
 
+  function shouldLogGpdRequestShape(model: { providerID: string; id: string; api: { id: string } }) {
+    return (
+      process.env.OPENCODE_GPD_LOG_REQUEST_SHAPES === "1" &&
+      model.providerID === "gpd" &&
+      (model.id.startsWith("gpt-5.5") || model.api.id.startsWith("gpt-5.5"))
+    )
+  }
+
+  function countBy(input: Record<string, number>, key: unknown) {
+    const normalized = typeof key === "string" && key.length > 0 ? key : "<missing>"
+    input[normalized] = (input[normalized] ?? 0) + 1
+  }
+
+  function jsonBytes(input: unknown) {
+    try {
+      return new TextEncoder().encode(JSON.stringify(input)).byteLength
+    } catch {
+      return 0
+    }
+  }
+
+  function stringChars(input: unknown) {
+    return typeof input === "string" ? input.length : 0
+  }
+
+  function summarizeProviderRequestBody(rawBody: unknown) {
+    if (typeof rawBody !== "string") {
+      return {
+        parseable: false,
+        bodyType: typeof rawBody,
+      }
+    }
+
+    let body: any
+    try {
+      body = JSON.parse(rawBody)
+    } catch {
+      return {
+        parseable: false,
+        bodyBytes: new TextEncoder().encode(rawBody).byteLength,
+      }
+    }
+
+    const input = Array.isArray(body.input) ? body.input : Array.isArray(body.messages) ? body.messages : []
+    const roles: Record<string, number> = {}
+    const itemTypes: Record<string, number> = {}
+    const partTypes: Record<string, number> = {}
+    let textChars = 0
+    let imageParts = 0
+    let fileParts = 0
+    let toolCalls = 0
+    let toolResults = 0
+    let reasoningParts = 0
+    let encryptedReasoningParts = 0
+
+    function scanPart(part: any) {
+      if (!part || typeof part !== "object") {
+        textChars += stringChars(part)
+        return
+      }
+
+      countBy(partTypes, part.type)
+      switch (part.type) {
+        case "text":
+        case "input_text":
+        case "output_text":
+          textChars += stringChars(part.text)
+          break
+        case "image":
+        case "input_image":
+          imageParts++
+          break
+        case "file":
+        case "input_file":
+          fileParts++
+          break
+        case "tool-call":
+        case "function_call":
+          toolCalls++
+          textChars += stringChars(part.input)
+          textChars += stringChars(part.arguments)
+          break
+        case "tool-result":
+        case "function_call_output":
+          toolResults++
+          textChars += stringChars(part.output)
+          break
+        case "reasoning":
+          reasoningParts++
+          if (typeof part.encrypted_content === "string") encryptedReasoningParts++
+          textChars += stringChars(part.summary)
+          break
+      }
+    }
+
+    for (const item of input) {
+      if (!item || typeof item !== "object") {
+        textChars += stringChars(item)
+        continue
+      }
+
+      countBy(roles, item.role)
+      countBy(itemTypes, item.type)
+      if (typeof item.content === "string") {
+        textChars += item.content.length
+      } else if (Array.isArray(item.content)) {
+        for (const part of item.content) scanPart(part)
+      }
+      if (item.type === "function_call") toolCalls++
+      if (item.type === "function_call_output") toolResults++
+      if (item.type === "reasoning") {
+        reasoningParts++
+        if (typeof item.encrypted_content === "string") encryptedReasoningParts++
+      }
+    }
+
+    const tools = Array.isArray(body.tools) ? body.tools : []
+    const toolSizes: Array<{ name: string; bytes: number }> = tools
+      .map((tool: any) => ({
+        name: typeof tool?.name === "string" ? tool.name : typeof tool?.function?.name === "string" ? tool.function.name : "",
+        bytes: jsonBytes(tool),
+      }))
+      .sort((a: { name: string; bytes: number }, b: { name: string; bytes: number }) => b.bytes - a.bytes)
+
+    const summary = {
+      parseable: true,
+      bodyBytes: new TextEncoder().encode(rawBody).byteLength,
+      bodyKeys: Object.keys(body).sort(),
+      endpointShape: Array.isArray(body.input) ? "responses" : Array.isArray(body.messages) ? "chat" : "unknown",
+      model: body.model,
+      instructionsChars: stringChars(body.instructions),
+      inputCount: input.length,
+      inputRoles: roles,
+      inputItemTypes: itemTypes,
+      inputPartTypes: partTypes,
+      textChars,
+      imageParts,
+      fileParts,
+      toolCalls,
+      toolResults,
+      reasoningParts,
+      encryptedReasoningParts,
+      toolCount: tools.length,
+      toolBytes: jsonBytes(tools),
+      largestTools: toolSizes.slice(0, 5),
+      include: Array.isArray(body.include) ? body.include : undefined,
+      reasoning: body.reasoning
+        ? {
+            effort: body.reasoning.effort,
+            summary: body.reasoning.summary,
+          }
+        : undefined,
+      maxOutputTokens: body.max_output_tokens ?? body.maxOutputTokens,
+      temperature: body.temperature,
+      topP: body.top_p ?? body.topP,
+      store: body.store,
+      parallelToolCalls: body.parallel_tool_calls,
+      toolChoice: body.tool_choice,
+      metadataKeys: body.metadata && typeof body.metadata === "object" ? Object.keys(body.metadata).sort() : undefined,
+      previousResponseId: typeof body.previous_response_id === "string" ? "<present>" : undefined,
+    }
+
+    return {
+      ...summary,
+      shapeHash: Hash.fast(JSON.stringify(summary)),
+    }
+  }
+
   function wrapSSE(res: Response, ms: number, ctl: AbortController) {
     if (typeof ms !== "number" || ms <= 0) return res
     if (!res.body) return res
@@ -1494,12 +1662,19 @@ export namespace Provider {
             const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
             if (combined) opts.signal = combined
 
-            // Strip openai itemId metadata following what codex does
+            // Strip openai item id metadata only when the upstream server
+            // already holds the previous-turn state (store=true). With
+            // store=false the server has no record of prior items, so
+            // each function_call / reasoning item in `input` must carry
+            // its own `id` for OpenAI to thread multi-turn state — every
+            // continuation request 500s with `server_error` otherwise.
+            // Confirmed against the gpt-5.5 Responses endpoint: identical
+            // body returns 500 with store=false+stripped ids vs 200 with
+            // store=true.
             if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
               const body = JSON.parse(opts.body as string)
-              const isAzure = model.providerID.includes("azure")
-              const keepIds = isAzure && body.store === true
-              if (!keepIds && Array.isArray(body.input)) {
+              const stripIds = body.store === true
+              if (stripIds && Array.isArray(body.input)) {
                 for (const item of body.input) {
                   if ("id" in item) {
                     delete item.id
@@ -1507,6 +1682,20 @@ export namespace Provider {
                 }
                 opts.body = JSON.stringify(body)
               }
+            }
+
+            if (shouldLogGpdRequestShape(model) && opts.body && opts.method === "POST") {
+              let path = String(input)
+              try {
+                path = new URL(String(input)).pathname
+              } catch {}
+              log.warn("gpd request shape", {
+                providerID: model.providerID,
+                modelID: model.id,
+                apiModelID: model.api.id,
+                path,
+                request: summarizeProviderRequestBody(opts.body),
+              })
             }
 
             const res = await fetchFn(input, {

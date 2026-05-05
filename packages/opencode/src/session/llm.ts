@@ -433,16 +433,12 @@ export namespace LLM {
               ...input.model.headers,
               ...headers,
             },
-            // Default to 3 retries on transient HTTP/network failures.
-            // The Vercel AI SDK retries 5xx, ECONNRESET, mid-stream
-            // disconnects, and InvalidHTTPResponse class errors with
-            // exponential backoff. We previously defaulted to 0 — a
-            // single Railway/upstream blip mid-stream surfaced as a
-            // user-visible "Couldn't reach the server" toast even when
-            // the very next attempt would have succeeded. 3 covers the
-            // common transient blip without making genuinely-broken
-            // upstreams take painful amounts of time to fail.
-            maxRetries: input.retries ?? 3,
+            // Keep SDK-level streaming retries off. The SDK can emit early
+            // parts from a failed attempt before retrying internally, which
+            // pollutes the transcript with duplicate/empty assistant parts.
+            // Retries are handled below, where we can buffer pre-output events
+            // and stop retrying after user-visible output is committed.
+            maxRetries: 0,
             messages,
             model: wrapLanguageModel({
               model: language,
@@ -480,11 +476,31 @@ export namespace LLM {
                   (ctrl) => Effect.sync(() => ctrl.abort()),
                 )
 
-                const result = yield* run({ ...input, abort: ctrl.signal })
+                const attempt = (remaining: number): Stream.Stream<Event, unknown> =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const result = yield* run({ ...input, abort: ctrl.signal })
+                      return Stream.fromAsyncIterable(retryEarlyStreamErrors(result.fullStream), (e) =>
+                        e instanceof Error ? e : new Error(String(e)),
+                      )
+                    }),
+                  ).pipe(
+                    Stream.catch((err) => {
+                      if (err instanceof RetryableEarlyStreamError && remaining > 0 && !ctrl.signal.aborted) {
+                        log.warn("retrying early stream error", {
+                          providerID: input.model.providerID,
+                          modelID: input.model.id,
+                          sessionID: input.sessionID,
+                          code: err.code,
+                          remaining: remaining - 1,
+                        })
+                        return attempt(remaining - 1)
+                      }
+                      return Stream.fail(err)
+                    }),
+                  )
 
-                return Stream.fromAsyncIterable(result.fullStream, (e) =>
-                  e instanceof Error ? e : new Error(String(e)),
-                )
+                return attempt(input.retries ?? 3)
               }),
             ),
           )
@@ -501,6 +517,120 @@ export namespace LLM {
       Layer.provide(Plugin.defaultLayer),
     ),
   )
+
+  class RetryableEarlyStreamError extends Error {
+    constructor(
+      readonly code: string,
+      readonly causeEvent: unknown,
+    ) {
+      super(`Retryable early stream error: ${code}`)
+      this.name = "RetryableEarlyStreamError"
+    }
+  }
+
+  async function* retryEarlyStreamErrors(input: AsyncIterable<Event>) {
+    let committed = false
+    const buffered: Event[] = []
+
+    try {
+      for await (const event of input) {
+        const retryable = retryableStreamErrorCode(event)
+        if (retryable && !committed) {
+          throw new RetryableEarlyStreamError(retryable, event)
+        }
+
+        if (!committed && startsNewBufferedAttempt(event, buffered)) {
+          buffered.length = 0
+        }
+
+        if (!committed && commitsVisibleOutput(event)) {
+          committed = true
+          for (const pending of buffered) yield pending
+          buffered.length = 0
+          yield event
+          continue
+        }
+
+        if (!committed) {
+          buffered.push(event)
+          continue
+        }
+
+        yield event
+      }
+
+      if (!committed) {
+        for (const pending of buffered) yield pending
+      }
+    } catch (err) {
+      if (err instanceof RetryableEarlyStreamError) {
+        throw err
+      }
+      const retryable = retryableStreamErrorCode(err)
+      if (retryable && !committed) {
+        throw new RetryableEarlyStreamError(retryable, err)
+      }
+      if (!committed) {
+        for (const pending of buffered) yield pending
+      }
+      throw err
+    }
+  }
+
+  function retryableStreamErrorCode(input: unknown): string | undefined {
+    const candidates = [input, (input as any)?.error, (input as any)?.cause]
+    for (const candidate of candidates) {
+      const code = retryableStreamErrorCodeFromPayload(candidate)
+      if (code) return code
+    }
+    return undefined
+  }
+
+  function retryableStreamErrorCodeFromPayload(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== "object") return undefined
+    const event = payload as any
+    if (event.type !== "error") return undefined
+
+    const error = (event as any).error
+    const inner = error?.error ?? error
+    const code = inner?.code ?? inner?.type ?? error?.code ?? error?.type
+    if (typeof code !== "string") return undefined
+
+    switch (code) {
+      case "server_error":
+      case "internal_server_error":
+      case "overloaded_error":
+      case "temporarily_unavailable":
+        return code
+      default:
+        return undefined
+    }
+  }
+
+  function commitsVisibleOutput(event: Event): boolean {
+    switch (event.type) {
+      case "text-delta":
+        return eventText(event).length > 0
+      case "reasoning-delta":
+        return eventText(event).length > 0
+      case "tool-call":
+      case "tool-result":
+      case "tool-error":
+        return true
+      default:
+        return false
+    }
+  }
+
+  function eventText(event: Event): string {
+    const value = event as any
+    return typeof value.text === "string" ? value.text : typeof value.delta === "string" ? value.delta : ""
+  }
+
+  function startsNewBufferedAttempt(event: Event, buffered: Event[]): boolean {
+    if (event.type === "start") return buffered.length > 0
+    return false
+  }
 
   function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
     const disabled = Permission.disabled(
