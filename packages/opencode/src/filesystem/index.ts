@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { dirname, join, relative, resolve as pathResolve } from "path"
-import { realpathSync } from "fs"
+import { existsSync, realpathSync } from "fs"
 import * as NFS from "fs/promises"
 import { lookup } from "mime-types"
 import { Effect, FileSystem, Layer, Schema, Context } from "effect"
@@ -149,12 +149,34 @@ export namespace AppFileSystem {
         })
       })
 
+      // Use Node's `fs.existsSync` for the ancestor-walk existence checks
+      // instead of Effect's `fs.exists` (which goes through
+      // `@effect/platform-node` → `fs.access(F_OK)`). On Windows network
+      // shares — including Parallels' `\\psf\Home\…` mount that maps the
+      // host Mac's home dir into a Windows VM — `fs.access` can return
+      // EACCES even for paths that exist and are readable, because the
+      // share's ACL maps don't expose the bit `access` checks. `existsSync`
+      // calls `stat` underneath, which traverses the share normally.
+      // Symptom before this fix: `Project.fromDirectory` saw the freshly
+      // `git init`'d `.git` on a UNC project and reported `vcs:"none"` /
+      // `id:"global"`, so the desktop UI never flipped out of the
+      // "Turn on change tracking" state. Confirmed via raw response body
+      // capture on a Windows-on-mac VM with the project at
+      // `\\psf\Home\Documents\…\.git` present per `dir`.
+      const exists = (path: string): boolean => {
+        try {
+          return existsSync(path)
+        } catch {
+          return false
+        }
+      }
+
       const findUp = Effect.fn("FileSystem.findUp")(function* (target: string, start: string, stop?: string) {
         const result: string[] = []
         let current = start
         while (true) {
           const search = join(current, target)
-          if (yield* fs.exists(search)) result.push(search)
+          if (exists(search)) result.push(search)
           if (stop === current) break
           const parent = dirname(current)
           if (parent === current) break
@@ -169,7 +191,7 @@ export namespace AppFileSystem {
         while (true) {
           for (const target of options.targets) {
             const search = join(current, target)
-            if (yield* fs.exists(search)) result.push(search)
+            if (exists(search)) result.push(search)
           }
           if (options.stop === current) break
           const parent = dirname(current)
