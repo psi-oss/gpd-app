@@ -87,6 +87,16 @@ function formatInitError(error: InitError, t: Translator): string {
         }
         return t("error.chain.tosVersionOutdated")
       }
+      if (data.statusCode === 403 && /\bconsent_required\b/.test(responseBody)) {
+        // First-time user with no acceptance row. Keep the key; only
+        // wipe the version flag so SetupGate re-shows the TOS dialog.
+        try {
+          localStorage.removeItem("gpd.tos.acceptedVersion")
+        } catch {
+          /* see above */
+        }
+        return t("error.chain.consentRequired")
+      }
       if (data.statusCode === 403 && /\bconsent_revoked\b/.test(responseBody)) {
         try {
           localStorage.removeItem("gpd.tos.acceptedVersion")

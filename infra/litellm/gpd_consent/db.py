@@ -27,10 +27,25 @@ logger = logging.getLogger("gpd_consent.db")
 class ConsentState:
     """Newest acceptance row's state, or "no acceptance" sentinel.
 
+    Three mutually-exclusive logical states are encoded by the pair
+    `(has_accept_row, revoked)`:
+
+      * `has_accept_row=False, revoked=False` — user has never accepted.
+        Gate must block but with a "first-time required" code, not
+        "withdrawn".
+      * `has_accept_row=True,  revoked=False` — user is currently
+        consenting. Gate passes through.
+      * `has_accept_row=True,  revoked=True`  — user previously accepted
+        and then revoked. Gate blocks with the "withdrawn" code.
+
     Attributes:
-        revoked: True if the newest row has `revoked_at` set, OR if the
-            user has no acceptance row at all (users that bypassed the
-            client TOS gate get fail-closed).
+        revoked: True iff the newest row has `revoked_at` set. False
+            when the user has never accepted (use `has_accept_row` to
+            distinguish that case) or when consent is currently active.
+        has_accept_row: True iff at least one row exists in
+            `gpd_tos_acceptance` for this user. Lets the gate emit
+            `consent_required` for never-accepted users vs.
+            `consent_revoked` for users who actually withdrew.
         accepted_version: The `tos_version` string from the newest row,
             or None if no row exists. Free-form string per migration
             0001 — handler validates regex `^[A-Za-z0-9._-]{1,64}$` at
@@ -39,6 +54,7 @@ class ConsentState:
     """
 
     revoked: bool
+    has_accept_row: bool
     accepted_version: Optional[str]
 
 
@@ -72,20 +88,26 @@ async def compute_consent_state(user_id: str) -> ConsentState:
             user_id,
         )
     if row is None:
-        # No acceptance row at all — user has never accepted. Block:
-        # any LLM call from a user without an acceptance record is a
-        # bug (either they bypassed the client TOS gate or the accept
-        # insert failed). Prefer visible error over silent pass-through.
-        return ConsentState(revoked=True, accepted_version=None)
+        # No acceptance row at all — user has never accepted. Block at
+        # the gate, but report as `consent_required` (first-time accept
+        # needed) rather than `consent_revoked` (which implies the user
+        # previously consented and then withdrew). The desktop client
+        # branches on the code: required → re-show TOS modal with the
+        # existing key intact; revoked → wipe both key + acceptedVersion
+        # and bounce to the welcome screen.
+        return ConsentState(revoked=False, has_accept_row=False, accepted_version=None)
     return ConsentState(
         revoked=bool(row["is_revoked"]),
+        has_accept_row=True,
         accepted_version=row["tos_version"],
     )
 
 
 # Backward-compat shim. Older callers may still call `is_revoked()` —
 # keep it routing through the new ConsentState computation so behaviour
-# stays consistent. Remove once all call sites are migrated.
+# stays consistent. Returns True for both never-accepted and
+# revoked-after-accept (i.e. "must-block" states). Remove once all call
+# sites are migrated.
 async def is_revoked(user_id: str) -> bool:
     state = await compute_consent_state(user_id)
-    return state.revoked
+    return state.revoked or not state.has_accept_row

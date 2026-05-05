@@ -80,11 +80,15 @@ async def test_admin_key_passes_through(migrated_db):
 async def test_never_accepted_is_blocked(migrated_db):
     # User with zero rows in gpd_tos_acceptance is blocked. Reaching the
     # gate without an acceptance row means the client TOS flow was bypassed
-    # (or the accept insert failed). Fail loud rather than silently allow.
+    # (or the accept insert failed). The error code is `consent_required`,
+    # not `consent_revoked`: the user has nothing to "withdraw" yet, so the
+    # desktop client routes them to a fresh TOS-accept flow that preserves
+    # their existing key (vs. the revoke flow which wipes the key).
     with pytest.raises(HTTPException) as exc:
         await _run_gate("ghost-user-no-rows")
     assert exc.value.status_code == 403
-    assert "consent_revoked" in exc.value.detail
+    assert "consent_required" in exc.value.detail
+    assert "consent_revoked" not in exc.value.detail
 
 
 async def test_accepted_not_revoked_passes(migrated_db):

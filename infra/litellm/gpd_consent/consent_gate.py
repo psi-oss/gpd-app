@@ -24,10 +24,14 @@ Two enforcement axes:
      older versions get `tos_version_outdated` (403) and the desktop
      app's TosUpgradeGate re-prompts.
 
-Both 403 detail strings are stable, machine-parseable codes (prefix
-before colon: `consent_revoked`, `tos_version_outdated`,
-`consent_check_unavailable`) so the desktop app can switch on the code
-to pick a UX flow without parsing free-form English.
+All 403/503 detail strings are stable, machine-parseable codes (prefix
+before colon: `consent_required`, `consent_revoked`,
+`tos_version_outdated`, `consent_check_unavailable`) so the desktop app
+can switch on the code to pick a UX flow without parsing free-form
+English. `consent_required` and `consent_revoked` are kept distinct
+deliberately: the first means a brand-new user reached the gate without
+a TOS row (re-show TOS, keep their key); the second means an existing
+user revoked (wipe key + bounce to welcome).
 """
 from __future__ import annotations
 
@@ -122,6 +126,17 @@ class ConsentGateLogger(CustomLogger):
                     detail="consent_check_unavailable: audit system is unreachable.",
                 )
             await _cache_set(user_id, state)
+
+        if not state.has_accept_row:
+            # First-time user reached the gate without an acceptance row.
+            # Either the client TOS modal was bypassed or the accept
+            # POST failed. Block, but tell the client which UX to show:
+            # `consent_required` → keep the key, re-show TOS modal.
+            raise HTTPException(
+                status_code=403,
+                detail="consent_required: please accept the Terms of "
+                "Service in the desktop app to begin.",
+            )
 
         if state.revoked:
             raise HTTPException(

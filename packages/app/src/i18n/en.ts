@@ -566,6 +566,8 @@ export const dict = {
   "error.chain.responseBody": "Technical details:\n{{body}}",
   "error.chain.tosVersionOutdated":
     "GPD has updated its Terms of Service. Please re-accept the latest terms in the desktop app to resume.",
+  "error.chain.consentRequired":
+    "GPD needs you to accept the Terms of Service before this feature works. Re-open the welcome flow in the desktop app to accept.",
   "error.chain.consentRevoked":
     "Your GPD consent has been withdrawn. Re-accept the Terms of Service in the desktop app to resume; previously logged data is unaffected.",
   "error.chain.consentCheckUnavailable":
