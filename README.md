@@ -4,11 +4,11 @@ A physics research workspace by [PSI](https://psi.inc).
 
 ---
 
+https://github.com/user-attachments/assets/c112c72e-0018-4dce-9048-50cd1d296feb
+
+https://github.com/user-attachments/assets/24e8d175-8f6d-41b5-92e0-56f6a3e8d1ee
+
 ## Install
-
-https://github.com/user-attachments/assets/7d663f9d-e18a-45c4-9589-403171700988
-
-https://github.com/user-attachments/assets/eafac84d-23d9-4175-b275-0370e441d990
 
 ```bash
 # macOS / Linux
