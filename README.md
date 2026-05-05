@@ -6,6 +6,10 @@ A physics research workspace by [PSI](https://psi.inc).
 
 ## Install
 
+https://github.com/user-attachments/assets/7d663f9d-e18a-45c4-9589-403171700988
+
+https://github.com/user-attachments/assets/eafac84d-23d9-4175-b275-0370e441d990
+
 ```bash
 # macOS / Linux
 curl -fsSL https://download.gpd.psi.inc/install | bash
