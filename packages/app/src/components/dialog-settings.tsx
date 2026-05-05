@@ -7,6 +7,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { SettingsDependencies } from "./settings-dependencies"
+import { SettingsFeedback } from "./settings-feedback"
 import { SettingsGeneral } from "./settings-general"
 import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsLicenses } from "./settings-licenses"
@@ -72,6 +73,16 @@ export const DialogSettings: Component = () => {
                 </div>
 
                 <div class="flex flex-col gap-1.5">
+                  <Tabs.SectionTitle>{language.t("settings.section.community")}</Tabs.SectionTitle>
+                  <div class="flex flex-col gap-1.5 w-full">
+                    <Tabs.Trigger value="feedback">
+                      <Icon name="speech-bubble" />
+                      {language.t("settings.feedback.title")}
+                    </Tabs.Trigger>
+                  </div>
+                </div>
+
+                <div class="flex flex-col gap-1.5">
                   <Tabs.SectionTitle>{language.t("settings.section.about")}</Tabs.SectionTitle>
                   <div class="flex flex-col gap-1.5 w-full">
                     <Tabs.Trigger value="licenses">
@@ -102,6 +113,9 @@ export const DialogSettings: Component = () => {
         </Tabs.Content>
         <Tabs.Content value="dependencies" class="no-scrollbar">
           <SettingsDependencies />
+        </Tabs.Content>
+        <Tabs.Content value="feedback" class="no-scrollbar">
+          <SettingsFeedback />
         </Tabs.Content>
         <Tabs.Content value="licenses" class="no-scrollbar">
           <SettingsLicenses />

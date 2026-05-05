@@ -65,24 +65,31 @@ RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
     packaging==25.0
 
 # Our hook modules.
-#   gpd_log     → POST /gpd/log (session-event ingest to GCS). See
-#                 infra/litellm/gpd_log/README.md for architecture.
-#   gpd_tos     → POST /gpd/tos-accept + /gpd/tos-revoke (TOS audit
-#                 writer, separate Postgres via GPD_AUDIT_DATABASE_URL).
-#                 See docs/LOGGING.md + infra/litellm/gpd_tos/migrations/.
-#   gpd_consent → CustomLogger on litellm.callbacks that 403s LLM calls
-#                 from users with non-null revoked_at. Reads
-#                 gpd_tos_acceptance via gpd_tos.db's asyncpg pool, so it
-#                 MUST register after gpd_tos (order of the ENV list
-#                 controls hook invocation; LiteLLM iterates left-to-right).
+#   gpd_log      → POST /gpd/log (session-event ingest to GCS). See
+#                  infra/litellm/gpd_log/README.md for architecture.
+#   gpd_tos      → POST /gpd/tos-accept + /gpd/tos-revoke (TOS audit
+#                  writer, separate Postgres via GPD_AUDIT_DATABASE_URL).
+#                  See docs/LOGGING.md + infra/litellm/gpd_tos/migrations/.
+#   gpd_feedback → POST /gpd/feedback (in-app feedback writer). Reuses
+#                  gpd_tos's audit-DB pool so it MUST register after
+#                  gpd_tos.
+#   gpd_consent  → CustomLogger on litellm.callbacks that 403s LLM calls
+#                  from users with non-null revoked_at. Reads
+#                  gpd_tos_acceptance via gpd_tos.db's asyncpg pool, so it
+#                  MUST register after gpd_tos (order of the ENV list
+#                  controls hook invocation; LiteLLM iterates left-to-right).
 COPY gpd_log /app/gpd_log
 COPY gpd_tos /app/gpd_tos
+COPY gpd_feedback /app/gpd_feedback
 COPY gpd_consent /app/gpd_consent
 
 # Activate hooks in order. LiteLLM iterates this comma-separated list
 # during worker startup (proxy_server.py:777-803, PR #22931) and calls
 # each entry as `module:function`. gpd_consent registers LAST so the
 # audit-DB pool opened by gpd_tos is already alive when consent_gate.db
-# issues its first query.
-ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_consent.hook:register
+# issues its first query. gpd_feedback registers between gpd_tos and
+# gpd_consent: it shares gpd_tos's pool but doesn't interact with
+# consent_gate state, and slotting it next to gpd_tos keeps the
+# schema_migrations boot log lines adjacent.
+ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register
 ENV PYTHONPATH=/app

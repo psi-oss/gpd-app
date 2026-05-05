@@ -857,8 +857,27 @@ export const dict = {
   "settings.section.desktop": "App",
   "settings.section.server": "AI Services",
   "settings.section.runtime": "System",
+  "settings.section.community": "Community",
   "settings.section.about": "About",
   "settings.licenses.title": "Licenses",
+  "settings.feedback.title": "Feedback",
+  "settings.feedback.description":
+    "Send bugs, feature requests, or general feedback to the GPD team. Your message is delivered directly to PSI; we read every one.",
+  "settings.feedback.categoryLabel": "Type",
+  "settings.feedback.category.feedback": "General feedback",
+  "settings.feedback.category.bug": "Bug report",
+  "settings.feedback.category.feature": "Feature request",
+  "settings.feedback.messageLabel": "Message",
+  "settings.feedback.messagePlaceholder":
+    "Describe what you'd like to share. Steps to reproduce help a lot for bug reports.",
+  "settings.feedback.charCount": "{{remaining}} characters remaining",
+  "settings.feedback.tooLong": "Over the {{over}}-character limit",
+  "settings.feedback.submit": "Send",
+  "settings.feedback.submitting": "Sending…",
+  "settings.feedback.toast.sent": "Feedback sent. Thanks!",
+  "settings.feedback.toast.failed": "Couldn't send feedback",
+  "settings.feedback.toast.noKey":
+    "GPD key missing — re-enter it from the welcome screen and try again.",
   "settings.licenses.app_title": "GPD Desktop license",
   "settings.licenses.app_description":
     "GPD Desktop is released under the MIT license, forked from the MIT-licensed OpenCode project.",

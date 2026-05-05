@@ -12,6 +12,11 @@ gate:
   virtual-key auth.
 - **`POST /gpd/tos-revoke`** — marks every acceptance row for the user
   with `revoked_at = now()`. Does NOT delete — Art. 17(3)(e) retention.
+- **`POST /gpd/feedback`** — in-app feedback / bug / feature submission.
+  Same virtual-key auth. Writes one append-only row to `gpd_feedback` in
+  the same audit Postgres. Body is `{"category":"bug|feature|feedback",
+  "message":"...","app_version":"..."}` — server adds `user_id`,
+  `token_hash_suffix`, `client_ip`, `user_agent`, `created_at`.
 - **Consent gate (no route)** — `gpd_consent` registers a
   `CustomLogger` on `litellm.callbacks` that 403s every LLM API call
   (completions, embeddings, moderation, speech, transcription, pass-through
