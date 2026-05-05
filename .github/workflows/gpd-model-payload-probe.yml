@@ -1,0 +1,100 @@
+name: GPD model full-payload probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Send the captured payloads to the production LiteLLM proxy"
+        required: true
+        type: boolean
+        default: false
+      models:
+        description: "Comma-separated model ids"
+        required: true
+        default: "gpt-5.5,gpt-5.5-pro"
+      efforts:
+        description: "Comma-separated reasoning efforts"
+        required: true
+        default: "low,medium,high,xhigh"
+      streams:
+        description: "Comma-separated stream modes: true,false"
+        required: true
+        default: "true,false"
+      tool_counts:
+        description: "Comma-separated tool counts; use full for all tools"
+        required: true
+        default: "0,1,10,20,40,full"
+      max_output_tokens:
+        description: "max_output_tokens to put on each request"
+        required: true
+        default: "32000"
+      timeout_ms:
+        description: "Per-request live timeout in milliseconds"
+        required: true
+        default: "180000"
+      pad_tools:
+        description: "Pad each request to at least this many tools with synthetic no-op tool schemas"
+        required: true
+        default: "0"
+      synthetic_tool_description_bytes:
+        description: "Approximate description size for each synthetic padding tool"
+        required: true
+        default: "2400"
+
+concurrency:
+  group: gpd-model-payload-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GPD_API_KEY: ${{ secrets.GPD_SMOKE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Run dry/live payload matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/gpd-full-payload-probe
+          ARGS=(
+            --models="${{ inputs.models }}"
+            --efforts="${{ inputs.efforts }}"
+            --streams="${{ inputs.streams }}"
+            --tool-counts="${{ inputs.tool_counts }}"
+            --max-output-tokens="${{ inputs.max_output_tokens }}"
+            --timeout-ms="${{ inputs.timeout_ms }}"
+            --pad-tools="${{ inputs.pad_tools }}"
+            --synthetic-tool-description-bytes="${{ inputs.synthetic_tool_description_bytes }}"
+            --directory="$PWD"
+            --output="$PWD/.artifacts/gpd-full-payload-probe/results.json"
+          )
+          if [ "${{ inputs.live }}" = "true" ]; then
+            if [ -z "${GPD_API_KEY:-}" ]; then
+              echo "::error::live=true requires the GPD_SMOKE_API_KEY secret"
+              exit 1
+            fi
+            ARGS+=(--live)
+          fi
+          bun --cwd packages/opencode run probe:gpd-payload -- "${ARGS[@]}"
+
+      - name: Summarize results
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq '.summary' .artifacts/gpd-full-payload-probe/results.json
+          if jq -e '.live == true and .summary.fail > 0' .artifacts/gpd-full-payload-probe/results.json >/dev/null; then
+            echo "::error::one or more live payload probe cases failed"
+            jq -r '.results[] | select(.status == "fail") | "\(.case.model) \(.case.effort) stream=\(.case.stream) tools=\(.case.toolCount) error=\(.response.errorCode // .response.message // "unknown") request=\(.response.requestId // "")"' .artifacts/gpd-full-payload-probe/results.json
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpd-full-payload-probe
+          path: .artifacts/gpd-full-payload-probe/results.json

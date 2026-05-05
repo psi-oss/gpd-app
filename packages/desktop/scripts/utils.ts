@@ -46,13 +46,18 @@ export function getCurrentSidecar(target = RUST_TARGET) {
 
 export async function copyBinaryToSidecarFolder(source: string, target = RUST_TARGET) {
   await $`mkdir -p src-tauri/sidecars`
-  const dest = windowsify(`src-tauri/sidecars/opencode-cli-${target}`)
+  const dest = getSidecarTargetPath(target)
   await $`cp ${source} ${dest}`
   if (process.platform === "win32" && process.env.GITHUB_ACTIONS === "true") {
     await $`pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../script/sign-windows.ps1 ${dest}`
   }
 
   console.log(`Copied ${source} to ${dest}`)
+}
+
+export function getSidecarTargetPath(target = RUST_TARGET) {
+  if (!target) throw new Error("RUST_TARGET not set")
+  return windowsify(`src-tauri/sidecars/opencode-cli-${target}`)
 }
 
 export function windowsify(path: string) {
