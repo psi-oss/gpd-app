@@ -433,23 +433,22 @@ fn remove_gpd_key() -> Result<(), String> {
 }
 
 fn opencode_data_dir() -> Result<std::path::PathBuf, String> {
+    // Must mirror the sidecar's `Global.Path.data` resolution
+    // (`packages/opencode/src/global/index.ts`), which uses the
+    // `xdg-basedir` npm package. That package does NOT special-case
+    // Windows: when XDG_DATA_HOME is unset it falls through to
+    // `homedir()/.local/share`, which on Windows resolves to
+    // `C:\Users\<user>\.local\share\opencode`. Reading from
+    // `%APPDATA%\opencode` (the previous behaviour here) targeted a
+    // path the sidecar never writes to, so `read_gpd_key` would always
+    // return None on Windows and the SetupGate effect at
+    // `packages/app/src/app.tsx:510-518` would boot the user out
+    // immediately after a successful welcome flow.
     if let Ok(p) = std::env::var("XDG_DATA_HOME") {
         return Ok(std::path::PathBuf::from(p).join("opencode"));
     }
-    #[cfg(windows)]
-    {
-        let app = std::env::var("APPDATA")
-            .or_else(|_| std::env::var("LOCALAPPDATA"))
-            .map_err(|e| format!("APPDATA/LOCALAPPDATA unset: {e}"))?;
-        Ok(std::path::PathBuf::from(app).join("opencode"))
-    }
-    #[cfg(not(windows))]
-    {
-        let home = std::env::var("HOME").map_err(|e| format!("HOME unset: {e}"))?;
-        Ok(std::path::PathBuf::from(home)
-            .join(".local/share")
-            .join("opencode"))
-    }
+    let home = dirs::home_dir().ok_or("cannot determine home directory")?;
+    Ok(home.join(".local").join("share").join("opencode"))
 }
 
 fn read_bundled_resource(app: &AppHandle, name: &str) -> Result<String, String> {
