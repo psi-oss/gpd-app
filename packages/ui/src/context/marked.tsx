@@ -376,6 +376,42 @@ registerCustomTheme("OpenCode", () => {
   } as unknown as ThemeRegistrationResolved)
 })
 
+// Common math/physics shorthand macros. Reasoning-model output frequently uses
+// single-letter blackboard/bold sets (\R, \C, \Z, \N, \Q) and bold operators
+// (\V, \E, \P, \T) without redefining them inline. KaTeX has no defaults for
+// these so they render red. Map them to the standard LaTeX physics/AMS
+// equivalents so the math renders as intended.
+const KATEX_MACROS: Record<string, string> = {
+  "\\R": "\\mathbb{R}",
+  "\\C": "\\mathbb{C}",
+  "\\N": "\\mathbb{N}",
+  "\\Z": "\\mathbb{Z}",
+  "\\Q": "\\mathbb{Q}",
+  "\\F": "\\mathbb{F}",
+  "\\K": "\\mathbb{K}",
+  "\\H": "\\mathbb{H}",
+  "\\V": "\\mathbf{V}",
+  "\\E": "\\mathbf{E}",
+  "\\P": "\\mathbf{P}",
+  "\\T": "\\mathbf{T}",
+  "\\Var": "\\operatorname{Var}",
+  "\\Cov": "\\operatorname{Cov}",
+  "\\Tr": "\\operatorname{Tr}",
+  "\\tr": "\\operatorname{tr}",
+  "\\diag": "\\operatorname{diag}",
+  "\\rank": "\\operatorname{rank}",
+  "\\sgn": "\\operatorname{sgn}",
+  "\\argmax": "\\operatorname{argmax}",
+  "\\argmin": "\\operatorname{argmin}",
+  "\\d": "\\mathrm{d}",
+  "\\eps": "\\varepsilon",
+  "\\veps": "\\varepsilon",
+  "\\bm": "\\boldsymbol{#1}",
+  "\\abs": "\\left|#1\\right|",
+  "\\norm": "\\left\\|#1\\right\\|",
+  "\\set": "\\{#1\\}",
+}
+
 function renderMathInText(text: string): string {
   let result = text
 
@@ -386,6 +422,7 @@ function renderMathInText(text: string): string {
       return katex.renderToString(math, {
         displayMode: true,
         throwOnError: false,
+        macros: KATEX_MACROS,
       })
     } catch {
       return `$$${math}$$`
@@ -399,6 +436,7 @@ function renderMathInText(text: string): string {
       return katex.renderToString(math, {
         displayMode: false,
         throwOnError: false,
+        macros: KATEX_MACROS,
       })
     } catch {
       return `$${math}$`
@@ -481,6 +519,7 @@ export const { use: useMarked, provider: MarkedProvider } = createSimpleContext(
       markedKatex({
         throwOnError: false,
         nonStandard: true,
+        macros: KATEX_MACROS,
       }),
       markedShiki({
         async highlight(code, lang) {
