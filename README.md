@@ -1,6 +1,6 @@
 # GPD — Get Physics Done
 
-A physics research workspace by [PSI](https://psi.inc). Fork of [OpenCode](https://github.com/anomalyco/opencode).
+A physics research workspace by [PSI](https://psi.inc).
 
 ---
 
@@ -30,9 +30,9 @@ irm https://download.gpd.psi.inc/uninstall.ps1 | iex
 
 Flags, verify-before-piping, manual download: [`install-gpd/README.md`](install-gpd/README.md).
 
-## For GPD Grant Recipients
+## For Users
 
-Open the app, paste the access key you received, start a research project. That's it.
+Open the app, paste the access key you received, accept TOS/Privacy Policy, and open a research project in a folder of your choice to begin with GPD.
 
 ## For developers
 

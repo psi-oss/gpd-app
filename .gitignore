@@ -12,6 +12,8 @@ tmp
 dist
 ts-dist
 .turbo
+.artifacts/
+**/.artifacts/
 **/.serena
 .serena/
 /result
