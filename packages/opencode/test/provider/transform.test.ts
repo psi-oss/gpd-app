@@ -225,10 +225,10 @@ describe("ProviderTransform.options - google thinkingConfig gating", () => {
 describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
   const sessionID = "test-session-123"
 
-  const createGpt5Model = (apiId: string) =>
+  const createGpt5Model = (apiId: string, providerID = "openai") =>
     ({
-      id: `openai/${apiId}`,
-      providerID: "openai",
+      id: `${providerID}/${apiId}`,
+      providerID,
       api: {
         id: apiId,
         url: "https://api.openai.com",
@@ -291,6 +291,17 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     const model = createGpt5Model("gpt-5.2-codex")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
+  })
+
+  test("gpd gpt-5.5 carries encrypted reasoning for stateless Responses calls", () => {
+    const model = createGpt5Model("gpt-5.5", "gpd")
+    const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
+    expect(result.store).toBe(false)
+    expect(result.promptCacheKey).toBe(sessionID)
+    expect(result.include).toEqual(["reasoning.encrypted_content"])
+    expect(result.reasoningEffort).toBe("medium")
+    expect(result.reasoningSummary).toBe("auto")
+    expect(result.textVerbosity).toBe("low")
   })
 })
 
@@ -1270,6 +1281,75 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
     expect(result).toHaveLength(2)
     expect(result[0].content).toBe("")
     expect(result[1].content).toHaveLength(1)
+  })
+})
+
+describe("ProviderTransform.message - GPD OpenAI Responses tool call ids", () => {
+  const gpdResponsesModel = {
+    id: ModelID.make("gpt-5.5"),
+    providerID: ProviderID.make("gpd"),
+    api: {
+      id: "gpt-5.5",
+      url: "https://litellm.example.test/v1",
+      npm: "@ai-sdk/openai",
+    },
+    name: "GPT 5.5",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: true },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    status: "active",
+    options: {},
+    headers: {},
+  } as any
+
+  test("normalizes cross-provider overlong toolCallIds consistently", () => {
+    const longGeminiCallID = `call_f583f01eaee245ffa1488bf407da__thought__${"abc/+".repeat(340)}`
+    expect(longGeminiCallID.length).toBeGreaterThan(64)
+
+    const result = ProviderTransform.message(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: longGeminiCallID,
+              toolName: "skill",
+              input: { name: "super-ultra-caveman" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: longGeminiCallID,
+              toolName: "skill",
+              output: { type: "text", value: "loaded" },
+            },
+          ],
+        },
+      ] as any[],
+      gpdResponsesModel,
+      {},
+    ) as any[]
+
+    const call = result[0].content[0].toolCallId
+    const output = result[1].content[0].toolCallId
+
+    expect(call).toBe(output)
+    expect(call.length).toBeLessThanOrEqual(64)
+    expect(call).toMatch(/^[a-zA-Z0-9_-]+$/)
+    expect(call).not.toBe(longGeminiCallID)
   })
 })
 

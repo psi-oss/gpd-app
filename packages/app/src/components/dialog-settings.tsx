@@ -13,6 +13,7 @@ import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsLicenses } from "./settings-licenses"
 import { SettingsProviders } from "./settings-providers"
 import { SettingsModels } from "./settings-models"
+import { SettingsStats } from "./settings-stats"
 
 export const DialogSettings: Component = () => {
   const language = useLanguage()
@@ -58,6 +59,10 @@ export const DialogSettings: Component = () => {
                     <Tabs.Trigger value="models">
                       <Icon name="models" />
                       {language.t("settings.models.title")}
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="stats">
+                      <Icon name="chart-bar" />
+                      {language.t("settings.stats.title")}
                     </Tabs.Trigger>
                   </div>
                 </div>
@@ -110,6 +115,9 @@ export const DialogSettings: Component = () => {
         </Tabs.Content>
         <Tabs.Content value="models" class="no-scrollbar">
           <SettingsModels />
+        </Tabs.Content>
+        <Tabs.Content value="stats" class="no-scrollbar">
+          <SettingsStats />
         </Tabs.Content>
         <Tabs.Content value="dependencies" class="no-scrollbar">
           <SettingsDependencies />

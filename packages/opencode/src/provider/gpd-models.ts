@@ -58,9 +58,10 @@ export type GpdModelMetadata = {
 // matrix) — values that returned HTTP 400 from upstream are excluded.
 //
 // LiteLLM proxy version note: bumping Railway to v1.83.14.rc.1 unlocks
-// opus-4-7 (was broken on v1.83.7) and gpt-5.5 xhigh. This table reflects
-// the post-bump matrix; running against v1.83.7 will degrade some entries
-// but never error harder than the picker default would.
+// opus-4-7 (was broken on v1.83.7). This table reflects the current
+// end-to-end app matrix, not only minimal provider probes; tiers that pass
+// direct `/v1/responses` calls but fail with the full GPD tool/system
+// payload stay excluded until the app payload passes live smoke.
 //
 // Defaults to `["low","medium","high"]` (WIDELY_SUPPORTED_EFFORTS in
 // transform.ts) when omitted. Overrides are model-id-keyed, NOT inside
@@ -78,9 +79,9 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   // which is bounded elsewhere (see Anthropic adapter limits).
   "claude-sonnet-4-6": ["low", "medium", "high"],
   "claude-haiku-4-5": ["low", "medium", "high"],
-  // gpt-5.5 supports xhigh post-bump (v1.83.14.rc.1 model map sets
-  // supports_xhigh_reasoning_effort=true). `max` not supported. Also note
-  // that `tool_choice` is fixed in the same bump.
+  // 2026-05-04 live full-payload probe: low/medium/high/xhigh pass through
+  // the production GPD LiteLLM proxy with streaming Responses API, app-like
+  // max_output_tokens, and a padded 55-tool / 174KB request body.
   "gpt-5.5": ["low", "medium", "high", "xhigh"],
   // gpt-5.5-pro rejects `low` upstream (probed 2026-04-29):
   //   "Supported values are: 'medium', 'high', and 'xhigh'."
@@ -111,6 +112,11 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
 export function gpdReasoningEffortsFor(apiId: string): readonly string[] | undefined {
   return GPD_MODEL_REASONING_EFFORTS[apiId]
 }
+
+// Models that exist in LiteLLM and have metadata here, but are not safe to
+// expose in the desktop picker yet. Keep this list empty unless a model fails
+// the full-payload probe in `script/gpd-full-payload-probe.ts`.
+export const GPD_MODEL_HIDDEN_IDS: ReadonlySet<string> = new Set()
 
 // Whether to route a GPD model through OpenAI's `/v1/responses` endpoint
 // (vs `/v1/chat/completions`). The Responses API is the only path that
@@ -331,6 +337,15 @@ function stubMetadataFor(id: string): GpdModelMetadata {
   return { name: id, tool_call: true, attachment: true, temperature: true }
 }
 
+function exposedMetadataFrom(ids: Iterable<string>): Record<string, GpdModelMetadata> {
+  const result: Record<string, GpdModelMetadata> = {}
+  for (const id of ids) {
+    if (GPD_MODEL_HIDDEN_IDS.has(id)) continue
+    result[id] = GPD_MODEL_METADATA[id] ?? stubMetadataFor(id)
+  }
+  return result
+}
+
 /**
  * Resolve the set of models to expose for the GPD provider. Shape
  * matches the `provider.models` subtree of opencode.json (which
@@ -344,13 +359,9 @@ export async function resolveGpdProviderModels(
   baseURL: string | undefined,
   apiKey: string | undefined,
 ): Promise<Record<string, GpdModelMetadata>> {
-  if (!baseURL || !apiKey) return { ...GPD_MODEL_METADATA }
+  if (!baseURL || !apiKey) return exposedMetadataFrom(Object.keys(GPD_MODEL_METADATA))
   const outcome = await getOutcome(baseURL, apiKey)
   if (outcome.reason === "forbidden") return {}
-  if (outcome.reason === "fallback") return { ...GPD_MODEL_METADATA }
-  const result: Record<string, GpdModelMetadata> = {}
-  for (const id of outcome.ids) {
-    result[id] = GPD_MODEL_METADATA[id] ?? stubMetadataFor(id)
-  }
-  return result
+  if (outcome.reason === "fallback") return exposedMetadataFrom(Object.keys(GPD_MODEL_METADATA))
+  return exposedMetadataFrom(outcome.ids)
 }

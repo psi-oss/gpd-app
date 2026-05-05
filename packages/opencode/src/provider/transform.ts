@@ -7,6 +7,7 @@ import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
 import { gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
+import { Hash } from "@/util/hash"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -72,6 +73,10 @@ export namespace ProviderTransform {
           return { ...msg, content: filtered }
         })
         .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
+    }
+
+    if (model.api.npm === "@ai-sdk/openai" && model.providerID === "gpd" && gpdUsesResponsesApi(model.api.id)) {
+      msgs = normalizeOpenAIResponsesToolCallIds(msgs)
     }
 
     if (model.api.id.includes("claude")) {
@@ -188,6 +193,48 @@ export namespace ProviderTransform {
     }
 
     return msgs
+  }
+
+  const OPENAI_RESPONSES_TOOL_CALL_ID_MAX = 64
+
+  function normalizeOpenAIResponsesToolCallId(id: string) {
+    const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_")
+    if (sanitized.length > 0 && sanitized.length <= OPENAI_RESPONSES_TOOL_CALL_ID_MAX) return sanitized
+
+    const digest = Hash.fast(id).slice(0, 32)
+    const prefix = (sanitized || "call").slice(0, 27).replace(/_+$/g, "") || "call"
+    return `${prefix}_${digest}`.slice(0, OPENAI_RESPONSES_TOOL_CALL_ID_MAX)
+  }
+
+  function normalizeOpenAIResponsesToolCallIds(msgs: ModelMessage[]): ModelMessage[] {
+    const ids = new Map<string, string>()
+    const normalize = (id: string) => {
+      const existing = ids.get(id)
+      if (existing) return existing
+      const next = normalizeOpenAIResponsesToolCallId(id)
+      ids.set(id, next)
+      return next
+    }
+
+    return msgs.map((msg) => {
+      if (!Array.isArray(msg.content)) return msg
+
+      let changed = false
+      const content = msg.content.map((part) => {
+        if (
+          (part.type === "tool-call" || part.type === "tool-result") &&
+          "toolCallId" in part &&
+          typeof part.toolCallId === "string"
+        ) {
+          const next = normalize(part.toolCallId)
+          if (next !== part.toolCallId) changed = true
+          return { ...part, toolCallId: next }
+        }
+        return part
+      })
+
+      return changed ? ({ ...msg, content } as typeof msg) : msg
+    })
   }
 
   function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
@@ -885,9 +932,14 @@ export namespace ProviderTransform {
         result["textVerbosity"] = "low"
       }
 
-      if (input.model.providerID.startsWith("opencode")) {
+      const shouldIncludeEncryptedReasoning =
+        input.model.providerID.startsWith("opencode") ||
+        (input.model.providerID === "gpd" && gpdUsesResponsesApi(input.model.api.id))
+      if (shouldIncludeEncryptedReasoning) {
         result["promptCacheKey"] = input.sessionID
         result["include"] = ["reasoning.encrypted_content"]
+      }
+      if (input.model.providerID.startsWith("opencode")) {
         result["reasoningSummary"] = "auto"
       }
     }
