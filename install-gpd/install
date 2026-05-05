@@ -243,24 +243,51 @@ check_prerequisites() {
                 die "Failed to install system deps: ${missing[*]}"
         fi
     elif [[ "$os" == "darwin" ]]; then
-        # On macOS we intentionally skip probing for `git` and `python3`.
-        #
-        # Apple ships /usr/bin/git and /usr/bin/python3 as STUBS that pop a
-        # "Install the Xcode Command Line Tools?" GUI dialog the moment they
-        # are invoked on a Mac without the full CLT package installed. The
-        # dialog blocks the process, never returns from SSH, and can kick off
-        # a ~1 GB download if the user clicks the wrong button. Even
-        # `command -v` returns the stub path, so probing either tool is a
-        # trap: detection succeeds but invocation is the footgun.
-        #
-        # Our installer does not actually need git (it pulls get-physics-done
-        # as a tarball via curl, not a git clone) and it does not need the
-        # system python3 (we bootstrap an app-local standalone Python via
-        # python-build-standalone further down in ensure_python). So we just
-        # stop checking. `curl`, `tar`, `unzip` ARE real on macOS and safe.
+        # The installer itself does not need `git` or `python3` (we tarball
+        # get-physics-done via curl and bootstrap our own Python via
+        # python-build-standalone). The desktop APP does need `git` at
+        # runtime — change tracking, snapshot diffs, file-edit history all
+        # spawn it. On a fresh Mac, /usr/bin/git is an Apple-provided stub
+        # that pops a "Install the Xcode Command Line Tools?" GUI dialog
+        # the first time anything invokes it. The app would surface that
+        # mid-session as a confusing modal. Provision CLT here, while we
+        # still have a terminal to drive it through.
         for cmd in tar unzip; do
             command -v "$cmd" &>/dev/null || die "'$cmd' is required but not installed."
         done
+
+        if ! xcode-select -p &>/dev/null; then
+            log "Installing Xcode Command Line Tools (~150 MB, ~5 min)..."
+
+            # Force `softwareupdate` to surface the CLT update label by
+            # touching the sentinel file the OS uses to gate it; without
+            # this, `softwareupdate -l` hides every CLT product.
+            local clt_sentinel="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
+            sudo touch "$clt_sentinel" 2>/dev/null || touch "$clt_sentinel" 2>/dev/null
+            local clt_label
+            clt_label="$(softwareupdate -l 2>/dev/null \
+                | awk -F'Label: ' '/\* Label:.*Command Line Tools/{print $2}' \
+                | tail -1)"
+            rm -f "$clt_sentinel" 2>/dev/null
+
+            if [[ -n "$clt_label" ]]; then
+                # Headless CLT install. Idempotent and silent on success;
+                # failure here is non-fatal because the user can still run
+                # `xcode-select --install` themselves at any time. The
+                # desktop app degrades change-tracking gracefully when git
+                # is missing rather than crashing, so we warn rather than die.
+                if ! sudo softwareupdate -i "$clt_label" --verbose >/dev/null 2>&1; then
+                    warn "Xcode CLT install failed; run 'xcode-select --install' manually before launching GPD"
+                fi
+            else
+                # Fall back to the GUI prompt if `softwareupdate` can't
+                # surface a label (older OS, MDM-managed update catalog,
+                # etc.). User has to click through but the prompt is the
+                # canonical install path on macOS.
+                xcode-select --install >/dev/null 2>&1 || true
+                warn "macOS prompted you to install Xcode Command Line Tools — please complete that dialog before launching GPD"
+            fi
+        fi
     else
         # Non-Debian Linux (Fedora, Arch, etc.): can't auto-install, just die.
         for cmd in tar git; do
