@@ -629,26 +629,96 @@ fn gpd_config_dir() -> PathBuf {
 }
 
 fn which_on_path(cmd: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
     let exe = if cfg!(windows) {
         format!("{cmd}.exe")
     } else {
         cmd.to_string()
     };
-    for entry in std::env::split_paths(&path) {
-        let candidate = entry.join(&exe);
+    let check = |dir: &Path| -> Option<PathBuf> {
+        let candidate = dir.join(&exe);
         if candidate.is_file() {
             return Some(candidate);
         }
-        // Also check bare name on unix (some installs don't append an ext).
         if !cfg!(windows) {
-            let plain = entry.join(cmd);
+            let plain = dir.join(cmd);
             if plain.is_file() {
                 return Some(plain);
             }
         }
+        None
+    };
+    if let Some(path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&path) {
+            if let Some(found) = check(&entry) {
+                return Some(found);
+            }
+        }
+    }
+    // macOS GUI apps (Tauri webview, double-clicked .app bundles) inherit
+    // the launchd PATH — typically `/usr/bin:/bin:/usr/sbin:/sbin` — and
+    // never see shell-added entries like `/Library/TeX/texbin` even when
+    // the user has a working MacTeX install. Same problem hits MacPorts
+    // (`/opt/local/bin`), Homebrew on Apple Silicon (`/opt/homebrew/bin`),
+    // and Windows TeX Live / MiKTeX defaults. Probe known install
+    // locations explicitly so MacTeX users don't get a misleading "LaTeX
+    // not found" prompt.
+    for dir in tex_install_dirs() {
+        if let Some(found) = check(&dir) {
+            return Some(found);
+        }
     }
     None
+}
+
+fn tex_install_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/Library/TeX/texbin"));
+        dirs.push(PathBuf::from("/usr/local/texlive/texbin"));
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/opt/local/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        // Year-stamped TeX Live installs (e.g. /usr/local/texlive/2024/bin/universal-darwin).
+        if let Ok(entries) = std::fs::read_dir("/usr/local/texlive") {
+            for entry in entries.flatten() {
+                let bin = entry.path().join("bin");
+                if let Ok(arches) = std::fs::read_dir(&bin) {
+                    for arch in arches.flatten() {
+                        dirs.push(arch.path());
+                    }
+                }
+            }
+        }
+    } else if cfg!(target_os = "linux") {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/usr/bin"));
+        if let Ok(entries) = std::fs::read_dir("/usr/local/texlive") {
+            for entry in entries.flatten() {
+                let bin = entry.path().join("bin");
+                if let Ok(arches) = std::fs::read_dir(&bin) {
+                    for arch in arches.flatten() {
+                        dirs.push(arch.path());
+                    }
+                }
+            }
+        }
+    } else if cfg!(target_os = "windows") {
+        if let Ok(entries) = std::fs::read_dir("C:\\texlive") {
+            for entry in entries.flatten() {
+                let bin = entry.path().join("bin").join("windows");
+                if bin.is_dir() {
+                    dirs.push(bin);
+                }
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            dirs.push(home.join("AppData/Local/Programs/MiKTeX/miktex/bin/x64"));
+            dirs.push(home.join("AppData/Local/Programs/MiKTeX/miktex/bin"));
+        }
+        dirs.push(PathBuf::from("C:\\Program Files\\MiKTeX\\miktex\\bin\\x64"));
+        dirs.push(PathBuf::from("C:\\Program Files (x86)\\MiKTeX\\miktex\\bin"));
+    }
+    dirs
 }
 
 // ---------------------------------------------------------------------------

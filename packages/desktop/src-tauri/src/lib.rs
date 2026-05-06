@@ -3,6 +3,7 @@ mod cli;
 mod constants;
 mod dependencies;
 mod gpd_setup;
+mod path_init;
 mod project_fs;
 mod tectonic;
 mod tex_compiler;
@@ -521,6 +522,14 @@ fn wsl_path(path: String, mode: Option<WslPathMode>) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Reproduce macOS path_helper for GUI launches so MacTeX, MacPorts,
+    // XQuartz, and friends drop their `/etc/paths.d/*` entries into
+    // PATH. Without this, double-clicked .app bundles see only
+    // launchd's stripped PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) and
+    // `which_on_path("pdflatex")` returns None even though the user
+    // has a working install. Must run before any tool detection.
+    path_init::augment_process_path();
+
     let specta_builder = make_specta_builder();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
