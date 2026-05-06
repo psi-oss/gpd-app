@@ -12,13 +12,17 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 
-import FileTree from "@/components/file-tree"
+import FileTree, { type FileContextAction } from "@/components/file-tree"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
+import { usePlatform } from "@/context/platform"
+import { useSDK } from "@/context/sdk"
+import { showToast } from "@opencode-ai/ui/toast"
+import type { FileNode } from "@opencode-ai/sdk/v2"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
 import { createOpenSessionFileTab, createSessionTabs, getTabReorderIndex, type Sizing } from "@/pages/session/helpers"
@@ -43,7 +47,38 @@ export function SessionSidePanel(props: {
   const language = useLanguage()
   const command = useCommand()
   const dialog = useDialog()
+  const platform = usePlatform()
+  const sdk = useSDK()
   const { sessionKey, tabs, view } = useSessionLayout()
+
+  const handleFileContextAction = async (action: FileContextAction, node: FileNode) => {
+    try {
+      switch (action) {
+        case "copy-path":
+          await navigator.clipboard.writeText(node.absolute || node.path)
+          return
+        case "copy-contents": {
+          const res = await sdk.client.file.read({ path: node.path })
+          const content = res.data?.content ?? ""
+          await navigator.clipboard.writeText(content)
+          return
+        }
+        case "reveal":
+          await platform.revealPath?.(node.absolute || node.path)
+          return
+        case "delete": {
+          const mod = await import("@/components/dialog-confirm-delete-file")
+          dialog.show(() => <mod.DialogConfirmDeleteFile node={node} />)
+          return
+        }
+      }
+    } catch (err) {
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
@@ -395,6 +430,7 @@ export function SessionSidePanel(props: {
                           draggable={false}
                           active={props.activeDiff}
                           onFileClick={(node) => props.focusReviewDiff(node.path)}
+                          onFileContextAction={handleFileContextAction}
                         />
                       </Show>
                     </Match>
@@ -411,6 +447,7 @@ export function SessionSidePanel(props: {
                         modified={diffFiles()}
                         kinds={kinds()}
                         onFileClick={(node) => openTab(file.tab(node.path))}
+                        onFileContextAction={handleFileContextAction}
                       />
                     </Match>
                   </Switch>

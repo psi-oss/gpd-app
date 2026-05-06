@@ -23,6 +23,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http"
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
 import { type as ostype } from "@tauri-apps/plugin-os"
 import { relaunch } from "@tauri-apps/plugin-process"
+import { revealItemInDir } from "@tauri-apps/plugin-opener"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
 import { Store } from "@tauri-apps/plugin-store"
 import { check, type Update } from "@tauri-apps/plugin-updater"
@@ -122,6 +123,9 @@ const createPlatform = (): Platform => {
     },
     async openPath(path: string, app?: string) {
       await commands.openPath(path, app ?? null)
+    },
+    async revealPath(path: string) {
+      await revealItemInDir(path)
     },
 
     back() {

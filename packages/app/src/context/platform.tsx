@@ -25,6 +25,13 @@ export type Platform = {
   /** Open a local path in a local app (desktop only) */
   openPath?(path: string, app?: string): Promise<void>
 
+  /**
+   * Reveal a file in the system file manager (Finder on macOS, Explorer on
+   * Windows, default file manager on Linux). Desktop only — web returns
+   * undefined and callers should hide the corresponding UI.
+   */
+  revealPath?(path: string): Promise<void>
+
   /** Restart the app  */
   restart(): Promise<void>
 
