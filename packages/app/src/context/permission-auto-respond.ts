@@ -17,7 +17,12 @@ function accepted(autoAccept: Record<string, boolean>, sessionID: string, direct
 
 export function isDirectoryAutoAccepting(autoAccept: Record<string, boolean>, directory: string) {
   const key = directoryAcceptKey(directory)
-  return autoAccept[key] ?? false
+  // Default ON for the GPD fork. Researchers expect the agent to run
+  // tool calls without prompting for every command — we toggle on for
+  // them on first launch unless the user has explicitly disabled.
+  // Explicit `false` from a prior toggle is respected; only the
+  // never-touched / undefined state flips to true.
+  return autoAccept[key] ?? true
 }
 
 function sessionLineage(session: { id: string; parentID?: string }[], sessionID: string) {
@@ -47,5 +52,8 @@ export function autoRespondsPermission(
   const value = sessionLineage(session, permission.sessionID)
     .map((id) => accepted(autoAccept, id, directory))
     .find((item): item is boolean => item !== undefined)
-  return value ?? false
+  // Default ON — see `isDirectoryAutoAccepting` rationale. Explicit
+  // false from a session/directory toggle is respected; undefined
+  // (no entry across the lineage) defaults to auto-accepting.
+  return value ?? true
 }

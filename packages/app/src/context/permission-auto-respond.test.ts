@@ -31,13 +31,13 @@ describe("autoRespondsPermission", () => {
     expect(autoRespondsPermission({ root: true }, sessions, permission("child"), "/tmp/project")).toBe(true)
   })
 
-  test("defaults to requiring approval when no lineage override exists", () => {
+  test("defaults to auto-accepting when no lineage override exists (GPD default-on)", () => {
     const sessions = [session({ id: "root" }), session({ id: "child", parentID: "root" }), session({ id: "other" })]
     const autoAccept = {
       other: true,
     }
 
-    expect(autoRespondsPermission(autoAccept, sessions, permission("child"), "/tmp/project")).toBe(false)
+    expect(autoRespondsPermission(autoAccept, sessions, permission("child"), "/tmp/project")).toBe(true)
   })
 
   test("inherits a parent session's false override", () => {
@@ -90,8 +90,8 @@ describe("isDirectoryAutoAccepting", () => {
     expect(isDirectoryAutoAccepting(autoAccept, directory)).toBe(true)
   })
 
-  test("returns false when directory key is not set", () => {
-    expect(isDirectoryAutoAccepting({}, "/tmp/project")).toBe(false)
+  test("returns true when directory key is not set (GPD default-on)", () => {
+    expect(isDirectoryAutoAccepting({}, "/tmp/project")).toBe(true)
   })
 
   test("returns false when directory key is explicitly false", () => {
