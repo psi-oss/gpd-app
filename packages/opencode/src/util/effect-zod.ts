@@ -10,13 +10,19 @@ function walk(ast: SchemaAST.AST): z.ZodTypeAny {
   const desc = SchemaAST.resolveDescription(ast)
   const ref = SchemaAST.resolveIdentifier(ast)
   const next = desc ? out.describe(desc) : out
-  // `ref` propagates to JSON Schema as a non-standard `ref` keyword (vs `$ref`).
-  // OpenAI's Responses API rejects requests with high/xhigh reasoning_effort
-  // when tool schemas contain it (server_error at SSE seq=3, deterministic).
-  // Confirmed by curl-replay: removing the `ref` keyword from the `question`
-  // tool schema fixed the failure end-to-end. Use `title` instead — valid
-  // JSON Schema annotation, accepted by OpenAI in every reasoning tier.
-  return ref ? next.meta({ title: ref }) : next
+  // `ref` propagates to JSON Schema as a non-standard `ref` keyword. The
+  // hey-api/openapi-ts type generator uses it to emit named top-level
+  // `export type` aliases (e.g. `QuestionInfo`, `QuestionRequest`). Without
+  // it, those types collapse into anonymous inline shapes and our SDK
+  // consumers can no longer import them.
+  //
+  // Caveat: OpenAI's Responses API rejects requests with `high|xhigh`
+  // reasoning_effort when a tool schema contains the bare `ref` keyword
+  // (deterministic `server_error` at SSE seq=3). The fix lives in the
+  // outgoing request interceptor in `provider.ts` (`stripJsonSchemaRefs`)
+  // — it walks `tools[*].parameters` and deletes any stray `ref` before
+  // the body hits the wire. Keep both halves in sync.
+  return ref ? next.meta({ ref }) : next
 }
 
 function body(ast: SchemaAST.AST): z.ZodTypeAny {

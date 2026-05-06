@@ -2234,6 +2234,17 @@ export type FileEditLineConflict = {
   currentLineContent?: string
 }
 
+export type FileDeleteResult = {
+  ok: true
+}
+
+export type FileDeleteConflict = {
+  ok: false
+  reason: "conflict"
+  currentContent: string
+  currentHash: string
+}
+
 export type Event =
   | EventProjectUpdated
   | EventProjectDeleted
@@ -4963,6 +4974,41 @@ export type FileEditLineResponses = {
 }
 
 export type FileEditLineResponse = FileEditLineResponses[keyof FileEditLineResponses]
+
+export type FileDeleteData = {
+  body?: {
+    path: string
+    expectedHash: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/file/delete"
+}
+
+export type FileDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict: current content hash no longer matches expectedHash
+   */
+  409: FileDeleteConflict
+}
+
+export type FileDeleteError = FileDeleteErrors[keyof FileDeleteErrors]
+
+export type FileDeleteResponses = {
+  /**
+   * File deleted
+   */
+  200: FileDeleteResult
+}
+
+export type FileDeleteResponse = FileDeleteResponses[keyof FileDeleteResponses]
 
 export type EventSubscribeData = {
   body?: never

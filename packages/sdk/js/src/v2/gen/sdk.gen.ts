@@ -36,6 +36,8 @@ import type {
   ExperimentalWorkspaceRemoveErrors,
   ExperimentalWorkspaceRemoveResponses,
   ExperimentalWorkspaceStatusResponses,
+  FileDeleteErrors,
+  FileDeleteResponses,
   FileEditLineErrors,
   FileEditLineResponses,
   FileListResponses,
@@ -3336,6 +3338,45 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<FileEditLineResponses, FileEditLineErrors, ThrowOnError>({
       url: "/file/edit-line",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Delete file
+   *
+   * Remove a file under the project directory using an expected content hash for optimistic concurrency. Direct user delete: not gated by the agent permission system (parallels /file/write).
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      expectedHash?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "expectedHash" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileDeleteResponses, FileDeleteErrors, ThrowOnError>({
+      url: "/file/delete",
       ...options,
       ...params,
       headers: {

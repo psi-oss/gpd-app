@@ -145,6 +145,39 @@ export namespace Provider {
     return summary
   }
 
+  /**
+   * Recursively delete any `ref` keys from a JSON-Schema-shaped value.
+   *
+   * Effect-Schema → zod (`util/effect-zod.ts:walk`) annotates schemas with
+   * `meta({ ref })` so `hey-api/openapi-ts` can extract named top-level
+   * types in the generated SDK. The same `ref` key surfaces in the JSON
+   * Schema attached to outgoing OpenAI tool definitions, where OpenAI's
+   * Responses API rejects it with a deterministic `server_error` at high
+   * / xhigh reasoning_effort. This walker is the second half of the fix
+   * — keep it in sync with `effect-zod.ts:walk`.
+   *
+   * Returns `true` if any `ref` was removed.
+   */
+  export function stripJsonSchemaRefs(value: unknown): boolean {
+    let mutated = false
+    const visit = (node: any): void => {
+      if (!node || typeof node !== "object") return
+      if (Array.isArray(node)) {
+        for (const child of node) visit(child)
+        return
+      }
+      if ("ref" in node) {
+        delete node.ref
+        mutated = true
+      }
+      for (const key of Object.keys(node)) {
+        visit(node[key])
+      }
+    }
+    visit(value)
+    return mutated
+  }
+
   export function normalizeOpenAIResponsesCallIds(rawBody: unknown) {
     if (typeof rawBody !== "string") return undefined
 
@@ -1799,6 +1832,15 @@ export namespace Provider {
                     delete item.id
                   }
                 }
+                mutated = true
+              }
+              // OpenAI's Responses API rejects tool schemas that carry the
+              // non-standard `ref` JSON-Schema keyword (deterministic
+              // server_error at SSE seq=3 on high/xhigh reasoning_effort).
+              // Effect-Schema → zod emits `ref` so hey-api/openapi-ts can
+              // generate named SDK types; we have to strip it out of the
+              // outgoing request right before it hits the wire.
+              if (Array.isArray(body.tools) && stripJsonSchemaRefs(body.tools)) {
                 mutated = true
               }
               if (mutated) {
