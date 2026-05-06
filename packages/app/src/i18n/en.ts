@@ -1237,10 +1237,11 @@ export const dict = {
 
   "tex.build.title": "Preview",
   "tex.build.compile": "Render",
+  "tex.build.openSplit": "Split view",
   "tex.build.recompile": "Re-render",
   "tex.build.showLog": "Show log",
   "tex.build.maximize": "Maximize",
-  "tex.build.restoreSource": "Show source",
+  "tex.build.restoreSource": "Equal split",
   "tex.build.diagnostics.collapse": "Collapse diagnostics",
   "tex.build.diagnostics.expand": "Expand diagnostics",
   "tex.build.status.ready": "Ready",

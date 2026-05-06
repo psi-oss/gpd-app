@@ -469,15 +469,17 @@ export function FileTabContent(props: { tab: string }) {
     </div>
   )
 
-  const renderLoaded = () => {
+  const renderLoaded = (opts?: { splitPreview?: boolean }) => {
     const p = path()
     if (p && sourceEditor()) {
+      const split = opts?.splitPreview === true
       return (
         <FileEditor
           path={p}
           content={{ content: contents(), hash: hash() }}
+          splitPreview={split}
           renderTexPreview={
-            isTex()
+            isTex() && !split
               ? () => (
                   <TexBuildPane
                     texFile={p}
@@ -522,7 +524,7 @@ export function FileTabContent(props: { tab: string }) {
             <Show when={isTex()}>
               <div class="px-3 py-1 flex items-center justify-end border-b border-border-weaker-base">
                 <Button size="small" variant="secondary" onClick={toggleBuildPane}>
-                  {language.t("tex.build.compile")}
+                  {language.t("tex.build.openSplit")}
                 </Button>
               </div>
             </Show>
@@ -540,29 +542,26 @@ export function FileTabContent(props: { tab: string }) {
           <div
             class="grid h-full"
             style={{
-              "grid-template-rows": buildPaneMaximized() ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)",
+              "grid-template-rows": buildPaneMaximized()
+                ? "minmax(0,1fr) minmax(0,4fr)"
+                : "minmax(0,1fr) minmax(0,1fr)",
             }}
           >
-            <Show when={!buildPaneMaximized()}>
-              <ScrollView class="min-h-0" viewportRef={scrollSync.setViewport} onScroll={scrollSync.handleScroll as any}>
-                <div class="px-3 py-1 flex items-center justify-end border-b border-border-weaker-base">
-                  <Button size="small" variant="secondary" onClick={toggleBuildPane}>
-                    {language.t("common.close")}
-                  </Button>
-                </div>
-                <Switch>
-                  <Match when={state()?.loaded}>{renderLoaded()}</Match>
-                  <Match when={state()?.loading}>
-                    <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}{language.t("common.loading.ellipsis")}</div>
-                  </Match>
-                  <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
-                </Switch>
-              </ScrollView>
-            </Show>
-            <div
-              class="min-h-0"
-              classList={{ "border-t border-border-weaker-base": !buildPaneMaximized() }}
-            >
+            <ScrollView class="min-h-0" viewportRef={scrollSync.setViewport} onScroll={scrollSync.handleScroll as any}>
+              <div class="px-3 py-1 flex items-center justify-end border-b border-border-weaker-base">
+                <Button size="small" variant="secondary" onClick={toggleBuildPane}>
+                  {language.t("common.close")}
+                </Button>
+              </div>
+              <Switch>
+                <Match when={state()?.loaded}>{renderLoaded({ splitPreview: true })}</Match>
+                <Match when={state()?.loading}>
+                  <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}{language.t("common.loading.ellipsis")}</div>
+                </Match>
+                <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
+              </Switch>
+            </ScrollView>
+            <div class="min-h-0 border-t border-border-weaker-base">
               <TexBuildPane
                 texFile={absPath()}
                 onNavigateSource={scrollToLine}

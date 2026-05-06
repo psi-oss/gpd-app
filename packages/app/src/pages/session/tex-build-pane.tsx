@@ -9,7 +9,7 @@ import { useFile } from "@/context/file"
 import { usePlatform } from "@/context/platform"
 import { TexPdfViewer } from "./tex-pdf-viewer"
 import { TexErrorList } from "./tex-error-list"
-import { createTexCompiler, type TexCompilerHandle } from "./use-tex-compiler"
+import { useTexCompiler, type TexCompilerHandle } from "./use-tex-compiler"
 import type { TexCompileResult, TexDiagnostic } from "@/context/platform"
 
 /**
@@ -44,9 +44,7 @@ export function TexBuildPane(props: {
   const file = useFile()
   const platform = usePlatform()
 
-  const tex = createTexCompiler({
-    projectId: () => sdk.directory,
-  })
+  const tex = useTexCompiler()
 
   const absTexFile = createMemo(() => toAbsolute(props.texFile, sdk.directory))
   const entry = createMemo(() => tex.current(absTexFile()))
@@ -172,16 +170,16 @@ export function TexBuildPane(props: {
           </Show>
         </div>
         <div class="flex items-center gap-1.5">
-          <Button
-            size="small"
-            variant="primary"
-            disabled={recompileDisabled()}
-            onClick={() => void doCompile()}
-          >
-            {entry()
-              ? language.t("tex.build.recompile")
-              : language.t("tex.build.compile")}
-          </Button>
+          <Show when={entry()}>
+            <Button
+              size="small"
+              variant="primary"
+              disabled={recompileDisabled()}
+              onClick={() => void doCompile()}
+            >
+              {language.t("tex.build.recompile")}
+            </Button>
+          </Show>
           <Show when={entry()?.result.logPath}>
             <Button size="small" variant="secondary" onClick={() => void openLog()}>
               {language.t("tex.build.showLog")}

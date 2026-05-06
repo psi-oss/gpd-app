@@ -37,6 +37,7 @@ type Props = {
   path: string
   content: Content
   renderTexPreview?: () => JSX.Element
+  splitPreview?: boolean
 }
 
 type Loader = () => Promise<Extension>
@@ -577,7 +578,7 @@ export function FileEditor(props: Props) {
               {language.t("common.search.placeholder")}
             </Button>
           </Show>
-          <Show when={kind()}>
+          <Show when={kind() && !props.splitPreview}>
             <RadioGroup
               size="small"
               options={["source", "preview"] as EditorMode[]}
@@ -611,9 +612,9 @@ export function FileEditor(props: Props) {
       <div
         ref={(el) => (host = el)}
         class="min-h-0 flex-1 overflow-hidden text-13-regular [&_.cm-editor]:h-full [&_.cm-scroller]:font-mono"
-        classList={{ hidden: mode() !== "source" }}
+        classList={{ hidden: !props.splitPreview && mode() !== "source" }}
       />
-      <Show when={mode() === "preview" && kind()}>
+      <Show when={!props.splitPreview && mode() === "preview" && kind()}>
         {(value) => (
           <div class="min-h-0 flex-1">
             <FilePreview

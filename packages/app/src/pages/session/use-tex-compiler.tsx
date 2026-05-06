@@ -1,6 +1,7 @@
-import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { createContext, createMemo, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { usePlatform } from "@/context/platform"
+import { useSDK } from "@/context/sdk"
 import type {
   TexCompileProgress,
   TexCompileResult,
@@ -199,3 +200,17 @@ export function createTexCompiler(input: {
 }
 
 export type TexCompilerHandle = ReturnType<typeof createTexCompiler>
+
+const TexCompilerContext = createContext<TexCompilerHandle>()
+
+export function TexCompilerProvider(props: ParentProps) {
+  const sdk = useSDK()
+  const handle = createTexCompiler({ projectId: () => sdk.directory })
+  return <TexCompilerContext.Provider value={handle}>{props.children}</TexCompilerContext.Provider>
+}
+
+export function useTexCompiler(): TexCompilerHandle {
+  const ctx = useContext(TexCompilerContext)
+  if (!ctx) throw new Error("useTexCompiler must be used within TexCompilerProvider")
+  return ctx
+}
