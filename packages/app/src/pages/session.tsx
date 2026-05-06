@@ -1032,6 +1032,20 @@ export default function Page() {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    // Escape while a session is actively streaming = same as clicking
+    // the Stop button. Intercepted before the early-return guards below
+    // so it works regardless of whether focus is in the prompt input or
+    // anywhere else in the session view. Pressing Escape again after
+    // abort completes still blurs the input via the existing handler.
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      const sessionID = params.id
+      if (sessionID && busy(sessionID) && !dialog.active) {
+        event.preventDefault()
+        void halt(sessionID)
+        return
+      }
+    }
+
     const path = event.composedPath()
     const target = path.find((item): item is HTMLElement => item instanceof HTMLElement)
     const activeElement = deepActiveElement()

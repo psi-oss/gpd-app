@@ -256,11 +256,24 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
           const key = origin()
           if (!key) return
           const current = store.projects[key] ?? []
-          setStore(
-            "projects",
-            key,
-            current.filter((x) => x.worktree !== directory),
-          )
+          batch(() => {
+            setStore(
+              "projects",
+              key,
+              current.filter((x) => x.worktree !== directory),
+            )
+            // Clear `lastProject` if it points at the directory being
+            // closed, otherwise the autoselect resource at
+            // `pages/layout.tsx:644` re-opens the just-deleted project on
+            // next launch (list.length === 0, last is still the deleted
+            // directory, openProject re-adds it to `store.projects`).
+            // Verified live 2026-05-06 against v1.0.0 release: deleting a
+            // project from the sidebar, quitting, and relaunching brought
+            // the project back every time without this clear.
+            if (store.lastProject[key] === directory) {
+              setStore("lastProject", key, undefined as unknown as string)
+            }
+          })
         },
         expand(directory: string) {
           const key = origin()

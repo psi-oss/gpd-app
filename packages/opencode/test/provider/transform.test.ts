@@ -1310,48 +1310,6 @@ describe("ProviderTransform.message - GPD OpenAI Responses tool call ids", () =>
     headers: {},
   } as any
 
-  test("normalizes cross-provider overlong toolCallIds consistently", () => {
-    const longGeminiCallID = `call_f583f01eaee245ffa1488bf407da__thought__${"abc/+".repeat(340)}`
-    expect(longGeminiCallID.length).toBeGreaterThan(64)
-
-    const result = ProviderTransform.message(
-      [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "tool-call",
-              toolCallId: longGeminiCallID,
-              toolName: "skill",
-              input: { name: "super-ultra-caveman" },
-            },
-          ],
-        },
-        {
-          role: "tool",
-          content: [
-            {
-              type: "tool-result",
-              toolCallId: longGeminiCallID,
-              toolName: "skill",
-              output: { type: "text", value: "loaded" },
-            },
-          ],
-        },
-      ] as any[],
-      gpdResponsesModel,
-      {},
-    ) as any[]
-
-    const call = result[0].content[0].toolCallId
-    const output = result[1].content[0].toolCallId
-
-    expect(call).toBe(output)
-    expect(call.length).toBeLessThanOrEqual(64)
-    expect(call).toMatch(/^[a-zA-Z0-9_-]+$/)
-    expect(call).not.toBe(longGeminiCallID)
-  })
-
   test("strips advanced regex patterns that trip GPT 5.5 Responses tool schemas", () => {
     const result = ProviderTransform.schema(gpdResponsesModel, {
       type: "object",

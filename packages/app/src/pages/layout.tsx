@@ -1548,6 +1548,15 @@ export default function Layout(props: ParentProps) {
     if (index === -1) return
     const next = list[index + 1]
 
+    // Drop the per-project lastProjectSession entry too. Without this,
+    // deleting a project leaves a dangling pointer in localStorage; the
+    // next time the user opens a project at the same directory (or one
+    // with the same `workspaceKey` after a rename) it'll auto-navigate
+    // to a session id that no longer exists.
+    if (store.lastProjectSession[directory]) {
+      setStore("lastProjectSession", directory, undefined as unknown as never)
+    }
+
     if (!active) {
       layout.projects.close(directory)
       return
