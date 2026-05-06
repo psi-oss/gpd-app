@@ -504,6 +504,80 @@ async function highlightCodeBlocks(html: string): Promise<string> {
 
 export type NativeMarkdownParser = (markdown: string) => Promise<string>
 
+// Pre-render every `$$...$$` and `$...$` block to KaTeX HTML, swap each
+// out for a sentinel placeholder, then run markdown, then swap the
+// rendered HTML back. Necessary because `marked-katex-extension`
+// (v5.1.6) only matches single-line math: its inline regex bans
+// newlines (`[^\\\n]`) and its block regex requires `$$\nMATH\n$$\n`
+// on its own lines. Real LLM output puts `$$ ... $$` mid-paragraph
+// with embedded line wraps, often with `|` characters (norm bars)
+// that other markdown rules then mishandle. Pre-rendering bypasses
+// the whole marked tokenization pass for the math span. Code
+// fences are still skipped (we exclude them via the same split
+// that `renderMathExpressions` uses).
+const MATH_PLACEHOLDER_PREFIX = " KATEX_MATH_"
+const MATH_PLACEHOLDER_SUFFIX = "_KATEX "
+
+function preRenderMath(markdown: string): { source: string; replacements: Map<string, string> } {
+  const replacements = new Map<string, string>()
+  if (!markdown.includes("$")) return { source: markdown, replacements }
+
+  // Skip code blocks (``` fences) and inline code (`...`) so dollars
+  // inside code stay literal.
+  const segments = markdown.split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+  let counter = 0
+
+  const result = segments
+    .map((segment, i) => {
+      if (i % 2 === 1) return segment // captured code segment
+      let out = segment
+      // Display math first so `$...$` doesn't eat the inner of `$$...$$`.
+      out = out.replace(/\$\$([\s\S]*?)\$\$/g, (_, math: string) => {
+        let html: string
+        try {
+          html = katex.renderToString(math.trim(), {
+            displayMode: true,
+            throwOnError: false,
+            macros: KATEX_MACROS,
+          })
+        } catch {
+          return `$$${math}$$`
+        }
+        const id = `${MATH_PLACEHOLDER_PREFIX}${counter++}${MATH_PLACEHOLDER_SUFFIX}`
+        replacements.set(id, html)
+        return id
+      })
+      out = out.replace(/(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)\$(?!\$)/g, (full, math: string) => {
+        let html: string
+        try {
+          html = katex.renderToString(math.trim(), {
+            displayMode: false,
+            throwOnError: false,
+            macros: KATEX_MACROS,
+          })
+        } catch {
+          return full
+        }
+        const id = `${MATH_PLACEHOLDER_PREFIX}${counter++}${MATH_PLACEHOLDER_SUFFIX}`
+        replacements.set(id, html)
+        return id
+      })
+      return out
+    })
+    .join("")
+
+  return { source: result, replacements }
+}
+
+function restoreMath(html: string, replacements: Map<string, string>): string {
+  if (replacements.size === 0) return html
+  let out = html
+  for (const [id, math] of replacements) {
+    out = out.split(id).join(math)
+  }
+  return out
+}
+
 export const { use: useMarked, provider: MarkedProvider } = createSimpleContext({
   name: "Marked",
   init: (props: { nativeParser?: NativeMarkdownParser }) => {
@@ -547,13 +621,20 @@ export const { use: useMarked, provider: MarkedProvider } = createSimpleContext(
       const nativeParser = props.nativeParser
       return {
         async parse(markdown: string): Promise<string> {
-          const html = await nativeParser(markdown)
-          const withMath = renderMathExpressions(html)
-          return highlightCodeBlocks(withMath)
+          const { source, replacements } = preRenderMath(markdown)
+          const html = await nativeParser(source)
+          const withMath = restoreMath(html, replacements)
+          return highlightCodeBlocks(renderMathExpressions(withMath))
         },
       }
     }
 
-    return jsParser
+    return {
+      async parse(markdown: string): Promise<string> {
+        const { source, replacements } = preRenderMath(markdown)
+        const html = await jsParser.parse(source)
+        return restoreMath(html, replacements)
+      },
+    }
   },
 })
