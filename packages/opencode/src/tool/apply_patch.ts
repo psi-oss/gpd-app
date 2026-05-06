@@ -10,6 +10,7 @@ import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "../lsp"
+import type { LSPClient } from "../lsp/client"
 import { AppFileSystem } from "../filesystem"
 import DESCRIPTION from "./apply_patch.txt"
 import { File } from "../file"
@@ -226,23 +227,39 @@ export const ApplyPatchTool = Tool.define(
         }
 
         if (edited) {
-          yield* format.file(edited)
-          yield* bus.publish(File.Event.Edited, { file: edited })
+          // Format + edit-event publication must NOT keep the tool in
+          // "Applying changes" forever (researchers reported the spinner
+          // hanging after the file already landed). format.file shells out
+          // to project formatters that can hang for many seconds on first
+          // run; bus.publish is synchronous-ish but a downstream listener
+          // could throw. Time-box the formatter and swallow listener
+          // errors so the tool can return its summary while the writes
+          // are already committed.
+          yield* format.file(edited).pipe(
+            Effect.timeout("5 seconds"),
+            Effect.catch(() => Effect.void),
+          )
+          yield* bus.publish(File.Event.Edited, { file: edited }).pipe(Effect.catch(() => Effect.void))
         }
       }
 
       // Publish file change events
       for (const update of updates) {
-        yield* bus.publish(FileWatcher.Event.Updated, update)
+        yield* bus.publish(FileWatcher.Event.Updated, update).pipe(Effect.catch(() => Effect.void))
       }
 
-      // Notify LSP of file changes and collect diagnostics
+      // Notify LSP of file changes and collect diagnostics. Same rationale
+      // as above: a stuck LSP server (e.g. pyright on a fresh project)
+      // shouldn't leave the apply_patch tool in pending state forever.
       for (const change of fileChanges) {
         if (change.type === "delete") continue
         const target = change.movePath ?? change.filePath
-        yield* lsp.touchFile(target, true)
+        yield* lsp.touchFile(target, true).pipe(Effect.catch(() => Effect.void))
       }
-      const diagnostics = yield* lsp.diagnostics()
+      const diagnostics = yield* lsp.diagnostics().pipe(
+        Effect.timeout("3 seconds"),
+        Effect.catch(() => Effect.succeed({} as Record<string, LSPClient.Diagnostic[]>)),
+      )
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
