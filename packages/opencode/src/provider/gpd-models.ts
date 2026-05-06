@@ -150,13 +150,19 @@ export function gpdUsesResponsesApi(apiId: string): boolean {
 // the LiteLLM `gpd-chat` access group gains a model; missing entries
 // degrade gracefully to a stub in the picker, not an error.
 export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
+  // Output ceilings below mirror what LiteLLM `/model_group/info` reports
+  // as `max_output_tokens` for each upstream model id, matching the PSI
+  // inference-providers catalog (`packages/inference-providers/MODELS.md`).
+  // Anthropic 4.x rejects requests where `max_tokens` exceeds the model's
+  // documented maximum, so the metadata here is the actual ceiling we can
+  // ask for — not aspirational.
   "claude-opus-4-7": {
     name: "Claude Opus 4.7",
     tool_call: true,
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_000_000, output: 131_072 },
+    limit: { context: 1_000_000, output: 128_000 },
     cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   },
   "claude-opus-4-6": {
@@ -165,7 +171,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_000_000, output: 131_072 },
+    limit: { context: 1_000_000, output: 128_000 },
     cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   },
   "claude-sonnet-4-6": {
@@ -174,7 +180,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_000_000, output: 65_536 },
+    limit: { context: 1_000_000, output: 64_000 },
     cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   },
   "claude-haiku-4-5": {
@@ -183,7 +189,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 200_000, output: 65_536 },
+    limit: { context: 200_000, output: 64_000 },
     cost: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
   },
   "gpt-5.5": {
@@ -210,7 +216,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_050_000, output: 131_072 },
+    limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 2.5, output: 15, cache_read: 0.25 },
   },
   "gpt-5.4-mini": {
@@ -219,7 +225,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_050_000, output: 131_072 },
+    limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 0.75, output: 4.5, cache_read: 0.075 },
   },
   "gpt-5.4-nano": {
@@ -228,7 +234,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_050_000, output: 131_072 },
+    limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 0.2, output: 1.25, cache_read: 0.02 },
   },
   "gpt-5.4-pro": {
@@ -237,7 +243,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_050_000, output: 131_072 },
+    limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 30, output: 180 },
   },
   "gpt-5.3-codex": {
@@ -250,7 +256,10 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     reasoning: true,
     attachment: true,
     temperature: true,
-    limit: { context: 1_000_000, output: 32_768 },
+    // Output ceiling per PSI MODELS.md (128K for the GPT-5.x family).
+    // Was previously 32_768 — half the chat-completions chunked stream
+    // could be cut short, especially on long codex outputs.
+    limit: { context: 1_000_000, output: 128_000 },
     cost: { input: 1.75, output: 14, cache_read: 0.175 },
   },
   "gemini-3.1-pro-preview": {

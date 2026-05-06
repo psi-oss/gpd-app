@@ -1065,6 +1065,22 @@ export namespace ProviderTransform {
   }
 
   export function maxOutputTokens(model: Provider.Model): number {
+    // GPD models: always send the provider's absolute max output tokens so
+    // a long answer never truncates and so we never inherit a small
+    // provider default. Anthropic specifically requires `max_tokens` to be
+    // set explicitly (per the PSI inference-providers MODELS.md convention:
+    // "All Anthropic calls include `max_tokens` set to the model's absolute
+    // maximum"); OpenAI/Gemini default behaviors when the field is omitted
+    // are not the model maximum either, so leaving the cap to the provider
+    // is unsafe in general. The legacy 32_000 ceiling silently truncated
+    // every reasoning-heavy answer (verified live 2026-05-05: opus-4-7 at
+    // effort=max consumed the full 32k thinking budget and emitted zero
+    // visible output). Non-GPD providers keep the legacy cap unless the
+    // experimental flag overrides — they have their own cost/safety
+    // trade-offs and were not part of this audit.
+    if (model.providerID === "gpd") {
+      return model.limit.output || OUTPUT_TOKEN_MAX
+    }
     return Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX
   }
 
