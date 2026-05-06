@@ -434,8 +434,22 @@ export namespace ProviderTransform {
       // chunks — without this the Responses API call returns a reasoning
       // block with an empty summary array and the UI shows nothing.
       const usesResponses = gpdUsesResponsesApi(model.api.id)
-      const isClaude = model.api.id.startsWith("claude-")
-      if (isClaude) {
+      // Adaptive thinking is only available on Claude 4.6/4.7 family —
+      // verbatim from the Anthropic adaptive-thinking docs:
+      //   "Available on Claude Mythos Preview, Claude Opus 4.7,
+      //    Claude Opus 4.6, and Claude Sonnet 4.6."
+      // Sending `thinking: {type: "adaptive"}` to claude-haiku-4-5 returns
+      // a 400 with "adaptive thinking is not supported on this model"
+      // (verified live 2026-05-06: haiku stream rejected mid-tool-loop).
+      // Other Claude models still need a `thinking` payload, but LiteLLM
+      // translates `reasoning_effort` into the legacy
+      // `thinking: {type: "enabled", budget_tokens: …}` form for them, so
+      // we omit the explicit `thinking` block here and rely on the
+      // LiteLLM-side translation.
+      const isClaudeAdaptive = ["opus-4-7", "opus-4.7", "opus-4-6", "opus-4.6", "sonnet-4-6", "sonnet-4.6"].some(
+        (v) => model.api.id.includes(v),
+      )
+      if (isClaudeAdaptive) {
         return Object.fromEntries(
           efforts.map((effort) => {
             // LiteLLM/Anthropic accepts opus-4-7 xhigh, but live probes show

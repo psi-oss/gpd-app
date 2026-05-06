@@ -1,5 +1,6 @@
 import { Match, Show, Switch, createMemo, createSignal } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
+import { Icon } from "@opencode-ai/ui/icon"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { showToast } from "@opencode-ai/ui/toast"
 import { useLanguage } from "@/context/language"
@@ -149,6 +150,14 @@ export function TexBuildPane(props: {
   // the user sees a couple of error rows without dominating the pane; a
   // ResizeHandle at the top of the panel lets them drag it taller/shorter.
   const [errorsHeight, setErrorsHeight] = createSignal(220)
+  // Whether the errors/warnings panel is collapsed to just its header bar.
+  // hyperref / pdflatex emit cosmetic warnings on most documents (e.g.
+  // math in section titles → "Token not allowed in a PDF string"), and a
+  // permanent ~2-row strip at the bottom of the preview is annoying when
+  // the user knows the warning is benign. Collapsing keeps the row counts
+  // visible without consuming pane real estate.
+  const [errorsCollapsed, setErrorsCollapsed] = createSignal(false)
+  const ERRORS_HEADER_PX = 32
 
   return (
     <div class="flex flex-col h-full overflow-hidden" data-component="tex-build-pane">
@@ -211,38 +220,96 @@ export function TexBuildPane(props: {
         </Match>
 
         <Match when={entry()}>
-          {(e) => (
-            <div class="flex-1 min-h-0 flex flex-col">
-              <Show when={hasPdf()}>
-                <div class="flex-1 min-h-0">
-                  <TexPdfViewer pdfPath={e().result.pdfPath!} />
+          {(e) => {
+            const errorCount = () => e().result.errors.length
+            const warningCount = () => e().result.warnings.length
+            const hasDiagnostics = () => errorCount() + warningCount() > 0
+            const summaryText = () => {
+              if (errorCount() === 0 && warningCount() === 0) {
+                return language.t("tex.error.none")
+              }
+              const parts: string[] = []
+              if (errorCount() > 0) {
+                parts.push(`${language.t("tex.error.errors")} (${errorCount()})`)
+              }
+              if (warningCount() > 0) {
+                parts.push(`${language.t("tex.error.warnings")} (${warningCount()})`)
+              }
+              return parts.join(" · ")
+            }
+            return (
+              <div class="flex-1 min-h-0 flex flex-col">
+                <Show when={hasPdf()}>
+                  <div class="flex-1 min-h-0">
+                    <TexPdfViewer pdfPath={e().result.pdfPath!} />
+                  </div>
+                  <Show when={!errorsCollapsed()}>
+                    <ResizeHandle
+                      direction="vertical"
+                      edge="start"
+                      size={errorsHeight()}
+                      min={48}
+                      max={2000}
+                      onResize={setErrorsHeight}
+                      class="cursor-row-resize"
+                    />
+                  </Show>
+                </Show>
+                <div
+                  class="shrink-0 border-t border-border-weaker-base flex flex-col overflow-hidden"
+                  style={
+                    hasPdf()
+                      ? errorsCollapsed()
+                        ? { height: `${ERRORS_HEADER_PX}px` }
+                        : { height: `${errorsHeight()}px` }
+                      : { "max-height": "100%" }
+                  }
+                >
+                  <button
+                    type="button"
+                    class="shrink-0 flex items-center justify-between gap-2 px-3 text-12-regular text-text-weak hover:bg-background-weaker-base cursor-pointer text-left"
+                    style={{ height: `${ERRORS_HEADER_PX}px` }}
+                    onClick={() => setErrorsCollapsed(!errorsCollapsed())}
+                    aria-expanded={!errorsCollapsed()}
+                    title={
+                      errorsCollapsed()
+                        ? language.t("tex.build.diagnostics.expand")
+                        : language.t("tex.build.diagnostics.collapse")
+                    }
+                  >
+                    <span
+                      class="truncate"
+                      classList={{
+                        "text-text-error": errorCount() > 0,
+                      }}
+                    >
+                      {summaryText()}
+                    </span>
+                    <Icon
+                      name="chevron-down"
+                      size="small"
+                      class={errorsCollapsed() ? "rotate-180" : ""}
+                    />
+                  </button>
+                  <Show when={!errorsCollapsed()}>
+                    <div class="flex-1 min-h-0 overflow-auto">
+                      <Show when={hasDiagnostics()}>
+                        <TexErrorList
+                          errors={e().result.errors}
+                          warnings={e().result.warnings}
+                          onNavigate={(diag) => {
+                            onDiagnosticClick(diag)
+                            // Also ensure the file is opened in the tab bar.
+                            if (diag.file) file.load(diag.file).catch(() => {})
+                          }}
+                        />
+                      </Show>
+                    </div>
+                  </Show>
                 </div>
-                <ResizeHandle
-                  direction="vertical"
-                  edge="start"
-                  size={errorsHeight()}
-                  min={48}
-                  max={2000}
-                  onResize={setErrorsHeight}
-                  class="cursor-row-resize"
-                />
-              </Show>
-              <div
-                class="shrink-0 border-t border-border-weaker-base overflow-auto"
-                style={hasPdf() ? { height: `${errorsHeight()}px` } : { "max-height": "100%" }}
-              >
-                <TexErrorList
-                  errors={e().result.errors}
-                  warnings={e().result.warnings}
-                  onNavigate={(diag) => {
-                    onDiagnosticClick(diag)
-                    // Also ensure the file is opened in the tab bar.
-                    if (diag.file) file.load(diag.file).catch(() => {})
-                  }}
-                />
               </div>
-            </div>
-          )}
+            )
+          }}
         </Match>
       </Switch>
     </div>

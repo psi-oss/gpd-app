@@ -1906,6 +1906,46 @@ export namespace Provider {
               timeout: false,
             })
 
+            // Capture non-2xx responses for any GPD POST so we can chase
+            // intermittent "AI service rejected the request" reports.
+            // Researchers who hit a 4xx during dogfood pass us the dump
+            // file; we never see the response body otherwise because the
+            // AI SDK consumes the stream and the classifier only sees a
+            // hash of the message. Fires only on `model.providerID ===
+            // "gpd"` POSTs and only when the upstream returned a non-2xx,
+            // so happy-path traffic incurs no overhead.
+            try {
+              if (
+                model.providerID === "gpd" &&
+                opts.method === "POST" &&
+                res.status >= 400 &&
+                typeof opts.body === "string"
+              ) {
+                const cloned = res.clone()
+                const ts = Date.now()
+                const stem = `/tmp/gpd-error-${ts}-${Math.random().toString(36).slice(2, 8)}`
+                const fs = require("fs")
+                fs.writeFileSync(`${stem}.req.json`, opts.body)
+                cloned
+                  .text()
+                  .then((text: string) => {
+                    try {
+                      fs.writeFileSync(`${stem}.res.txt`, text)
+                      log.warn("gpd error response captured", {
+                        status: res.status,
+                        modelID: model.id,
+                        apiModelID: model.api.id,
+                        path: requestPath(input),
+                        reqFile: `${stem}.req.json`,
+                        resFile: `${stem}.res.txt`,
+                        bodyBytes: text.length,
+                      })
+                    } catch {}
+                  })
+                  .catch(() => {})
+              }
+            } catch {}
+
             if (!chunkAbortCtl) return res
             return wrapSSE(res, chunkTimeout, chunkAbortCtl)
           }

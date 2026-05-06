@@ -11,7 +11,7 @@ import { useFileComponent } from "../context/file"
 import { Binary } from "@opencode-ai/util/binary"
 import { getDirectory, getFilename } from "@opencode-ai/util/path"
 import { classifyError } from "@opencode-ai/util/classify-error"
-import { createEffect, createMemo, createSignal, For, on, ParentProps, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { AssistantParts, Message, MessageDivider, PART_MAPPING, type UserActions } from "./message-part"
@@ -368,11 +368,61 @@ export function SessionTurn(
   })
   const assistantVisible = createMemo(() => assistantDerived().visible)
   const reasoningHeading = createMemo(() => assistantDerived().reason)
+
+  // True iff some assistant part is currently streaming tokens. Used so the
+  // standalone "Thinking" indicator yields the floor while text/reasoning is
+  // visibly arriving, but reappears in the silent compute gaps that follow
+  // (e.g. gpt-5.5-pro / gpt-5.4-pro stream a reasoning summary, then think
+  // silently for minutes before the answer chunk lands; without this, the
+  // reasoning summary completes, "Thinking" hides, and the user sees a
+  // motionless screen). Same applies to subsequent assistant turns after a
+  // tool completes — model is deciding what to do next, no part is yet
+  // accumulating tokens, but we should still show progress.
+  const hasStreamingPart = createMemo(() => {
+    const show = showReasoningSummaries()
+    for (const message of assistantMessages()) {
+      for (const part of list(data.store.part?.[message.id], emptyParts)) {
+        if (partState(part, show) !== "visible") continue
+        if (part.type === "text" && part.time?.end === undefined) return true
+        if (part.type === "reasoning" && part.time?.end === undefined) return true
+        if (part.type === "tool") {
+          const status = part.state?.status
+          if (status === "pending" || status === "running") return true
+        }
+      }
+    }
+    return false
+  })
   const showThinking = createMemo(() => {
     if (!working() || !!error()) return false
     if (status().type === "retry") return false
-    if (showReasoningSummaries()) return assistantVisible() === 0
-    return true
+    return !hasStreamingPart()
+  })
+
+  // Wall-time elapsed since the user message that opened this turn. Tied to
+  // a 1Hz tick that runs only while we're actually working, so completed
+  // turns don't keep re-rendering. Resets implicitly per-turn since `now`
+  // recomputes against the user message's `time.created`.
+  const [nowMs, setNowMs] = createSignal(Date.now())
+  createEffect(() => {
+    if (!working()) return
+    setNowMs(Date.now())
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000)
+    onCleanup(() => window.clearInterval(id))
+  })
+  const turnStartMs = createMemo(() => {
+    const t = message()?.time.created
+    return typeof t === "number" ? t : undefined
+  })
+  const elapsedLabel = createMemo(() => {
+    const start = turnStartMs()
+    if (typeof start !== "number") return undefined
+    const ms = Math.max(0, nowMs() - start)
+    if (ms < 1000) return undefined
+    const totalSec = Math.floor(ms / 1000)
+    const m = Math.floor(totalSec / 60)
+    const s = totalSec % 60
+    return m > 0 ? `${m}:${s.toString().padStart(2, "0")}` : `${s}s`
   })
 
   const autoScroll = createAutoScroll({
@@ -421,6 +471,17 @@ export function SessionTurn(
               <Show when={showThinking()}>
                 <div data-slot="session-turn-thinking">
                   <TextShimmer text={i18n.t("ui.sessionTurn.status.thinking")} />
+                  <Show when={elapsedLabel()}>
+                    {(label) => (
+                      <span
+                        class="session-turn-thinking-elapsed"
+                        title={i18n.t("ui.sessionTurn.elapsed.tooltip")}
+                        aria-label={i18n.t("ui.sessionTurn.elapsed.tooltip")}
+                      >
+                        {label()}
+                      </span>
+                    )}
+                  </Show>
                   <Show when={!showReasoningSummaries()}>
                     <TextReveal
                       text={reasoningHeading()}

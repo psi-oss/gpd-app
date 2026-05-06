@@ -69,6 +69,15 @@
     font-weight: var(--font-weight-regular);
   }
 
+  .session-turn-thinking-elapsed {
+    flex: 0 0 auto;
+    color: var(--text-weaker);
+    font-weight: var(--font-weight-regular);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85em;
+    user-select: none;
+  }
+
   .error-card {
     color: var(--text-on-critical-base);
     max-height: 240px;

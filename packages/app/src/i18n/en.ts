@@ -1223,6 +1223,8 @@ export const dict = {
   "tex.build.showLog": "Show log",
   "tex.build.maximize": "Maximize",
   "tex.build.restoreSource": "Show source",
+  "tex.build.diagnostics.collapse": "Collapse diagnostics",
+  "tex.build.diagnostics.expand": "Expand diagnostics",
   "tex.build.status.ready": "Ready",
   "tex.build.status.compiling": "Rendering…",
   "tex.build.status.error": "Rendering failed",
