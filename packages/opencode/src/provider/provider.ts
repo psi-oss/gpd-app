@@ -1806,21 +1806,43 @@ export namespace Provider {
               }
             }
 
-            // claude-opus-4-7 ships with `thinking.display = "omitted"` as
-            // its default, which is a silent change from claude-opus-4-6's
-            // `"summarized"` default — thinking blocks come back with an
-            // empty `thinking` field and a populated `signature`. The
-            // `@ai-sdk/openai-compatible` driver gates reasoning-event
-            // emission on a truthy check of `delta.reasoning_content`, so
-            // the empty string drops every reasoning event and the UI
-            // never renders the panel. Setting `thinking.display` to
-            // `"summarized"` restores Anthropic's plaintext thinking
-            // summaries (per the official adaptive-thinking docs at
-            // https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking).
-            // Anthropic confirms full plaintext chain-of-thought is never
-            // available on Claude 4 — only the summarized variant — so
-            // `"summarized"` is the strongest visible setting we can ask
-            // for. If the body already specifies `display`, leave it.
+            // claude-opus-4-7 needs three coordinated tweaks to surface
+            // visible thinking through the GPD UI. Scoped to the GPD
+            // chat-completions path; other models untouched.
+            //
+            // (1) `thinking.display = "summarized"`. opus-4-7's default
+            //     silently flipped to `"omitted"` (vs opus-4-6's
+            //     `"summarized"`); thinking blocks come back with empty
+            //     `thinking` text. The `@ai-sdk/openai-compatible` driver
+            //     gates reasoning events on truthy
+            //     `delta.reasoning_content`, so empty drops everything
+            //     and the UI never renders a reasoning part. Setting
+            //     `display: "summarized"` restores Anthropic's plaintext
+            //     thinking summaries — see
+            //     https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking.
+            //
+            // (2) Promote xhigh → max. opus-4-7's adaptive scheduler
+            //     declines to think on non-computational ("think about X",
+            //     "explore Y") prompts at xhigh in practice — verified
+            //     live 2026-05-05. Only `max` reliably forces a thinking
+            //     commit for those prompts; adaptive still chooses how
+            //     many tokens to actually spend, so cheap prompts stay
+            //     cheap. Tiers below xhigh stay as-is so users who
+            //     intentionally pick low/medium/high keep that behavior.
+            //
+            // (3) Re-order JSON keys so `thinking` is the LAST top-level
+            //     field. LiteLLM v1.83.14's `map_openai_params` iterates
+            //     `non_default_params` in dict-insertion order; on the
+            //     `reasoning_effort` branch it OVERWRITES
+            //     `optional_params["thinking"]` with
+            //     `AnthropicThinkingParam(type="adaptive")` — no
+            //     `display` key — clobbering our `display:"summarized"`
+            //     if `reasoning_effort` is processed after `thinking`.
+            //     Forcing `thinking` to the last position means LiteLLM
+            //     processes `reasoning_effort` first (sets
+            //     `output_config.effort`) and then re-applies our
+            //     `thinking` payload intact (display preserved). See
+            //     `litellm/llms/anthropic/chat/transformation.py:1088-1108`.
             if (
               model.providerID === "gpd" &&
               model.api.id === "claude-opus-4-7" &&
@@ -1830,11 +1852,41 @@ export namespace Provider {
             ) {
               const body = JSON.parse(opts.body as string)
               const existing = body.thinking
-              if (!existing || typeof existing !== "object") {
-                body.thinking = { type: "adaptive", display: "summarized" }
-              } else if (existing.display === undefined) {
-                body.thinking = { ...existing, display: "summarized" }
+              const finalThinking =
+                !existing || typeof existing !== "object"
+                  ? { type: "adaptive", display: "summarized" }
+                  : existing.display === undefined
+                    ? { ...existing, display: "summarized" }
+                    : existing
+              if (body.reasoning_effort === "xhigh") {
+                body.reasoning_effort = "max"
               }
+              if (body.output_config?.effort === "xhigh") {
+                body.output_config = { ...body.output_config, effort: "max" }
+              }
+              // Anthropic's `max_tokens` is a COMBINED thinking + output
+              // budget. opus-4-7 at `effort: "max"` thinks with "no
+              // constraints on thinking depth" (Anthropic docs, verbatim),
+              // so the default 32k combined cap can be entirely consumed
+              // by the thinking phase, producing zero visible output.
+              // Verified 2026-05-05: dumped body showed `max_tokens:
+              // 32000` + `effort: max`, model thought to budget exhaustion
+              // mid-derivation and never emitted the answer. Bump the cap
+              // to opus-4-7's full 128k output ceiling at max effort so
+              // the answer always has room to land. Lower tiers keep the
+              // standard cap — they don't blow through 32k as easily.
+              if (
+                body.reasoning_effort === "max" &&
+                typeof body.max_tokens === "number" &&
+                body.max_tokens < 128_000
+              ) {
+                body.max_tokens = 128_000
+              }
+              // Force `thinking` into the last position so LiteLLM's
+              // dict-iteration sees it after `reasoning_effort` and our
+              // display value survives the translation. See (3) above.
+              delete body.thinking
+              body.thinking = finalThinking
               opts.body = JSON.stringify(body)
             }
 

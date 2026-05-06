@@ -423,12 +423,9 @@ export namespace ProviderTransform {
     // default below if no override is registered for this id.
     if (model.providerID === "gpd") {
       const efforts = gpdReasoningEffortsFor(model.api.id) ?? WIDELY_SUPPORTED_EFFORTS
-      // Anthropic-family GPD models go through LiteLLM's
-      // thinking.type=adaptive + output_config.effort path. OpenAI-family
-      // GPD models accept reasoning_effort as a flat field. The
-      // openai-compatible AI SDK driver maps `reasoningEffort` to the
-      // OpenAI-style param; LiteLLM rewrites server-side per its
-      // adapter, so a uniform `reasoningEffort` here works for both.
+      // Anthropic-family GPD models go through LiteLLM's adaptive-thinking
+      // path. OpenAI-family GPD models accept reasoning_effort as a flat
+      // field.
       //
       // GPT-5.x reasoning models route through `@ai-sdk/openai` /
       // `.responses()` (see gpd entry in custom() + npm override in
@@ -437,6 +434,31 @@ export namespace ProviderTransform {
       // chunks — without this the Responses API call returns a reasoning
       // block with an empty summary array and the UI shows nothing.
       const usesResponses = gpdUsesResponsesApi(model.api.id)
+      const isClaude = model.api.id.startsWith("claude-")
+      if (isClaude) {
+        return Object.fromEntries(
+          efforts.map((effort) => {
+            // LiteLLM/Anthropic accepts opus-4-7 xhigh, but live probes show
+            // it streams no reasoning_content for prompts where max does.
+            // Preserve saved xhigh selections, but send the only tier that
+            // reliably produces visible summaries.
+            const effectiveEffort = model.api.id === "claude-opus-4-7" && effort === "xhigh" ? "max" : effort
+            return [
+              effort,
+              {
+                thinking: {
+                  type: "adaptive",
+                  ...(model.api.id === "claude-opus-4-7" ? { display: "summarized" } : {}),
+                },
+                reasoningEffort: effectiveEffort,
+                output_config: {
+                  effort: effectiveEffort,
+                },
+              },
+            ]
+          }),
+        )
+      }
       return Object.fromEntries(
         efforts.map((effort) => [
           effort,
@@ -446,7 +468,7 @@ export namespace ProviderTransform {
     }
 
     const id = model.id.toLowerCase()
-    const isAnthropicAdaptive = ["opus-4-6", "opus-4.6", "sonnet-4-6", "sonnet-4.6"].some((v) =>
+    const isAnthropicAdaptive = ["opus-4-7", "opus-4.7", "opus-4-6", "opus-4.6", "sonnet-4-6", "sonnet-4.6"].some((v) =>
       model.api.id.includes(v),
     )
     const adaptiveEfforts = ["low", "medium", "high", "max"]

@@ -2499,6 +2499,65 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@ai-sdk/openai-compatible", () => {
+    test("GPD opus 4.7 promotes xhigh to max for visible adaptive thinking", () => {
+      const model = createMockModel({
+        id: "gpd/claude-opus-4-7",
+        providerID: "gpd",
+        api: {
+          id: "claude-opus-4-7",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.xhigh).toEqual({
+        thinking: {
+          type: "adaptive",
+          display: "summarized",
+        },
+        reasoningEffort: "max",
+        output_config: {
+          effort: "max",
+        },
+      })
+      expect(result.max).toEqual({
+        thinking: {
+          type: "adaptive",
+          display: "summarized",
+        },
+        reasoningEffort: "max",
+        output_config: {
+          effort: "max",
+        },
+      })
+    })
+
+    test("GPD sonnet 4.6 uses adaptive thinking without xhigh promotion", () => {
+      const model = createMockModel({
+        id: "gpd/claude-sonnet-4-6",
+        providerID: "gpd",
+        api: {
+          id: "claude-sonnet-4-6",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      expect(Object.keys(result)).toEqual(["low", "medium", "high"])
+      expect(result.high).toEqual({
+        thinking: {
+          type: "adaptive",
+        },
+        reasoningEffort: "high",
+        output_config: {
+          effort: "high",
+        },
+      })
+    })
+
     test("returns WIDELY_SUPPORTED_EFFORTS with reasoningEffort", () => {
       const model = createMockModel({
         id: "custom-provider/custom-model",
