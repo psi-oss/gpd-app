@@ -72,7 +72,18 @@ export namespace SessionProcessor {
     needsCompaction: boolean
     currentText: MessageV2.TextPart | undefined
     reasoningMap: Record<string, MessageV2.ReasoningPart>
+    /**
+     * Tracks the last time a streaming part's accumulated text was persisted
+     * via `updatePart`. Without periodic persistence, only `reasoning-start` /
+     * `text-start` (text="") and `reasoning-end` / `text-end` (final text) are
+     * persisted to the DB, while in-flight deltas only ride a transient bus
+     * channel. Clients that re-fetch messages mid-stream (navigating away and
+     * back) would then miss every delta they were not subscribed for.
+     */
+    partFlush: Record<string, number>
   }
+
+  const STREAM_PERSIST_INTERVAL_MS = 500
 
   type StreamEvent = Event
 
@@ -122,6 +133,7 @@ export namespace SessionProcessor {
           needsCompaction: false,
           currentText: undefined,
           reasoningMap: {},
+          partFlush: {},
         }
         let aborted = false
         let retrySafe = true
@@ -247,6 +259,15 @@ export namespace SessionProcessor {
                 field: "text",
                 delta: value.text,
               })
+              {
+                const part = ctx.reasoningMap[value.id]
+                const last = ctx.partFlush[part.id] ?? 0
+                const now = Date.now()
+                if (now - last >= STREAM_PERSIST_INTERVAL_MS) {
+                  ctx.partFlush[part.id] = now
+                  yield* session.updatePart(part)
+                }
+              }
               return
 
             case "reasoning-end":
@@ -255,6 +276,7 @@ export namespace SessionProcessor {
               ctx.reasoningMap[value.id].time = { ...ctx.reasoningMap[value.id].time, end: Date.now() }
               if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
               yield* session.updatePart(ctx.reasoningMap[value.id])
+              delete ctx.partFlush[ctx.reasoningMap[value.id].id]
               delete ctx.reasoningMap[value.id]
               return
 
@@ -429,6 +451,14 @@ export namespace SessionProcessor {
                 field: "text",
                 delta: value.text,
               })
+              {
+                const last = ctx.partFlush[ctx.currentText.id] ?? 0
+                const now = Date.now()
+                if (now - last >= STREAM_PERSIST_INTERVAL_MS) {
+                  ctx.partFlush[ctx.currentText.id] = now
+                  yield* session.updatePart(ctx.currentText)
+                }
+              }
               return
 
             case "text-end":
@@ -449,6 +479,7 @@ export namespace SessionProcessor {
               }
               if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
               yield* session.updatePart(ctx.currentText)
+              delete ctx.partFlush[ctx.currentText.id]
               ctx.currentText = undefined
               return
 
@@ -492,6 +523,7 @@ export namespace SessionProcessor {
             })
           }
           ctx.reasoningMap = {}
+          ctx.partFlush = {}
 
           yield* Effect.forEach(
             Object.values(ctx.toolcalls),
@@ -546,6 +578,7 @@ export namespace SessionProcessor {
             yield* Effect.gen(function* () {
               ctx.currentText = undefined
               ctx.reasoningMap = {}
+              ctx.partFlush = {}
               const stream = llm.stream(streamInput)
 
               yield* stream.pipe(
