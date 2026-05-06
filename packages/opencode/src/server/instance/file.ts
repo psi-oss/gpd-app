@@ -305,5 +305,51 @@ export const FileRoutes = lazy(() =>
         await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "change" }).catch(() => {})
         return c.json(result, 200)
       },
+    )
+    .post(
+      "/file/delete",
+      describeRoute({
+        summary: "Delete file",
+        description:
+          "Remove a file under the project directory using an expected content hash for optimistic concurrency. " +
+          "Direct user delete: not gated by the agent permission system (parallels /file/write).",
+        operationId: "file.delete",
+        responses: {
+          200: {
+            description: "File deleted",
+            content: {
+              "application/json": {
+                schema: resolver(File.DeleteResult),
+              },
+            },
+          },
+          409: {
+            description: "Conflict: current content hash no longer matches expectedHash",
+            content: {
+              "application/json": {
+                schema: resolver(File.DeleteConflict),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "json",
+        z.object({
+          path: z.string(),
+          expectedHash: z.string(),
+        }),
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const result = await AppRuntime.runPromise(File.Service.use((svc) => svc.delete(body)))
+        if (!result.ok) {
+          return c.json(result, 409)
+        }
+        const full = path.resolve(Instance.directory, body.path)
+        await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "unlink" }).catch(() => {})
+        return c.json(result, 200)
+      },
     ),
 )

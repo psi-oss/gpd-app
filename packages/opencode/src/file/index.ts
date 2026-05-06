@@ -130,6 +130,27 @@ export namespace File {
     })
   export type WriteConflict = z.infer<typeof WriteConflict>
 
+  export const DeleteResult = z
+    .object({
+      ok: z.literal(true),
+    })
+    .meta({
+      ref: "FileDeleteResult",
+    })
+  export type DeleteResult = z.infer<typeof DeleteResult>
+
+  export const DeleteConflict = z
+    .object({
+      ok: z.literal(false),
+      reason: z.literal("conflict"),
+      currentContent: z.string(),
+      currentHash: z.string(),
+    })
+    .meta({
+      ref: "FileDeleteConflict",
+    })
+  export type DeleteConflict = z.infer<typeof DeleteConflict>
+
   const log = Log.create({ service: "file" })
 
   const binary = new Set([
@@ -400,6 +421,7 @@ export namespace File {
       expectedHash: string
       content: string
     }) => Effect.Effect<WriteResult | WriteConflict>
+    readonly delete: (input: { path: string; expectedHash: string }) => Effect.Effect<DeleteResult | DeleteConflict>
   }
 
   export class Service extends Context.Service<Service, Interface>()("@opencode/File") {}
@@ -843,8 +865,40 @@ export namespace File {
         } satisfies WriteResult
       })
 
+      const remove: Interface["delete"] = Effect.fn("File.delete")(function* (input) {
+        const full = path.resolve(Instance.directory, input.path)
+        const inside = (item: string) => {
+          const rel = path.relative(Instance.directory, item)
+          return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+        }
+
+        if (!inside(full)) throw new Error("Access denied: path escapes project directory")
+
+        const stat = yield* appFs.stat(full).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!stat) throw new Error(`File not found: ${input.path}`)
+        if (stat.type === "Directory") throw new Error(`Path is a directory, not a file: ${input.path}`)
+
+        const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+        const currentHash = hash(bytes)
+        if (currentHash !== input.expectedHash) {
+          return {
+            ok: false as const,
+            reason: "conflict" as const,
+            currentContent: Buffer.from(bytes).toString("utf8"),
+            currentHash,
+          } satisfies DeleteConflict
+        }
+
+        yield* Effect.tryPromise({
+          try: () => unlink(full),
+          catch: (cause) => cause,
+        }).pipe(Effect.orDie)
+
+        return { ok: true as const } satisfies DeleteResult
+      })
+
       log.info("init")
-      return Service.of({ init, status, read, list, search, editLine, write })
+      return Service.of({ init, status, read, list, search, editLine, write, delete: remove })
     }),
   )
 
@@ -891,5 +945,9 @@ export namespace File {
     content: string
   }): Promise<WriteResult | WriteConflict> {
     return runPromise((svc) => svc.write(input))
+  }
+
+  export async function remove(input: { path: string; expectedHash: string }): Promise<DeleteResult | DeleteConflict> {
+    return runPromise((svc) => svc.delete(input))
   }
 }
