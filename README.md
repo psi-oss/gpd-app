@@ -4,9 +4,15 @@ A physics research workspace by [PSI](https://psi.inc).
 
 ---
 
+## Installation video 
+
 https://github.com/user-attachments/assets/c112c72e-0018-4dce-9048-50cd1d296feb
 
 https://github.com/user-attachments/assets/24e8d175-8f6d-41b5-92e0-56f6a3e8d1ee
+
+## Tutorial
+
+https://github.com/user-attachments/assets/61d3d427-885f-4257-8e73-f49c54ccf023
 
 ## Install
 
