@@ -59,6 +59,20 @@ async def _get_pool() -> asyncpg.Pool:
         return _pool
 
 
+async def close_pool() -> None:
+    """Close and reset the module-global pool.
+
+    Production keeps this pool for the worker lifetime. Tests create a fresh
+    event loop per async test, so they must not reuse an asyncpg pool opened
+    on a previous loop.
+    """
+    global _pool
+    pool = _pool
+    _pool = None
+    if pool is not None:
+        await pool.close()
+
+
 async def insert_acceptance(
     *,
     user_id: str,

@@ -93,9 +93,13 @@ async def migrated_db(postgres_url):
 @pytest.fixture(autouse=True)
 async def _clear_consent_cache():
     """Each test gets a cold consent-gate cache so TTL state from the
-    previous test can't leak."""
+    previous test can't leak. Also reset the TOS DB pool because pytest's
+    default function-scoped event loops cannot share asyncpg pools."""
     from gpd_consent import cache
+    from gpd_tos import db
 
+    await db.close_pool()
     await cache.clear()
     yield
     await cache.clear()
+    await db.close_pool()

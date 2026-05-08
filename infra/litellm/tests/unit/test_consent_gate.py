@@ -136,7 +136,7 @@ async def test_cache_hit_avoids_db_query(migrated_db, monkeypatch):
     async def _boom(_):
         raise RuntimeError("db should not be called on cache hit")
 
-    monkeypatch.setattr(consent_db, "is_revoked", _boom)
+    monkeypatch.setattr(consent_db, "compute_consent_state", _boom)
 
     await _run_gate(uid)  # still passes — cache hit
 
@@ -149,7 +149,7 @@ async def test_db_outage_fails_closed(migrated_db, monkeypatch):
     async def _boom(_):
         raise ConnectionError("audit DB unreachable")
 
-    monkeypatch.setattr(consent_db, "is_revoked", _boom)
+    monkeypatch.setattr(consent_db, "compute_consent_state", _boom)
 
     with pytest.raises(HTTPException) as exc:
         await _run_gate(uid)
