@@ -1,5 +1,22 @@
 # GPD Desktop App — Changes Log
 
+## Remove `gpt-5.5-pro` and `gpt-5.4-pro` from picker + bootstrap config (2026-05-08)
+
+**Date:** 2026-05-08
+**Changes:**
+- `packages/opencode/src/provider/gpd-models.ts`: dropped both pro entries from `GPD_MODEL_METADATA`, `GPD_MODEL_REASONING_EFFORTS`, and `GPD_RESPONSES_API_MODELS`. Added both ids to `GPD_MODEL_HIDDEN_IDS` so the resolver short-circuits if the LiteLLM proxy still advertises them in `/v1/models` while the `gpd-chat` access group is being purged on Railway.
+- `packages/desktop/src-tauri/src/gpd_setup.rs`: removed both pro models from the embedded fallback config (the inline `format!` JSON and the `serde_json::json!` block); updated the bundled-config integration test from 16 → 14 models and dropped the pro ids from the assertion array.
+- `packages/opencode/test/provider/gpd-models.test.ts`: inverted the previous "metadata stays present" test into a "stays removed" guard so a future regression fails loudly.
+- `packages/app/src/context/local.test.ts`: swapped pro fixture ids for `gpt-5.5` / `gpt-5.4`.
+- `packages/opencode/script/gpd-full-payload-probe.ts`, `.github/workflows/gpd-model-payload-probe.yml`: default model lists no longer include the pro variants.
+- `packages/opencode/src/provider/transform.ts`, `packages/ui/src/components/session-turn.tsx`: comment text mentioning pro variants reworded.
+- `docs/GPD_DISTRIBUTION.md`: model count 16 → 14, table rows removed, removal-rationale callout added.
+**Why:**
+Trace review of 2026-05-07/08 sessions found `gpt-5.5-pro(xhigh)` accounted for 87% of LiteLLM spend ($1,867 of $2,151 over 14 days) at a 0% prompt-cache hit rate, while non-pro variants ran 92–97% cache-hit on the same task families. The pro tier is also implicated in two empty-terminator failures on Ning Bao's bootstrap session (5/7 + 5/8 — sessB confirmed as a 401 because his key allow-list lacked `gpt-5.5-pro`, but the picker offered it anyway via stale `/v1/models` cache). Removing the variants from the picker eliminates both the cost lever and the failure surface in one move.
+**Out-of-scope (server-side cleanup tracked separately):**
+- The LiteLLM proxy DB rows for `gpt-5.5-pro` and `gpt-5.4-pro` in the `all-models` and `gpd-chat` access groups still need to be deleted via `/model/delete` (with master key) so `/v1/models` stops advertising them. The `GPD_MODEL_HIDDEN_IDS` shield protects desktop users until that lands.
+- Active session resumes that hardcoded `gpt-5.5-pro` (e.g. Sergio's mid-flight phase plans) will need a model-id remap on resume; planner artifacts that pinned the pro id should be re-pointed at `gpt-5.5`.
+
 ## Sidecar Watchdog in Release + Native Windows ARM64 Bundle (2026-04-29)
 
 **Date:** 2026-04-29

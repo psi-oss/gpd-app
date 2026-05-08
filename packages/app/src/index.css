@@ -1,6 +1,23 @@
 @import "@opencode-ai/ui/styles/tailwind";
 
 @layer components {
+  /* TOS scroll-hint attention pulse: fires when a user clicks a checkbox
+     before scrolling the corresponding document. Brief horizontal shake
+     plus a transient color flip so the hint visibly "pops" rather than
+     just sitting there ignored. Triggered by class swap in tos-section.tsx. */
+  @keyframes gpd-tos-attention {
+    0%, 100% { transform: translateX(0); }
+    20%      { transform: translateX(-4px); }
+    40%      { transform: translateX(4px); }
+    60%      { transform: translateX(-3px); }
+    80%      { transform: translateX(2px); }
+  }
+  .gpd-tos-pulse {
+    animation: gpd-tos-attention 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    color: var(--text-danger);
+    font-weight: var(--font-weight-medium);
+  }
+
   @keyframes session-progress-whip {
     0% {
       clip-path: inset(0 100% 0 0 round 999px);

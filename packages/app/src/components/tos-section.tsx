@@ -1,4 +1,4 @@
-import { JSX, Show, createSignal } from "solid-js"
+import { JSX, Show, createEffect, createSignal } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { Checkbox } from "@opencode-ai/ui/checkbox"
 import { useLanguage } from "@/context/language"
@@ -95,6 +95,35 @@ export function TosSection(props: {
   const [agreedPrivacy, setAgreedPrivacy] = createSignal(false)
   const [scrolledTos, setScrolledTos] = createSignal(false)
   const [scrolledPrivacy, setScrolledPrivacy] = createSignal(false)
+  const [pulseTos, setPulseTos] = createSignal(0)
+  const [pulsePrivacy, setPulsePrivacy] = createSignal(0)
+  let hintTosRef: HTMLParagraphElement | undefined
+  let hintPrivacyRef: HTMLParagraphElement | undefined
+
+  // Re-trigger CSS animation each click by removing & re-adding the
+  // animation class (force reflow so the animation restarts). Without
+  // the reflow, browsers see "same class still set" and skip replay.
+  createEffect(() => {
+    const n = pulseTos()
+    if (n === 0 || !hintTosRef) return
+    hintTosRef.classList.remove("gpd-tos-pulse")
+    void hintTosRef.offsetWidth
+    hintTosRef.classList.add("gpd-tos-pulse")
+  })
+  createEffect(() => {
+    const n = pulsePrivacy()
+    if (n === 0 || !hintPrivacyRef) return
+    hintPrivacyRef.classList.remove("gpd-tos-pulse")
+    void hintPrivacyRef.offsetWidth
+    hintPrivacyRef.classList.add("gpd-tos-pulse")
+  })
+
+  function bumpTos() {
+    if (!scrolledTos()) setPulseTos((n) => n + 1)
+  }
+  function bumpPrivacy() {
+    if (!scrolledPrivacy()) setPulsePrivacy((n) => n + 1)
+  }
 
   const ready = () =>
     agreedTos() && agreedPrivacy() && scrolledTos() && scrolledPrivacy()
@@ -127,33 +156,47 @@ export function TosSection(props: {
           text={TOS_TEXT}
           onScrolledToBottom={() => setScrolledTos(true)}
         />
-        <Checkbox
-          checked={agreedTos()}
-          onChange={(checked) => setAgreedTos(checked)}
-          disabled={props.submitting || !scrolledTos()}
-        >
-          {language.t("welcome.tos.checkboxTos")}
-        </Checkbox>
+        <div class="flex flex-col gap-1" onClick={bumpTos}>
+          <Checkbox
+            checked={agreedTos()}
+            onChange={(checked) => setAgreedTos(checked)}
+            disabled={props.submitting || !scrolledTos()}
+          >
+            {language.t("welcome.tos.checkboxTos")}
+          </Checkbox>
+          <Show when={!scrolledTos()}>
+            <p
+              ref={(el) => (hintTosRef = el)}
+              class="text-13-regular text-text-strong"
+            >
+              {language.t("welcome.tos.scrollHintInline")}
+            </p>
+          </Show>
+        </div>
 
         <ScrollingTextBlock
           heading={language.t("welcome.tos.sectionPrivacy")}
           text={PRIVACY_TEXT}
           onScrolledToBottom={() => setScrolledPrivacy(true)}
         />
-        <Checkbox
-          checked={agreedPrivacy()}
-          onChange={(checked) => setAgreedPrivacy(checked)}
-          disabled={props.submitting || !scrolledPrivacy()}
-        >
-          {language.t("welcome.tos.checkboxPrivacy")}
-        </Checkbox>
+        <div class="flex flex-col gap-1" onClick={bumpPrivacy}>
+          <Checkbox
+            checked={agreedPrivacy()}
+            onChange={(checked) => setAgreedPrivacy(checked)}
+            disabled={props.submitting || !scrolledPrivacy()}
+          >
+            {language.t("welcome.tos.checkboxPrivacy")}
+          </Checkbox>
+          <Show when={!scrolledPrivacy()}>
+            <p
+              ref={(el) => (hintPrivacyRef = el)}
+              class="text-13-regular text-text-strong"
+            >
+              {language.t("welcome.tos.scrollHintInline")}
+            </p>
+          </Show>
+        </div>
       </div>
-
-      <Show when={!scrolledTos() || !scrolledPrivacy()}>
-        <p class="mt-3 w-full text-13-regular text-text-weak">
-          {language.t("welcome.tos.scrollHint")}
-        </p>
-      </Show>
 
       <Show when={props.error}>
         <p class="mt-4 w-full text-13-regular text-text-danger">{props.error}</p>

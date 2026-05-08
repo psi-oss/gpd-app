@@ -15,7 +15,7 @@ import { ToolRegistry } from "../src/tool/registry"
 import { Log } from "../src/util/log"
 
 const DEFAULT_BASE_URL = "https://litellm-production-46bb.up.railway.app/v1"
-const DEFAULT_MODELS = ["gpt-5.5", "gpt-5.5-pro"]
+const DEFAULT_MODELS = ["gpt-5.5", "gpt-5.4"]
 const DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh"]
 const DEFAULT_TOOL_COUNTS = ["0", "1", "10", "20", "40", "full"]
 const DEFAULT_STREAMS = ["true", "false"]

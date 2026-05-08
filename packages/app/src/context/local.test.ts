@@ -6,7 +6,7 @@ describe("model-selection persistence helpers", () => {
     const migrated = migrateModelSelection({
       pick: {
         __workspace__: {
-          model: { providerID: "gpd", modelID: "gpt-5.5-pro" },
+          model: { providerID: "gpd", modelID: "gpt-5.5" },
           variant: "xhigh",
         },
         ses_123: {
@@ -17,7 +17,7 @@ describe("model-selection persistence helpers", () => {
     })
 
     expect(migrated.project).toEqual({
-      model: { providerID: "gpd", modelID: "gpt-5.5-pro" },
+      model: { providerID: "gpd", modelID: "gpt-5.5" },
       variant: "xhigh",
     })
     expect(migrated.session.ses_123).toEqual({
@@ -28,23 +28,23 @@ describe("model-selection persistence helpers", () => {
 
   test("persists only model and effort changes as project-level selection", () => {
     expect(shouldPersistProjectModelSelection({ agent: "build" })).toBe(false)
-    expect(shouldPersistProjectModelSelection({ model: { providerID: "gpd", modelID: "gpt-5.4-pro" } })).toBe(true)
+    expect(shouldPersistProjectModelSelection({ model: { providerID: "gpd", modelID: "gpt-5.4" } })).toBe(true)
     expect(shouldPersistProjectModelSelection({ variant: "low" })).toBe(true)
 
     const current = {
-      model: { providerID: "gpd", modelID: "gpt-5.5-pro" },
+      model: { providerID: "gpd", modelID: "gpt-5.5" },
       variant: "medium",
     }
     expect(
       applyProjectModelSelection(current, {
-        model: { providerID: "gpd", modelID: "gpt-5.4-pro" },
+        model: { providerID: "gpd", modelID: "gpt-5.4" },
       }),
     ).toEqual({
-      model: { providerID: "gpd", modelID: "gpt-5.4-pro" },
+      model: { providerID: "gpd", modelID: "gpt-5.4" },
       variant: "medium",
     })
     expect(applyProjectModelSelection(current, { variant: "low" })).toEqual({
-      model: { providerID: "gpd", modelID: "gpt-5.5-pro" },
+      model: { providerID: "gpd", modelID: "gpt-5.5" },
       variant: "low",
     })
   })

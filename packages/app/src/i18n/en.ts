@@ -21,6 +21,7 @@ export const dict = {
   "welcome.tos.checkboxPrivacy": "I have read and agree to the Privacy Policy.",
   "welcome.tos.scrollHint":
     "Please scroll to the end of each document to continue.",
+  "welcome.tos.scrollHintInline": "Scroll to the end of the document to enable.",
   "welcome.tos.accept": "I Agree",
   "welcome.tos.back": "Back",
   "welcome.tos.cancel": "Quit",

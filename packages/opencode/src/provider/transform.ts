@@ -418,7 +418,7 @@ export namespace ProviderTransform {
 
     // GPD provider: per-model effort tier overrides empirically probed
     // against the LiteLLM proxy. Keeps the picker honest — never offers
-    // a tier that the upstream model rejects (e.g. gpt-5.4-pro 'low' or
+    // a tier that the upstream model rejects (e.g. gpt-5.x 'max', or
     // sonnet-4-6 'xhigh'). Falls back to the generic openai-compatible
     // default below if no override is registered for this id.
     if (model.providerID === "gpd") {

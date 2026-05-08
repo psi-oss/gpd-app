@@ -372,11 +372,11 @@ export function SessionTurn(
   // True iff some assistant part is currently streaming tokens. Used so the
   // standalone "Thinking" indicator yields the floor while text/reasoning is
   // visibly arriving, but reappears in the silent compute gaps that follow
-  // (e.g. gpt-5.5-pro / gpt-5.4-pro stream a reasoning summary, then think
-  // silently for minutes before the answer chunk lands; without this, the
-  // reasoning summary completes, "Thinking" hides, and the user sees a
-  // motionless screen). Same applies to subsequent assistant turns after a
-  // tool completes — model is deciding what to do next, no part is yet
+  // (e.g. reasoning models stream a summary, then think silently for
+  // minutes before the answer chunk lands; without this, the reasoning
+  // summary completes, "Thinking" hides, and the user sees a motionless
+  // screen). Same applies to subsequent assistant turns after a tool
+  // completes — model is deciding what to do next, no part is yet
   // accumulating tokens, but we should still show progress.
   const hasStreamingPart = createMemo(() => {
     const show = showReasoningSummaries()

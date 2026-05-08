@@ -83,19 +83,10 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   // the production GPD LiteLLM proxy with streaming Responses API, app-like
   // max_output_tokens, and a padded 55-tool / 174KB request body.
   "gpt-5.5": ["low", "medium", "high", "xhigh"],
-  // gpt-5.5-pro rejects `low` upstream (probed 2026-04-29):
-  //   "Supported values are: 'medium', 'high', and 'xhigh'."
-  // No `max` either. Floor=medium, like gpt-5.4-pro.
-  "gpt-5.5-pro": ["medium", "high", "xhigh"],
   // gpt-5.4 family: xhigh OK, max rejected upstream by OpenAI.
   "gpt-5.4": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-nano": ["low", "medium", "high", "xhigh"],
-  // gpt-5.4-pro rejects `low` upstream:
-  //   "Unsupported value: 'low' is not supported with the 'gpt-5.4-pro'
-  //    model. Supported values are: 'medium', 'high', and 'xhigh'."
-  // No `max` either (LiteLLM raises Unmapped). Floor=medium.
-  "gpt-5.4-pro": ["medium", "high", "xhigh"],
   // gemini-3.1-pro-preview: low/medium/high only. xhigh + max return
   // LiteLLM-side "Invalid reasoning effort" 500.
   "gemini-3.1-pro-preview": ["low", "medium", "high"],
@@ -116,7 +107,20 @@ export function gpdReasoningEffortsFor(apiId: string): readonly string[] | undef
 // Models that exist in LiteLLM and have metadata here, but are not safe to
 // expose in the desktop picker yet. Keep this list empty unless a model fails
 // the full-payload probe in `script/gpd-full-payload-probe.ts`.
-export const GPD_MODEL_HIDDEN_IDS: ReadonlySet<string> = new Set()
+//
+// 2026-05-08: gpt-5.5-pro and gpt-5.4-pro are kept hidden as a *defence*
+// against LiteLLM proxy lag. Their metadata + reasoning-effort overrides
+// were removed from this file the same day, so the picker would already
+// show empty stubs for them, but the proxy's gpd-chat access group may
+// still advertise them in `/v1/models` for some hours/days. The hidden
+// set short-circuits the resolver (`resolveGpdProviderModels`, line 323)
+// before any stub gets created, so the picker stays clean even on stale
+// proxy state. Once the proxy rows are fully purged the entries here can
+// be removed (no harm in leaving them — set lookup is O(1)).
+export const GPD_MODEL_HIDDEN_IDS: ReadonlySet<string> = new Set([
+  "gpt-5.5-pro",
+  "gpt-5.4-pro",
+])
 
 // Whether to route a GPD model through OpenAI's `/v1/responses` endpoint
 // (vs `/v1/chat/completions`). The Responses API is the only path that
@@ -134,9 +138,7 @@ const GPD_RESPONSES_API_MODELS: ReadonlySet<string> = new Set([
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.4-nano",
-  "gpt-5.4-pro",
   "gpt-5.5",
-  "gpt-5.5-pro",
   "gpt-5.3-codex",
 ])
 
@@ -201,15 +203,6 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 5, output: 30, cache_read: 0.5 },
   },
-  "gpt-5.5-pro": {
-    name: "GPT 5.5 Pro",
-    tool_call: true,
-    reasoning: true,
-    attachment: true,
-    temperature: true,
-    limit: { context: 1_050_000, output: 128_000 },
-    cost: { input: 30, output: 180 },
-  },
   "gpt-5.4": {
     name: "GPT 5.4",
     tool_call: true,
@@ -236,15 +229,6 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     temperature: true,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 0.2, output: 1.25, cache_read: 0.02 },
-  },
-  "gpt-5.4-pro": {
-    name: "GPT 5.4 Pro",
-    tool_call: true,
-    reasoning: true,
-    attachment: true,
-    temperature: true,
-    limit: { context: 1_050_000, output: 128_000 },
-    cost: { input: 30, output: 180 },
   },
   "gpt-5.3-codex": {
     name: "GPT 5.3 Codex",

@@ -24,12 +24,9 @@ gate:
   `revoked_at`. Without this gate, `/gpd/tos-revoke` would be cosmetic
   (DB row flipped, processing continues). Fails closed on audit-DB
   outage (HTTP 503).
-- **Billing gate (no route)** — `gpd_billing` registers a `CustomLogger`
-  that is inert by default. When `GPD_BILLING_ENABLED=true`, user-scoped
-  LLM/MCP/pass-through calls reserve prepaid credits from the private GPD
-  billing service before reaching providers, settle on success, and refund
-  on provider failure. The public repo contains only this thin adapter;
-  Stripe, pricing, and ledger authority stay in the private billing repo.
+- **Billing gate** — moved to the private `gpd-billing-service` repo under
+  `infra/litellm/gpd_billing`. The public desktop repo should not own
+  production prepaid-credit enforcement code.
 
 ## What's in here
 
@@ -48,8 +45,6 @@ gate:
 | `gpd_consent/consent_gate.py` | `CustomLogger.async_pre_call_hook` — 403 on revoked, 503 on DB outage |
 | `gpd_consent/db.py` | Reuses `gpd_tos.db` pool to query newest acceptance row |
 | `gpd_consent/cache.py` | Per-worker TTL dict (300s) + `invalidate(user_id)` called from `/gpd/tos-revoke` |
-| `gpd_billing/hook.py` | Optional prepaid-credit reserve/settle/refund callback |
-| `gpd_billing/client.py` | Secret-free HTTP adapter for the private billing service |
 | `tests/` | pytest + testcontainers harness for the consent gate, run via `.github/workflows/litellm-server-tests.yml` |
 
 ## Consent-gate propagation
@@ -102,14 +97,6 @@ shred -u /tmp/gpd-log-writer-key.json         # destroy local copy
    GPD_LOG_BUCKET = <the bucket name you created above>
    GPD_USER_HASH_PEPPER = <64 hex chars — generate once, NEVER rotate>
    GPD_LOG_BYTES_PER_DAY = 10737418240   # 10 GiB/day/key (optional; default)
-
-   # Optional prepaid billing gate. Leave disabled until the private billing
-   # service URL/token are provisioned in Railway or GCP Secret Manager.
-   GPD_BILLING_ENABLED = false
-   GPD_BILLING_BASE_URL = https://<private-billing-service>
-   GPD_BILLING_SERVICE_TOKEN = <private service token>
-   GPD_BILLING_TIMEOUT_SECONDS = 5
-   GPD_BILLING_EMERGENCY_BYPASS = false
 
    # Generate pepper:
    #   python -c 'import secrets; print(secrets.token_hex(32))'

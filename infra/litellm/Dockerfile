@@ -86,15 +86,11 @@ RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
 #                  reject unknown top-level keys with HTTP 400; OpenAI
 #                  Responses API tolerates. See gpd_sanitize/hook.py for
 #                  the full root-cause writeup.
-#   gpd_billing  → CustomLogger on litellm.callbacks that optionally gates
-#                  user-scoped LLM/MCP/pass-through calls with prepaid-credit
-#                  reservations. Disabled unless GPD_BILLING_ENABLED=true.
 COPY gpd_log /app/gpd_log
 COPY gpd_tos /app/gpd_tos
 COPY gpd_feedback /app/gpd_feedback
 COPY gpd_consent /app/gpd_consent
 COPY gpd_sanitize /app/gpd_sanitize
-COPY gpd_billing /app/gpd_billing
 
 # Activate hooks in order. LiteLLM iterates this comma-separated list
 # during worker startup (proxy_server.py:777-803, PR #22931) and calls
@@ -107,5 +103,5 @@ COPY gpd_billing /app/gpd_billing
 # request-body stripper with no DB dependencies; order against the
 # others doesn't matter, but we register it after gpd_consent so the
 # consent gate gets first look at the (still-untouched) body.
-ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register,gpd_sanitize.hook:register,gpd_billing.hook:register
+ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register,gpd_sanitize.hook:register
 ENV PYTHONPATH=/app

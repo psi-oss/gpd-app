@@ -84,7 +84,7 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 - **Master key:** `LITELLM_MASTER_KEY` (in Railway env vars — starts with `sk-`)
 - **Railway project:** `https://railway.com/project/0ddad766-1ee1-44ed-95c2-f8f7d9cb5515`
 
-### Models (16 total)
+### Models (14 total)
 
 | Provider | Model | LiteLLM model_name |
 |----------|-------|--------------------|
@@ -92,11 +92,9 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 | Anthropic | Claude Sonnet 4.6 | `claude-sonnet-4-6` |
 | Anthropic | Claude Haiku 4.5 | `claude-haiku-4-5` |
 | OpenAI | GPT 5.5 | `gpt-5.5` |
-| OpenAI | GPT 5.5 Pro | `gpt-5.5-pro` |
 | OpenAI | GPT-5.4 | `gpt-5.4` |
 | OpenAI | GPT-5.4 mini | `gpt-5.4-mini` |
 | OpenAI | GPT-5.4 nano | `gpt-5.4-nano` |
-| OpenAI | GPT-5.4 Pro | `gpt-5.4-pro` |
 | OpenAI | GPT-5.3 Codex | `gpt-5.3-codex` |
 | OpenAI | GPT-4.1 | `gpt-4.1` |
 | OpenAI | GPT-4.1 mini | `gpt-4.1-mini` |
@@ -104,6 +102,11 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 | Google | Gemini 3.1 Pro | `gemini-3.1-pro-preview` |
 | Google | Gemini 3 Flash | `gemini-3-flash-preview` |
 | Google | Gemini 3.1 Flash-Lite | `gemini-3.1-flash-lite-preview` |
+
+> Pro variants (`gpt-5.5-pro`, `gpt-5.4-pro`) were removed 2026-05-08.
+> Trace analysis showed they concentrated 87% of spend with a 0% prompt-cache
+> hit rate and no observed quality lift over the base tiers in our session
+> review. Re-add after that calculus changes.
 
 ### Key Management
 
