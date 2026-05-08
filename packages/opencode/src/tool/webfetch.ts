@@ -5,7 +5,18 @@ import { Tool } from "./tool"
 import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
 
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+// 25 MB cap covers >99% of arxiv ar5iv pages (typical ML/physics papers
+// decode to 2-15 MB after ungzip; 25 MB gives 2× headroom). Researchers
+// were hitting the prior 5 MB cap on long survey/textbook arxiv pages
+// (mukund-rangamani 2026-05-07: arxiv ar5iv pages -> "Response too large
+// (exceeds 5MB limit)" -> agent gives up). 25 MB is the sidecar's safe
+// transient buffer ceiling — ~50 MB is the practical max for parallel
+// fetches before OOM risk on Tauri-bundled processes. The downstream
+// `Truncate.Service` already caps every tool's `output` to 50 KB and
+// saves the full body to disk, so the LLM never sees the raw fetch —
+// the agent grep/reads the saved file. Increases here therefore don't
+// affect context-window cost, only sidecar memory.
+const MAX_RESPONSE_SIZE = 25 * 1024 * 1024 // 25 MB
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
 const MAX_TIMEOUT = 120 * 1000 // 2 minutes
 
@@ -89,30 +100,59 @@ export const WebFetchTool = Tool.define(
             Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }),
           )
 
-          // Check content length
+          // Check content length. Treat oversize as a soft warning instead of
+          // a hard failure — read the body up to MAX_RESPONSE_SIZE, append a
+          // truncation marker, and let the agent decide what to do. The
+          // downstream Truncate.Service will further trim the LLM-visible
+          // output to ~50 KB while saving the full body to disk, so the
+          // agent can grep/Read it. Returning an error here was forcing the
+          // agent to give up on legitimately useful pages (mukund-rangamani
+          // hit this on arxiv ar5iv 2026-05-07).
           const contentLength = response.headers["content-length"]
-          if (contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
-          }
-
+          const declaredLengthOverCap =
+            !!contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE
           const arrayBuffer = yield* response.arrayBuffer
-          if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
-          }
+          const oversized = arrayBuffer.byteLength > MAX_RESPONSE_SIZE
+          const truncatedBuffer = oversized
+            ? arrayBuffer.slice(0, MAX_RESPONSE_SIZE)
+            : arrayBuffer
 
           const contentType = response.headers["content-type"] || ""
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || ""
           const title = `${params.url} (${contentType})`
 
+          const truncationMarker = (() => {
+            if (!oversized && !declaredLengthOverCap) return ""
+            const capMB = (MAX_RESPONSE_SIZE / 1024 / 1024).toFixed(0)
+            const declaredBytes = contentLength
+              ? parseInt(contentLength).toLocaleString()
+              : "unknown"
+            return (
+              "\n\n[webfetch: response truncated at " +
+              capMB +
+              " MB. Original Content-Length: " +
+              declaredBytes +
+              " bytes. To get more, refetch a more specific URL or a sub-section.]\n"
+            )
+          })()
+          const truncatedMetadata = oversized
+            ? {
+                truncated: true,
+                truncationReason: "size" as const,
+                originalBytes: arrayBuffer.byteLength,
+                capBytes: MAX_RESPONSE_SIZE,
+              }
+            : ({} as const)
+
           // Check if response is an image
           const isImage = mime.startsWith("image/") && mime !== "image/svg+xml" && mime !== "image/vnd.fastbidsheet"
 
           if (isImage) {
-            const base64Content = Buffer.from(arrayBuffer).toString("base64")
+            const base64Content = Buffer.from(truncatedBuffer).toString("base64")
             return {
               title,
-              output: "Image fetched successfully",
-              metadata: {},
+              output: "Image fetched successfully" + truncationMarker,
+              metadata: truncatedMetadata,
               attachments: [
                 {
                   type: "file" as const,
@@ -123,7 +163,7 @@ export const WebFetchTool = Tool.define(
             }
           }
 
-          const content = new TextDecoder().decode(arrayBuffer)
+          const content = new TextDecoder().decode(truncatedBuffer)
 
           // Handle content based on requested format and actual content type
           switch (params.format) {
@@ -131,25 +171,25 @@ export const WebFetchTool = Tool.define(
               if (contentType.includes("text/html")) {
                 const markdown = convertHTMLToMarkdown(content)
                 return {
-                  output: markdown,
+                  output: markdown + truncationMarker,
                   title,
-                  metadata: {},
+                  metadata: truncatedMetadata,
                 }
               }
-              return { output: content, title, metadata: {} }
+              return { output: content + truncationMarker, title, metadata: truncatedMetadata }
 
             case "text":
               if (contentType.includes("text/html")) {
                 const text = yield* Effect.promise(() => extractTextFromHTML(content))
-                return { output: text, title, metadata: {} }
+                return { output: text + truncationMarker, title, metadata: truncatedMetadata }
               }
-              return { output: content, title, metadata: {} }
+              return { output: content + truncationMarker, title, metadata: truncatedMetadata }
 
             case "html":
-              return { output: content, title, metadata: {} }
+              return { output: content + truncationMarker, title, metadata: truncatedMetadata }
 
             default:
-              return { output: content, title, metadata: {} }
+              return { output: content + truncationMarker, title, metadata: truncatedMetadata }
           }
         }).pipe(Effect.orDie),
     }

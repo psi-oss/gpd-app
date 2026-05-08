@@ -78,10 +78,19 @@ RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
 #                  gpd_tos_acceptance via gpd_tos.db's asyncpg pool, so it
 #                  MUST register after gpd_tos (order of the ENV list
 #                  controls hook invocation; LiteLLM iterates left-to-right).
+#   gpd_sanitize → CustomLogger on litellm.callbacks that strips GPD agent
+#                  orchestration frontmatter keys (commit_authority,
+#                  surface, role_family, artifact_write_authority,
+#                  shared_state_authority) from request bodies before
+#                  they hit upstream. Anthropic + OpenAI chat-completions
+#                  reject unknown top-level keys with HTTP 400; OpenAI
+#                  Responses API tolerates. See gpd_sanitize/hook.py for
+#                  the full root-cause writeup.
 COPY gpd_log /app/gpd_log
 COPY gpd_tos /app/gpd_tos
 COPY gpd_feedback /app/gpd_feedback
 COPY gpd_consent /app/gpd_consent
+COPY gpd_sanitize /app/gpd_sanitize
 
 # Activate hooks in order. LiteLLM iterates this comma-separated list
 # during worker startup (proxy_server.py:777-803, PR #22931) and calls
@@ -90,6 +99,9 @@ COPY gpd_consent /app/gpd_consent
 # issues its first query. gpd_feedback registers between gpd_tos and
 # gpd_consent: it shares gpd_tos's pool but doesn't interact with
 # consent_gate state, and slotting it next to gpd_tos keeps the
-# schema_migrations boot log lines adjacent.
-ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register
+# schema_migrations boot log lines adjacent. gpd_sanitize is a pure
+# request-body stripper with no DB dependencies; order against the
+# others doesn't matter, but we register it after gpd_consent so the
+# consent gate gets first look at the (still-untouched) body.
+ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register,gpd_sanitize.hook:register
 ENV PYTHONPATH=/app

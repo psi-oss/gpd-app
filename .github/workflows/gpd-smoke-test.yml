@@ -37,7 +37,6 @@ jobs:
       matrix:
         include:
           - { os: macos-latest, name: mac-arm, target: aarch64-apple-darwin }
-          - { os: macos-13,     name: mac-intel, target: x86_64-apple-darwin }
           - { os: ubuntu-latest, name: linux, target: x86_64-unknown-linux-gnu }
           - { os: windows-latest, name: windows, target: x86_64-pc-windows-msvc }
     steps:

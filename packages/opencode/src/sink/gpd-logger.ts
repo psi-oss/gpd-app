@@ -1,14 +1,17 @@
 import { Context, Duration, Effect, Exit, Layer, Scope, Stream } from "effect"
+import { createHash } from "node:crypto"
 import { Auth } from "@/auth"
 import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session"
 import { MessageV2 } from "@/session/message-v2"
 import type { SessionID } from "@/session/schema"
+import type { Snapshot } from "@/snapshot"
 import { Log } from "@/util/log"
 import { GpdLog } from "./schema"
 import { GpdLogWriter } from "./jsonl-writer"
 import { GpdLogHttp } from "./http-writer"
+import { ulid } from "ulid"
 
 export namespace GpdLogger {
 
@@ -20,7 +23,15 @@ export namespace GpdLogger {
     | { kind: "message"; sessionID: SessionID; info: MessageV2.Info }
     | { kind: "part"; sessionID: SessionID; part: MessageV2.Part }
     | { kind: "session"; sessionID: SessionID; info: Session.Info }
-    | { kind: "diff"; sessionID: SessionID; diff: Parameters<typeof GpdLogWriter.append>[1][number] extends infer _ ? unknown : never }
+    /**
+     * Per-file diff slot. The cumulative `Session.Event.Diff` payload is
+     * fanned out into one entry per file at watch time (see the
+     * `Session.Event.Diff` subscriber). Coalesced under `diff/<file>` so
+     * multiple bus events for the same file in a flush window collapse
+     * to the latest patch. Materialises into a `session_diff_file` log
+     * event.
+     */
+    | { kind: "diff_file"; sessionID: SessionID; file: Snapshot.FileDiff }
     | { kind: "deleted"; sessionID: SessionID }
 
   type State = {
@@ -30,6 +41,21 @@ export namespace GpdLogger {
     rootCache: Map<SessionID, SessionID>
     /** Tracks sessions we've already written the `session_init` header for. */
     initialized: Set<SessionID>
+    /**
+     * Per-session map of `file_path → sha256(patch_or_status)` for the
+     * files we have already emitted to the proxy. Used to dedupe the
+     * cumulative bus diff payload at enqueue time so each (file,
+     * content) pair ships at most once per session per content change.
+     *
+     * Invariant: after each successful enqueue pass over a bus event,
+     * this map equals exactly the files present in the most recent
+     * cumulative diff (same as the proxy's view, modulo in-flight
+     * POSTs). Files dropped from the cumulative diff (e.g. via revert)
+     * are removed; if they are later re-modified the new hash differs
+     * and we re-emit. See SessionDiffFileEvent in schema.ts for the
+     * full rationale.
+     */
+    lastEmittedDiff: Map<SessionID, Map<string, string>>
     scope: Scope.Closeable
     /** Idempotency latch for `drainPending`. Set true on first drain call. */
     draining: boolean
@@ -78,11 +104,39 @@ export namespace GpdLogger {
         return `msg/${evt.info.id}`
       case "part":
         return `part/${evt.part.messageID}/${evt.part.id}`
-      case "diff":
-        return "diff"
+      case "diff_file":
+        // Per-file slot. Two bus events touching the same file within a
+        // single flush window collapse to the latest patch; different
+        // files queue independently.
+        return `diff/${evt.file.file}`
       case "deleted":
         return "deleted"
     }
+  }
+
+  /**
+   * Hash a single file diff entry for dedup purposes. The patch string
+   * already contains the full file content (because `snapshot/index.ts`
+   * uses `context: Number.MAX_SAFE_INTEGER`), so `sha256(patch)` is
+   * sufficient to detect "did the after-content change". For files
+   * with empty patch (binary or deleted), include status + path so
+   * transitions like added → deleted produce distinct hashes and we
+   * emit a "now deleted" event exactly once.
+   */
+  function hashFileDiff(fd: Snapshot.FileDiff): string {
+    const h = createHash("sha256")
+    if (fd.patch && fd.patch.length > 0) {
+      h.update(fd.patch)
+      return h.digest("hex")
+    }
+    h.update(fd.status ?? "unknown")
+    h.update(":")
+    h.update(fd.file)
+    h.update(":")
+    h.update(String(fd.additions))
+    h.update(":")
+    h.update(String(fd.deletions))
+    return h.digest("hex")
   }
 
   /** Walk up the parent chain once, memoised per session. */
@@ -125,6 +179,13 @@ export namespace GpdLogger {
       initialized.add(sessionID)
     }
 
+    // Pre-count the per-file diff entries so each event carries an
+    // accurate `total`. One `flushID` per materialise call groups all
+    // diff_file events from this flush into a logical batch.
+    const diffFiles = queued.filter((e): e is Extract<QueuedEvent, { kind: "diff_file" }> => e.kind === "diff_file")
+    const flushID = diffFiles.length > 0 ? ulid() : ""
+    let diffIdx = 0
+
     for (const evt of queued) {
       switch (evt.kind) {
         case "message":
@@ -148,14 +209,18 @@ export namespace GpdLogger {
         case "session":
           // already folded into session_init; no extra line needed.
           break
-        case "diff":
+        case "diff_file":
           out.push({
-            kind: "session_diff",
+            kind: "session_diff_file",
             v: GpdLog.SCHEMA_VERSION,
             ts: now,
             sessionID: evt.sessionID,
-            diff: evt.diff as never,
+            file: evt.file,
+            flushID,
+            idx: diffIdx,
+            total: diffFiles.length,
           })
+          diffIdx++
           break
         case "deleted":
           out.push({
@@ -405,6 +470,7 @@ export namespace GpdLogger {
             queue: new Map(),
             rootCache: new Map(),
             initialized: new Set(),
+            lastEmittedDiff: new Map(),
             scope: yield* Scope.make(),
             draining: false,
           }
@@ -465,16 +531,41 @@ export namespace GpdLogger {
             }),
           )
           yield* watch(Session.Event.Diff, (evt) =>
-            enqueue(evt.properties.sessionID, {
-              kind: "diff",
-              sessionID: evt.properties.sessionID,
-              diff: evt.properties.diff,
+            Effect.gen(function* () {
+              const sid = evt.properties.sessionID as SessionID
+              const s = yield* InstanceState.get(state)
+              // Compute per-file hashes for the new cumulative diff,
+              // then enqueue only files whose hash differs from what
+              // we have already shipped for this session. This is the
+              // single dedup point that turns the O(N²) cumulative
+              // bandwidth into O(N) per-file emissions.
+              const prev = s.lastEmittedDiff.get(sid) ?? new Map<string, string>()
+              const next = new Map<string, string>()
+              const cumulative = (evt.properties.diff ?? []) as Snapshot.FileDiff[]
+              for (const fd of cumulative) {
+                const h = hashFileDiff(fd)
+                next.set(fd.file, h)
+                if (prev.get(fd.file) === h) continue
+                yield* enqueue(sid, { kind: "diff_file", sessionID: sid, file: fd })
+              }
+              // Replace (don't merge): files dropped from the cumulative
+              // diff (e.g. via revert) leave the map so a future
+              // re-modification re-emits.
+              s.lastEmittedDiff.set(sid, next)
             }),
           )
           yield* watch(Session.Event.Deleted, (evt) =>
-            enqueue(evt.properties.sessionID, {
-              kind: "deleted",
-              sessionID: evt.properties.sessionID,
+            Effect.gen(function* () {
+              const sid = evt.properties.sessionID as SessionID
+              const s = yield* InstanceState.get(state)
+              // Free per-session diff bookkeeping. Without this, a
+              // long-running sidecar accumulates an entry per dead
+              // session forever.
+              s.lastEmittedDiff.delete(sid)
+              yield* enqueue(sid, {
+                kind: "deleted",
+                sessionID: sid,
+              })
             }),
           )
 

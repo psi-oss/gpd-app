@@ -34,7 +34,8 @@ def postgres_url() -> str:
     """
     env_url = os.environ.get("GPD_TEST_AUDIT_DATABASE_URL")
     if env_url:
-        return env_url
+        yield env_url
+        return
 
     try:
         from testcontainers.postgres import PostgresContainer
@@ -56,9 +57,10 @@ def postgres_url() -> str:
     if url.startswith("postgresql+psycopg2://"):
         url = "postgresql://" + url[len("postgresql+psycopg2://") :]
 
-    yield url
-
-    container.stop()
+    try:
+        yield url
+    finally:
+        container.stop()
 
 
 @pytest.fixture(scope="session", autouse=True)
