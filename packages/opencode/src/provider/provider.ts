@@ -1728,6 +1728,15 @@ export namespace Provider {
           const provider = s.providers[model.providerID]
           const options = { ...provider.options }
 
+          // Arm `wrapSSE` chunk-timeout watchdog by default on the PSI gpd
+          // provider so an upstream proxy that opens the SSE then hangs no
+          // longer leaves the client waiting indefinitely (ENG-561 fix #1,
+          // defense in depth). Opt out by setting chunkTimeout=0 in the
+          // provider config.
+          if (model.providerID === "gpd" && options["chunkTimeout"] === undefined) {
+            options["chunkTimeout"] = 60_000
+          }
+
           if (model.providerID === "google-vertex" && !model.api.npm.includes("@ai-sdk/openai-compatible")) {
             delete options.fetch
           }

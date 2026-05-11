@@ -493,6 +493,16 @@ export namespace SessionProcessor {
         })
 
         const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
+          // Snapshot whether the stream produced anything before we clear
+          // ctx state below. Used to detect the "stream ended without output"
+          // case where halt was never called (clean SSE FIN, no exception)
+          // and we'd otherwise persist an empty assistant message with no
+          // error tag — the silent-terminator bug from ENG-561.
+          const producedOutput =
+            ctx.assistantMessage.finish !== undefined ||
+            !!ctx.currentText ||
+            Object.keys(ctx.reasoningMap).length > 0 ||
+            Object.keys(ctx.toolcalls).length > 0
           if (ctx.snapshot) {
             const patch = yield* snapshot.patch(ctx.snapshot)
             if (patch.files.length) {
@@ -549,6 +559,22 @@ export namespace SessionProcessor {
             })
           }
           ctx.toolcalls = {}
+          // Only synthesize "stream ended without output" when this really
+          // looks like a silent terminator: no output produced, no existing
+          // error, and no pending compaction (compaction returns "compact"
+          // with a legitimately empty assistant message — turning that into
+          // an error would break the compact loop). ENG-561 fix #1, defense
+          // in depth.
+          if (!producedOutput && !ctx.assistantMessage.error && !ctx.needsCompaction) {
+            ctx.assistantMessage.error = new MessageV2.APIError({
+              message: "Stream ended without output",
+              isRetryable: true,
+            }).toObject()
+            yield* bus.publish(Session.Event.Error, {
+              sessionID: ctx.assistantMessage.sessionID,
+              error: ctx.assistantMessage.error,
+            })
+          }
           ctx.assistantMessage.time.completed = Date.now()
           yield* session.updateMessage(ctx.assistantMessage)
         })
@@ -562,6 +588,8 @@ export namespace SessionProcessor {
             return
           }
           ctx.assistantMessage.error = error
+          ctx.assistantMessage.time.completed = Date.now()
+          yield* session.updateMessage(ctx.assistantMessage)
           yield* bus.publish(Session.Event.Error, {
             sessionID: ctx.assistantMessage.sessionID,
             error: ctx.assistantMessage.error,
