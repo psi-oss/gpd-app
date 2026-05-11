@@ -105,16 +105,41 @@ export const ApplyPatchTool = Tool.define(
               )
             }
 
-            const oldContent = yield* afs.readFileString(filePath)
+            let oldContent = yield* afs.readFileString(filePath)
             let newContent = oldContent
 
-            // Apply the update chunks to get new content
-            try {
-              const fileUpdate = Patch.deriveNewContentsFromChunks(filePath, hunk.chunks)
-              newContent = fileUpdate.content
-            } catch (error) {
-              return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
+            // Apply the update chunks to get new content. On
+            // "Failed to find expected lines" — typically caused by an
+            // out-of-band edit landing between our read at L108 and the
+            // deriver's internal `readFileSync` — re-read the file once
+            // and retry. If the on-disk content stabilised in the
+            // intervening tick the second attempt succeeds; otherwise the
+            // error surfaces unchanged, with an explicit hint to re-read.
+            // ENG-561 fix #5.
+            const tryDerive = () => {
+              try {
+                return { ok: true as const, fileUpdate: Patch.deriveNewContentsFromChunks(filePath, hunk.chunks) }
+              } catch (error) {
+                return { ok: false as const, error }
+              }
             }
+            let result = tryDerive()
+            if (!result.ok && /Failed to find expected lines/.test(String(result.error))) {
+              oldContent = yield* afs.readFileString(filePath)
+              result = tryDerive()
+              if (!result.ok) {
+                return yield* Effect.fail(
+                  new Error(
+                    `apply_patch verification failed: ${result.error}\n` +
+                      `Hint: the file appears to have changed since the patch was generated. ` +
+                      `Re-read ${filePath} and regenerate the patch with current context lines.`,
+                  ),
+                )
+              }
+            } else if (!result.ok) {
+              return yield* Effect.fail(new Error(`apply_patch verification failed: ${result.error}`))
+            }
+            newContent = result.fileUpdate.content
 
             const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
 
