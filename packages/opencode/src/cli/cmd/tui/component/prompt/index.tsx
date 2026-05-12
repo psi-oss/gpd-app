@@ -276,7 +276,16 @@ export function Prompt(props: PromptProps) {
             setStore("interrupt", 0)
           }, 5000)
 
-          if (store.interrupt >= 2) {
+          // Single-press abort while the session is in retry status:
+          // the user is already staring at an error like "Connection
+          // reset by server" and asking the system to retry on the
+          // user's behalf — making them double-tap to break out of
+          // that wait is the symptom of RES-871. The normal
+          // double-press guard still applies to ordinary "busy"
+          // status where double-press protects against accidental
+          // mid-thought cancels.
+          const inRetry = status().type === "retry"
+          if (store.interrupt >= 2 || inRetry) {
             sdk.client.session.abort({
               sessionID: props.sessionID,
             })
@@ -1232,7 +1241,11 @@ export function Prompt(props: PromptProps) {
               <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
                 esc{" "}
                 <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                  {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+                  {status().type === "retry"
+                    ? "to cancel retry"
+                    : store.interrupt > 0
+                      ? "again to interrupt"
+                      : "interrupt"}
                 </span>
               </text>
             </box>

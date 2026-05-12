@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, SynchronizedRef } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, SynchronizedRef } from "effect"
 
 export interface Runner<A, E = never> {
   readonly state: Runner.State<A, E>
@@ -160,6 +160,15 @@ export namespace Runner {
         }),
       ).pipe(Effect.flatten)
 
+    // Hard ceiling for how long a cancel will wait for the underlying
+    // fiber to acknowledge its interrupt. If a non-interruptible region
+    // inside the work (e.g. a fetch that does not honour AbortSignal, or
+    // a retry sleep nested in an uninterruptible mask) holds the fiber
+    // past this bound, we still surface the runner as Idle so the
+    // session UI returns to a responsive state instead of looking
+    // wedged at retry status forever. The orphan fiber will resolve its
+    // own deferred when it eventually exits (RES-871).
+    const CANCEL_FIBER_AWAIT_MS = 5_000
     const cancel = SynchronizedRef.modify(ref, (st) => {
       switch (st._tag) {
         case "Idle":
@@ -168,7 +177,12 @@ export namespace Runner {
           return [
             Effect.gen(function* () {
               yield* Fiber.interrupt(st.run.fiber)
-              yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+              yield* Deferred.await(st.run.done).pipe(
+                Effect.exit,
+                Effect.asVoid,
+                Effect.timeout(Duration.millis(CANCEL_FIBER_AWAIT_MS)),
+                Effect.catch(() => Effect.void),
+              )
               yield* idleIfCurrent()
             }),
             { _tag: "Idle" } as const,
