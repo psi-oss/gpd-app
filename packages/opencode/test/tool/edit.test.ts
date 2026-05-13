@@ -62,6 +62,9 @@ const resolve = () =>
 const readFileTime = (sessionID: SessionID, filepath: string) =>
   runtime.runPromise(FileTime.Service.use((ft) => ft.read(sessionID, filepath)))
 
+const getFileTime = (sessionID: SessionID, filepath: string) =>
+  runtime.runPromise(FileTime.Service.use((ft) => ft.get(sessionID, filepath)))
+
 const subscribeBus = <D extends BusEvent.Definition>(def: D, callback: () => unknown) =>
   runtime.runPromise(Bus.Service.use((bus) => bus.subscribeCallback(def, callback)))
 
@@ -273,7 +276,46 @@ describe("tool.edit", () => {
       })
     })
 
-    test("throws error when file was not read first (FileTime)", async () => {
+    // RES-895: edit no longer requires an explicit prior Read. The
+    // `oldString` match against current file content is itself a stronger
+    // statement about the agent's view than a recorded Read, so the
+    // strict "must Read first" guard added unnecessary friction (e.g.
+    // after the agent viewed a file via bash cat or in a fresh session).
+    // The "modified since read" check is preserved when a prior record
+    // exists — see the next test.
+    test("succeeds without prior Read and stamps FileTime (RES-895)", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "file.txt")
+      await fs.writeFile(filepath, "content", "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const before = await getFileTime(ctx.sessionID, filepath)
+          expect(before).toBeUndefined()
+
+          const edit = await resolve()
+          await Effect.runPromise(
+            edit.execute(
+              {
+                filePath: filepath,
+                oldString: "content",
+                newString: "modified",
+              },
+              ctx,
+            ),
+          )
+
+          expect(await fs.readFile(filepath, "utf-8")).toBe("modified")
+          // FileTime should have a record now — subsequent strict ops can
+          // detect out-of-band modifications.
+          const after = await getFileTime(ctx.sessionID, filepath)
+          expect(after).toBeInstanceOf(Date)
+        },
+      })
+    })
+
+    test("still throws when oldString does not match current content", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "file.txt")
       await fs.writeFile(filepath, "content", "utf-8")
@@ -287,13 +329,13 @@ describe("tool.edit", () => {
               edit.execute(
                 {
                   filePath: filepath,
-                  oldString: "content",
-                  newString: "modified",
+                  oldString: "completely unrelated text",
+                  newString: "replacement",
                 },
                 ctx,
               ),
             ),
-          ).rejects.toThrow("You must read file")
+          ).rejects.toThrow("Could not find oldString in the file")
         },
       })
     })

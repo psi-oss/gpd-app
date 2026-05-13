@@ -100,7 +100,18 @@ export const EditTool = Tool.define(
               const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
               if (!info) throw new Error(`File ${filePath} not found`)
               if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
-              yield* filetime.assert(ctx.sessionID, filePath)
+              // `assertOrStamp` (vs `assert`) tolerates the "no prior Read
+              // in this session" case by stamping the current file state
+              // and proceeding. The `replace()` call below requires
+              // `oldString` to match `contentOld` exactly, which is a
+              // stronger statement about the agent's view of the file than
+              // a recorded Read alone — so the strict "must Read first"
+              // guard is redundant for Edit and only adds friction when
+              // the agent saw the file via bash (cat/grep) or via a fresh
+              // session restore. Out-of-band modifications detected when
+              // a prior record exists still throw "modified since".
+              // RES-895.
+              yield* filetime.assertOrStamp(ctx.sessionID, filePath)
               contentOld = yield* afs.readFileString(filePath)
 
               const ending = detectLineEnding(contentOld)

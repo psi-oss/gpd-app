@@ -33,6 +33,19 @@ export namespace FileTime {
     readonly read: (sessionID: SessionID, file: string) => Effect.Effect<void>
     readonly get: (sessionID: SessionID, file: string) => Effect.Effect<Date | undefined>
     readonly assert: (sessionID: SessionID, filepath: string) => Effect.Effect<void>
+    /**
+     * Like `assert`, but in the "no prior Read in this session" case it
+     * stamps the current state and proceeds instead of throwing. The
+     * "file was modified since last read" check is still enforced when a
+     * prior record exists.
+     *
+     * Use this only when the caller has its own integrity check that makes
+     * the strict "must Read first" guard redundant — e.g. the Edit tool's
+     * `oldString` must match current file content for the operation to
+     * succeed, which is a stronger statement about the agent's view of
+     * the file than the FileTime record alone provides. RES-895.
+     */
+    readonly assertOrStamp: (sessionID: SessionID, filepath: string) => Effect.Effect<void>
     readonly withLock: <T>(filepath: string, fn: () => Effect.Effect<T>) => Effect.Effect<T>
   }
 
@@ -85,6 +98,15 @@ export namespace FileTime {
         return reads.get(sessionID)?.get(file)?.read
       })
 
+      const checkModified = Effect.fnUntraced(function* (filepath: string, prior: Stamp) {
+        const next = yield* stamp(filepath)
+        const changed = next.mtime !== prior.mtime || next.size !== prior.size
+        if (!changed) return
+        throw new Error(
+          `File ${filepath} has been modified since it was last read.\nLast modification: ${new Date(next.mtime ?? next.read.getTime()).toISOString()}\nLast read: ${prior.read.toISOString()}\n\nPlease read the file again before modifying it.`,
+        )
+      })
+
       const assert = Effect.fn("FileTime.assert")(function* (sessionID: SessionID, filepath: string) {
         if (disableCheck) return
         filepath = Filesystem.normalizePath(filepath)
@@ -93,20 +115,33 @@ export namespace FileTime {
         const time = reads.get(sessionID)?.get(filepath)
         if (!time) throw new Error(`You must read file ${filepath} before overwriting it. Use the Read tool first`)
 
-        const next = yield* stamp(filepath)
-        const changed = next.mtime !== time.mtime || next.size !== time.size
-        if (!changed) return
+        yield* checkModified(filepath, time)
+      })
 
-        throw new Error(
-          `File ${filepath} has been modified since it was last read.\nLast modification: ${new Date(next.mtime ?? next.read.getTime()).toISOString()}\nLast read: ${time.read.toISOString()}\n\nPlease read the file again before modifying it.`,
-        )
+      const assertOrStamp = Effect.fn("FileTime.assertOrStamp")(function* (sessionID: SessionID, filepath: string) {
+        if (disableCheck) return
+        filepath = Filesystem.normalizePath(filepath)
+
+        const reads = (yield* InstanceState.get(state)).reads
+        const time = reads.get(sessionID)?.get(filepath)
+        if (!time) {
+          // No prior Read in this session. The caller (e.g. Edit) is
+          // responsible for verifying the agent's view of the current
+          // content via its own integrity check (oldString match). Stamp
+          // the current state so subsequent operations have a baseline
+          // for out-of-band-modification detection. RES-895.
+          session(reads, sessionID).set(filepath, yield* stamp(filepath))
+          return
+        }
+
+        yield* checkModified(filepath, time)
       })
 
       const withLock = Effect.fn("FileTime.withLock")(function* <T>(filepath: string, fn: () => Effect.Effect<T>) {
         return yield* fn().pipe((yield* getLock(filepath)).withPermits(1))
       })
 
-      return Service.of({ read, get, assert, withLock })
+      return Service.of({ read, get, assert, assertOrStamp, withLock })
     }),
   ).pipe(Layer.orDie)
 
