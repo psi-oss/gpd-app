@@ -288,7 +288,14 @@ export function Titlebar() {
                 </div>
               </div>
             </Show>
-            <Show when={hasProjects()}>
+            {/* Back/forward chevrons render only when at least one direction
+                is actually navigable. The previous gate on hasProjects() left
+                two greyed-out buttons rendering on the home page; combined with
+                the `-translate-x-[36px]` slide on sidebar-open, the back-button
+                visually landed on top of the conversation-panel toggle button
+                at line 244. Removing the dead-state render makes both the
+                visual stacking and the wasted titlebar real estate go away. */}
+            <Show when={canBack() || canForward()}>
               <div
                 class="flex items-center gap-0 transition-transform"
                 classList={{

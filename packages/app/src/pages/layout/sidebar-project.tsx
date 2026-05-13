@@ -54,6 +54,11 @@ export const ProjectDragOverlay = (props: {
 const ProjectTile = (props: {
   project: LocalProject
   mobile?: boolean
+  // When true, render a wide row (icon + name label + unread dot)
+  // instead of the 40px square icon-only tile. Drives the rail's
+  // wide/narrow toggle. Names are sourced via `displayName(project)`
+  // — same helper used by aria-label so they stay in sync.
+  railWide?: Accessor<boolean>
   sidebarHovering: Accessor<boolean>
   selected: Accessor<boolean>
   active: Accessor<boolean>
@@ -104,7 +109,12 @@ const ProjectTile = (props: {
         data-project={base64Encode(props.project.worktree)}
         title={isLocked() ? props.language.t("sidebar.project.locked.tooltip") : undefined}
         classList={{
-          "flex items-center justify-center size-10 p-1 rounded-lg overflow-hidden transition-colors cursor-default": true,
+          "rounded-lg overflow-hidden transition-colors cursor-default": true,
+          // Narrow (icon-only) tile: 40px square, centered icon.
+          "flex items-center justify-center size-10 p-1": !props.railWide?.(),
+          // Wide row: full-width, icon left + name right, comfortable
+          // padding to feel like a sidebar list-row.
+          "flex items-center gap-2 w-full px-2 py-1.5 text-left": !!props.railWide?.(),
           "bg-transparent border-2 border-icon-strong-base hover:bg-surface-base-hover": props.selected(),
           "bg-transparent border border-transparent hover:bg-surface-base-hover hover:border-border-weak-base":
             !props.selected() && !props.active(),
@@ -154,7 +164,15 @@ const ProjectTile = (props: {
         }}
         onBlur={() => props.setOpen(false)}
       >
-        <ProjectIcon project={props.project} notify />
+        <Show
+          when={props.railWide?.()}
+          fallback={<ProjectIcon project={props.project} notify />}
+        >
+          <div class="shrink-0 size-8 flex items-center justify-center">
+            <ProjectIcon project={props.project} notify />
+          </div>
+          <span class="truncate text-14-regular text-text-base">{displayName(props.project)}</span>
+        </Show>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content>
@@ -290,6 +308,10 @@ const ProjectPreviewPanel = (props: {
 export const SortableProject = (props: {
   project: LocalProject
   mobile?: boolean
+  // Forwarded to `ProjectTile`. Driven by `layout.projectRail.opened`
+  // on desktop; always falsy on mobile (mobile keeps the icon-only
+  // layout regardless of the desktop rail toggle).
+  railWide?: Accessor<boolean>
   ctx: ProjectSidebarContext
   sortNow: Accessor<number>
 }): JSX.Element => {
@@ -335,6 +357,7 @@ export const SortableProject = (props: {
     <ProjectTile
       project={props.project}
       mobile={props.mobile}
+      railWide={props.railWide}
       sidebarHovering={props.ctx.sidebarHovering}
       selected={selected}
       active={active}

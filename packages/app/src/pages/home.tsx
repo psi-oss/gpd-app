@@ -70,9 +70,12 @@ export default function Home() {
       <Switch>
         <Match when={sync.data.project.length > 0}>
           <div class="mt-20 w-full flex flex-col gap-4">
-            <div class="flex gap-2 items-center justify-between pl-3">
-              <div class="text-14-medium text-text-strong">{language.t("home.recentProjects")}</div>
-              <div class="flex gap-2">
+            <div class="flex gap-2 items-start justify-between pl-3">
+              <div class="flex flex-col gap-1 min-w-0">
+                <div class="text-14-medium text-text-strong">{language.t("home.recentProjects")}</div>
+                <div class="text-12-regular text-text-weak max-w-[420px]">{language.t("home.openHint")}</div>
+              </div>
+              <div class="flex gap-2 shrink-0">
                 <Button icon="plus" size="normal" class="pl-2 pr-3" onClick={chooseProject}>
                   {language.t("home.openOrCreate")}
                 </Button>
@@ -108,9 +111,9 @@ export default function Home() {
           </div>
         </Match>
         <Match when={true}>
-          <div class="mt-30 mx-auto flex flex-col items-center gap-3">
+          <div class="mt-30 mx-auto flex flex-col items-center gap-3 max-w-md">
             <Icon name="folder-add-left" size="large" />
-            <div class="flex flex-col gap-1 items-center justify-center">
+            <div class="flex flex-col gap-1 items-center justify-center text-center">
               <div class="text-14-medium text-text-strong">{language.t("home.empty.title")}</div>
               <div class="text-12-regular text-text-weak">{language.t("home.empty.description")}</div>
             </div>

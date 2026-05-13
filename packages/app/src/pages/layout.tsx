@@ -23,7 +23,7 @@ import { rejectUnsafeProjectPath } from "@/utils/project-path"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Button } from "@opencode-ai/ui/button"
 import { IconButton } from "@opencode-ai/ui/icon-button"
-import { Tooltip } from "@opencode-ai/ui/tooltip"
+import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { getFilename } from "@opencode-ai/util/path"
@@ -1091,6 +1091,17 @@ export default function Layout(props: ParentProps) {
         onSelect: () => layout.sidebar.toggle(),
       },
       {
+        // Toggles the leftmost project rail between wide (named rows) and
+        // narrow (icon-only). Keybind is intentionally distinct from
+        // `sidebar.toggle` (mod+b) which controls the conversation panel
+        // immediately to the right.
+        id: "projectRail.toggle",
+        title: language.t("command.projectRail.toggle"),
+        category: language.t("command.category.view"),
+        keybind: "mod+shift+b",
+        onSelect: () => layout.projectRail.toggle(),
+      },
+      {
         id: "project.open",
         title: language.t("command.project.open"),
         category: language.t("command.category.project"),
@@ -1129,6 +1140,27 @@ export default function Layout(props: ParentProps) {
         category: language.t("command.category.settings"),
         keybind: "mod+comma",
         onSelect: () => openSettings(),
+      },
+      {
+        // Native macOS menu bar (packages/desktop/src/menu.ts) "Change API
+        // Key…" item triggers this command id. Distinct from gpd.resetKey
+        // below — that one wipes the key and reloads to the welcome
+        // screen; this one opens the dedicated API Key settings pane
+        // where the user can review the change/revoke flows before
+        // committing.
+        id: "settings.openApiKey",
+        title: language.t("settings.account.accessKey.title"),
+        category: language.t("command.category.settings"),
+        onSelect: () => openSettings("api-key"),
+      },
+      {
+        // Native macOS menu bar "Send Feedback…" item triggers this.
+        // Routes through the same dialog-settings opener so the
+        // existing SettingsFeedback pane handles the form submission.
+        id: "settings.openFeedback",
+        title: language.t("settings.feedback.title"),
+        category: language.t("command.category.settings"),
+        onSelect: () => openSettings("feedback"),
       },
       {
         id: "gpd.resetKey",
@@ -1322,11 +1354,11 @@ export default function Layout(props: ParentProps) {
     })
   }
 
-  function openSettings() {
+  function openSettings(defaultTab?: string) {
     const run = ++dialogRun
     void import("@/components/dialog-settings").then((x) => {
       if (dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings />)
+      dialog.show(() => <x.DialogSettings defaultTab={defaultTab} />)
     })
   }
 
@@ -1993,12 +2025,27 @@ export default function Layout(props: ParentProps) {
   )
 
   createEffect(() => {
-    const sidebarWidth = layout.sidebar.opened() ? layout.sidebar.width() : 48
-    document.documentElement.style.setProperty("--dialog-left-margin", `${sidebarWidth}px`)
+    // Dialog left margin = visible-rail + (open ? panel : 0). When the
+    // 280px conversation panel is open, the user expects the dialog
+    // gutter to clear the entire sidebar nav (rail + panel). When the
+    // panel is collapsed, only the rail (wide or narrow) needs to be
+    // cleared.
+    const railWidth = layout.projectRail.width()
+    const margin = layout.sidebar.opened() ? Math.max(layout.sidebar.width(), railWidth + 200) : railWidth
+    document.documentElement.style.setProperty("--dialog-left-margin", `${margin}px`)
   })
 
-  const side = createMemo(() => Math.max(layout.sidebar.width(), 244))
-  const panel = createMemo(() => Math.max(side() - 64, 0))
+  // When the 280px conversation panel is open the nav must fit
+  // rail-width + a usable panel. When it's closed only the rail is
+  // visible, so nav-width collapses to railWidth. `panel()` is the
+  // remaining horizontal space inside the nav once the rail consumes
+  // its width — used by overlay/peek positioning.
+  const side = createMemo(() =>
+    layout.sidebar.opened()
+      ? Math.max(layout.sidebar.width(), layout.projectRail.width() + 200)
+      : layout.projectRail.width(),
+  )
+  const panel = createMemo(() => Math.max(side() - layout.projectRail.width(), 0))
 
   const loadedSessionDirs = new Set<string>()
 
@@ -2496,6 +2543,16 @@ export default function Layout(props: ParentProps) {
           </>
         </Show>
 
+        {/* Settings + api-key + feedback + toggle live ONCE — at the bottom of
+            the leftmost project rail in sidebar-shell.tsx. Earlier this panel
+            had its own duplicate footer row, which produced a doubled "settings
+            bar" UX (one inside the rail, one inside the conversation panel)
+            and let the titlebar back/forward chevrons land on top of the
+            sidebar-collapse icon at certain widths. Removed 2026-05-08 per
+            user feedback. The conversation-panel toggle is reachable via
+            `sidebar.toggle` keybind (Cmd/Ctrl+B) and the rail-bottom
+            affordance row. */}
+
         <div
           class="shrink-0 px-3 py-3"
           classList={{
@@ -2537,7 +2594,13 @@ export default function Layout(props: ParentProps) {
       aimMove={aim.move}
       projects={projects}
       renderProject={(project) => (
-        <SortableProject ctx={projectSidebarCtx} project={project} sortNow={sortNow} mobile={mobile} />
+        <SortableProject
+          ctx={projectSidebarCtx}
+          project={project}
+          sortNow={sortNow}
+          mobile={mobile}
+          railWide={() => !mobile && layout.projectRail.opened()}
+        />
       )}
       handleDragStart={handleDragStart}
       handleDragEnd={handleDragEnd}
@@ -2550,7 +2613,20 @@ export default function Layout(props: ParentProps) {
       onGoHome={() => navigate("/")}
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
-      onOpenSettings={openSettings}
+      onOpenSettings={() => openSettings()}
+      apiKeyLabel={() => language.t("sidebar.apiKey")}
+      onOpenApiKey={() => openSettings("api-key")}
+      feedbackLabel={() => language.t("sidebar.feedback")}
+      onOpenFeedback={() => openSettings("feedback")}
+      railToggleLabel={() =>
+        layout.projectRail.opened()
+          ? language.t("sidebar.rail.collapse")
+          : language.t("sidebar.rail.expand")
+      }
+      railToggleKeybind={() => command.keybind("projectRail.toggle")}
+      onToggleRail={() => layout.projectRail.toggle()}
+      railWide={() => !mobile && layout.projectRail.opened()}
+      railWidth={() => layout.projectRail.width()}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }
@@ -2597,8 +2673,8 @@ export default function Layout(props: ParentProps) {
                 <ResizeHandle
                   direction="horizontal"
                   size={layout.sidebar.width()}
-                  min={244}
-                  max={typeof window === "undefined" ? 1000 : window.innerWidth * 0.3 + 64}
+                  min={200}
+                  max={400}
                   onResize={(w) => {
                     setState("sizing", true)
                     if (sizet !== undefined) clearTimeout(sizet)
@@ -2611,7 +2687,7 @@ export default function Layout(props: ParentProps) {
 
             <div
               class="hidden xl:block pointer-events-none absolute top-0 right-0 z-0 border-t border-border-weaker-base"
-              style={{ left: "calc(4rem + 12px)" }}
+              style={{ left: `${layout.projectRail.width() + 12}px` }}
             />
 
             <div class="xl:hidden">
@@ -2648,7 +2724,11 @@ export default function Layout(props: ParentProps) {
                   !state.sizing,
               }}
               style={{
-                "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
+                // When the 280px conversation panel is open, main content
+                // starts after the entire nav (rail + panel = side()).
+                // When closed, main content starts after just the rail
+                // (wide or narrow, driven by `layout.projectRail.width`).
+                "--main-left": layout.sidebar.opened() ? `${side()}px` : `${layout.projectRail.width()}px`,
               }}
             >
               <main
@@ -2664,13 +2744,14 @@ export default function Layout(props: ParentProps) {
 
             <div
               classList={{
-                "hidden xl:flex absolute inset-y-0 left-16 z-30": true,
+                "hidden xl:flex absolute inset-y-0 z-30": true,
                 "opacity-100 translate-x-0 pointer-events-auto": state.peeked && !layout.sidebar.opened(),
                 "opacity-0 -translate-x-2 pointer-events-none": !state.peeked || layout.sidebar.opened(),
                 "transition-[opacity,transform] motion-reduce:transition-none": true,
                 "duration-180 ease-out": state.peeked && !layout.sidebar.opened(),
                 "duration-120 ease-in": !state.peeked || layout.sidebar.opened(),
               }}
+              style={{ left: `${layout.projectRail.width()}px` }}
               onMouseMove={disarm}
               onMouseEnter={() => {
                 disarm()
@@ -2695,7 +2776,7 @@ export default function Layout(props: ParentProps) {
                 "duration-180 ease-out": state.peeked && !layout.sidebar.opened(),
                 "duration-120 ease-in": !state.peeked || layout.sidebar.opened(),
               }}
-              style={{ left: `calc(4rem + ${panel()}px)` }}
+              style={{ left: `${layout.projectRail.width() + panel()}px` }}
             >
               <div class="h-full w-px" style={{ "box-shadow": "var(--shadow-sidebar-overlay)" }} />
             </div>

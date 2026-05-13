@@ -11,7 +11,7 @@ import { SettingsFeedback } from "./settings-feedback"
 import { SettingsGeneral } from "./settings-general"
 import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsLicenses } from "./settings-licenses"
-import { SettingsProviders } from "./settings-providers"
+import { SettingsApiKey } from "./settings-api-key"
 import { SettingsModels } from "./settings-models"
 import { SettingsStats } from "./settings-stats"
 
@@ -50,11 +50,11 @@ export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
                 </div>
 
                 <div class="flex flex-col gap-1.5">
-                  <Tabs.SectionTitle>{language.t("settings.section.server")}</Tabs.SectionTitle>
+                  <Tabs.SectionTitle>{language.t("settings.account.title")}</Tabs.SectionTitle>
                   <div class="flex flex-col gap-1.5 w-full">
-                    <Tabs.Trigger value="providers">
+                    <Tabs.Trigger value="api-key">
                       <Icon name="providers" />
-                      {language.t("settings.providers.title")}
+                      {language.t("settings.account.accessKey.title")}
                     </Tabs.Trigger>
                     <Tabs.Trigger value="models">
                       <Icon name="models" />
@@ -110,8 +110,8 @@ export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
         <Tabs.Content value="shortcuts" class="no-scrollbar">
           <SettingsKeybinds />
         </Tabs.Content>
-        <Tabs.Content value="providers" class="no-scrollbar">
-          <SettingsProviders />
+        <Tabs.Content value="api-key" class="no-scrollbar">
+          <SettingsApiKey />
         </Tabs.Content>
         <Tabs.Content value="models" class="no-scrollbar">
           <SettingsModels />

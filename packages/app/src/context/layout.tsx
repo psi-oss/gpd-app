@@ -35,10 +35,18 @@ function interpolate(template: string, params?: Record<string, string>): string 
 }
 
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
-const DEFAULT_SIDEBAR_WIDTH = 344
+const DEFAULT_SIDEBAR_WIDTH = 280
 const DEFAULT_FILE_TREE_WIDTH = 200
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
+// Leftmost project rail. Two states: "wide" (default) shows project names
+// alongside their icons (ChatGPT/Claude.ai-style); "narrow" reverts to the
+// 64px icon-only column. Persisted in the same `layout.v6` blob via the
+// `projectRail` key.
+const DEFAULT_PROJECT_RAIL_WIDTH = 240
+const PROJECT_RAIL_NARROW_WIDTH = 64
+const PROJECT_RAIL_MIN_WIDTH = 200
+const PROJECT_RAIL_MAX_WIDTH = 360
 // Default tab for the file-tree panel on a fresh install (no persisted
 // state). "all" shows the worktree filesystem; "changes" shows only
 // VCS-modified files. Researchers want to navigate the project tree
@@ -291,10 +299,14 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       { ...target, migrate },
       createStore({
         sidebar: {
-          opened: false,
+          opened: true,
           width: DEFAULT_SIDEBAR_WIDTH,
           workspaces: {} as Record<string, boolean>,
           workspacesDefault: false,
+        },
+        projectRail: {
+          opened: true,
+          width: DEFAULT_PROJECT_RAIL_WIDTH,
         },
         terminal: {
           height: DEFAULT_TERMINAL_HEIGHT,
@@ -820,6 +832,45 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         toggleWorkspaces(directory: string) {
           const current = store.sidebar.workspaces[directory] ?? store.sidebar.workspacesDefault ?? false
           setStore("sidebar", "workspaces", directory, !current)
+        },
+      },
+      projectRail: {
+        opened: createMemo(() => store.projectRail?.opened ?? true),
+        width: createMemo(() => {
+          const opened = store.projectRail?.opened ?? true
+          if (!opened) return PROJECT_RAIL_NARROW_WIDTH
+          const w = store.projectRail?.width ?? DEFAULT_PROJECT_RAIL_WIDTH
+          return Math.min(PROJECT_RAIL_MAX_WIDTH, Math.max(PROJECT_RAIL_MIN_WIDTH, w))
+        }),
+        narrowWidth: PROJECT_RAIL_NARROW_WIDTH,
+        open() {
+          if (!store.projectRail) {
+            setStore("projectRail", { opened: true, width: DEFAULT_PROJECT_RAIL_WIDTH })
+            return
+          }
+          setStore("projectRail", "opened", true)
+        },
+        close() {
+          if (!store.projectRail) {
+            setStore("projectRail", { opened: false, width: DEFAULT_PROJECT_RAIL_WIDTH })
+            return
+          }
+          setStore("projectRail", "opened", false)
+        },
+        toggle() {
+          if (!store.projectRail) {
+            setStore("projectRail", { opened: false, width: DEFAULT_PROJECT_RAIL_WIDTH })
+            return
+          }
+          setStore("projectRail", "opened", (x) => !x)
+        },
+        resize(width: number) {
+          const clamped = Math.min(PROJECT_RAIL_MAX_WIDTH, Math.max(PROJECT_RAIL_MIN_WIDTH, width))
+          if (!store.projectRail) {
+            setStore("projectRail", { opened: true, width: clamped })
+            return
+          }
+          setStore("projectRail", "width", clamped)
         },
       },
       terminal: {
