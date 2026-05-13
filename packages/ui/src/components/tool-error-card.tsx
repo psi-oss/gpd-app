@@ -51,8 +51,30 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     return value
   })
 
+  // Soft-recoverable hints — errors that the agent typically resolves
+  // on its own (re-read, adjust context, then retry). Render with info
+  // treatment instead of a red error card so users aren't alarmed by a
+  // benign intermediate step. Each kind gets its own subtitle so the
+  // user sees what the agent is about to do, not just a generic
+  // "didn't work".
+  type SoftHintKind = "needsRead" | "fileChanged" | "noMatch" | "ambiguousMatch"
+  const softHintKind = createMemo<SoftHintKind | null>(() => {
+    const value = cleaned()
+    if (/You must read file .* before overwriting it/i.test(value)) return "needsRead"
+    if (/has been modified since it was last read/i.test(value)) return "fileChanged"
+    if (/Failed to find expected lines in|Could not find oldString in the file/i.test(value)) return "noMatch"
+    if (/Found multiple matches for oldString/i.test(value)) return "ambiguousMatch"
+    return null
+  })
+  const isSoftHint = createMemo(() => softHintKind() !== null)
+
   const subtitle = createMemo(() => {
     if (split.subtitle) return split.subtitle
+    const kind = softHintKind()
+    if (kind === "needsRead") return i18n.t("ui.toolErrorCard.needsReadFirst")
+    if (kind === "fileChanged") return i18n.t("ui.toolErrorCard.fileChanged")
+    if (kind === "noMatch") return i18n.t("ui.toolErrorCard.noMatch")
+    if (kind === "ambiguousMatch") return i18n.t("ui.toolErrorCard.ambiguousMatch")
     const parts = tail().split(": ")
     if (parts.length <= 1) return i18n.t("ui.toolErrorCard.failed")
     const head = (parts[0] ?? "").trim()
@@ -75,7 +97,13 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
   }
 
   return (
-    <Card {...rest} data-kind="tool-error-card" data-open={open() ? "true" : "false"} variant="error">
+    <Card
+      {...rest}
+      data-kind="tool-error-card"
+      data-open={open() ? "true" : "false"}
+      data-hint={isSoftHint() ? "true" : undefined}
+      variant={isSoftHint() ? "info" : "error"}
+    >
       <Collapsible
         class="tool-collapsible"
         data-open={open() ? "true" : "false"}
@@ -86,7 +114,11 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
           <div data-component="tool-trigger">
             <div data-slot="basic-tool-tool-trigger-content">
               <span data-slot="basic-tool-tool-indicator" data-component="tool-error-card-icon">
-                <Icon name="circle-ban-sign" size="small" style={{ "stroke-width": 1.5 }} />
+                <Icon
+                  name={isSoftHint() ? "eye" : "circle-ban-sign"}
+                  size="small"
+                  style={{ "stroke-width": 1.5 }}
+                />
               </span>
               <div data-slot="basic-tool-tool-info">
                 <div data-slot="basic-tool-tool-info-structured">

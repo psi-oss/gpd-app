@@ -121,6 +121,10 @@ export const dict: Record<string, string> = {
 
   "ui.basicTool.called": "Called `{{tool}}`",
   "ui.toolErrorCard.failed": "Didn't work",
+  "ui.toolErrorCard.needsReadFirst": "Needs to read first",
+  "ui.toolErrorCard.fileChanged": "File changed, re-reading",
+  "ui.toolErrorCard.noMatch": "Couldn't match, retrying",
+  "ui.toolErrorCard.ambiguousMatch": "Needs more context",
   "ui.toolErrorCard.copyError": "Copy error",
 
   "ui.common.file.one": "file",
