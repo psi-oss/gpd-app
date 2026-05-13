@@ -210,7 +210,22 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono =>
       }),
       async (c) => {
         const modes = await AppRuntime.runPromise(Agent.Service.use((svc) => svc.list()))
-        return c.json(modes)
+        // Drop the `prompt` body from the listing. Each agent's prompt is the
+        // raw .md frontmatter+body and totals ~1 MB across the 24 GPD agents.
+        // No frontend consumer reads it (`Agent.prompt` is not referenced in
+        // packages/app/src — verified 2026-05-08 against bootstrap.ts:329-340
+        // `sameAgents`, local.tsx, message-timeline.tsx, session-header.tsx,
+        // prompt-input.tsx). The runtime re-loads prompts from disk when an
+        // agent fires, so the listing endpoint serving prompts was wasteful
+        // anyway. Bigger than that: WebKit `fetch().text()` silently
+        // truncates large bodies on macOS — observed dropping ~2 KB off a
+        // 1.1 MB response, producing exactly the "JSON Parse error:
+        // Unterminated string" toast users hit on bootstrap. Slimming the
+        // payload to ~30 KB sidesteps the WebKit cap. If you ever need the
+        // prompt body programmatically, add a dedicated `/agent/:id/prompt`
+        // route — don't put it back here.
+        const slim = modes.map(({ prompt: _prompt, ...rest }) => rest)
+        return c.json(slim)
       },
     )
     .get(
