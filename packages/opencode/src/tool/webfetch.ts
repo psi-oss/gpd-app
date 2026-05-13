@@ -97,6 +97,28 @@ export const WebFetchTool = Tool.define(
                   ),
                 ),
             ),
+            // Rewrite effect's HttpClient errors so the actual status code
+            // surfaces in the tool-error card subtitle (ENG-576). Default
+            // effect format is "StatusCode: non 2xx status code (403 GET
+            // <url>)" — the subtitle parser splits on ": " and grabs the
+            // first segment, which produced the unhelpful literal
+            // "StatusCode" subtitle users were seeing. Putting "HTTP <n>"
+            // first means the subtitle becomes e.g. "HTTP 403" and the
+            // body is the host+path. TransportError gets a "Connection
+            // error" surface so DNS / TCP refused / TLS aren't conflated
+            // with HTTP responses.
+            Effect.mapError((err) => {
+              const reason = err.reason
+              if (reason._tag === "StatusCodeError") {
+                const status = reason.response.status
+                const u = new URL(params.url)
+                return new Error(`HTTP ${status}: ${u.hostname}${u.pathname}`)
+              }
+              if (reason._tag === "TransportError") {
+                return new Error(`Connection error: couldn't reach ${new URL(params.url).hostname}`)
+              }
+              return err
+            }),
             Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }),
           )
 
