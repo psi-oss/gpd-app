@@ -1326,6 +1326,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         throw new Error("Impossible")
       })
 
+      const interruptedAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
+        const msg = yield* lastAssistant(sessionID)
+        if (msg.info.role !== "assistant" || msg.info.time.completed || msg.info.error) return msg
+
+        const info = yield* sessions.updateMessage({
+          ...msg.info,
+          error: new MessageV2.AbortedError({ message: "Aborted" }).toObject(),
+          time: {
+            ...msg.info.time,
+            completed: Date.now(),
+          },
+        })
+        return { ...msg, info } satisfies MessageV2.WithParts
+      })
+
       const runLoop: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
         function* (sessionID: SessionID) {
           const ctx = yield* InstanceState.context
@@ -1565,12 +1580,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
         "SessionPrompt.loop",
       )(function* (input: z.infer<typeof LoopInput>) {
-        return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+        return yield* state.ensureRunning(input.sessionID, interruptedAssistant(input.sessionID), runLoop(input.sessionID))
       })
 
       const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.shell")(
         function* (input: ShellInput) {
-          return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input))
+          return yield* state.startShell(input.sessionID, interruptedAssistant(input.sessionID), shellImpl(input))
         },
       )
 

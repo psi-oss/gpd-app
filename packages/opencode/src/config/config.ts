@@ -844,10 +844,10 @@ export namespace Config {
           chunkTimeout: z
             .number()
             .int()
-            .positive()
+            .nonnegative()
             .optional()
             .describe(
-              "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
+              "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted. Set to 0 to disable.",
             ),
         })
         .catchall(z.any())

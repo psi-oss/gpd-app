@@ -19,6 +19,7 @@ export namespace Runner {
 
   interface ShellHandle<A, E> {
     id: number
+    done: Deferred.Deferred<A, E | Cancelled>
     fiber: Fiber.Fiber<A, E>
   }
 
@@ -41,6 +42,7 @@ export namespace Runner {
       onBusy?: Effect.Effect<void>
       onInterrupt?: Effect.Effect<A, E>
       busy?: () => never
+      cancelAwaitMs?: number
     },
   ): Runner<A, E> => {
     const ref = SynchronizedRef.makeUnsafe<State<A, E>>({ _tag: "Idle" })
@@ -86,20 +88,26 @@ export namespace Runner {
         return { id, done, fiber } satisfies RunHandle<A, E>
       })
 
-    const finishShell = (id: number) =>
+    const finishShell = (id: number, done: Deferred.Deferred<A, E | Cancelled>, exit: Exit.Exit<A, E>) =>
       SynchronizedRef.modifyEffect(
         ref,
         Effect.fnUntraced(function* (st) {
-          if (st._tag === "Shell" && st.shell.id === id) return [idle, { _tag: "Idle" }] as const
+          if (st._tag === "Shell" && st.shell.id === id) {
+            return [
+              Effect.gen(function* () {
+                yield* idle
+                yield* complete(done, exit)
+              }),
+              { _tag: "Idle" },
+            ] as const
+          }
           if (st._tag === "ShellThenRun" && st.shell.id === id) {
             const run = yield* startRun(st.run.work, st.run.done)
-            return [Effect.void, { _tag: "Running", run }] as const
+            return [complete(done, exit), { _tag: "Running", run }] as const
           }
-          return [Effect.void, st] as const
+          return [complete(done, exit), st] as const
         }),
       ).pipe(Effect.flatten)
-
-    const stopShell = (shell: ShellHandle<A, E>) => Fiber.interrupt(shell.fiber)
 
     const ensureRunning = (work: Effect.Effect<A, E>) =>
       SynchronizedRef.modifyEffect(
@@ -146,15 +154,18 @@ export namespace Runner {
           }
           yield* busy
           const id = next()
-          const fiber = yield* work.pipe(Effect.ensuring(finishShell(id)), Effect.forkChild)
-          const shell = { id, fiber } satisfies ShellHandle<A, E>
+          const done = yield* Deferred.make<A, E | Cancelled>()
+          const fiber = yield* work.pipe(
+            Effect.onExit((exit) => finishShell(id, done, exit)),
+            Effect.forkIn(scope),
+          )
+          const shell = { id, done, fiber } satisfies ShellHandle<A, E>
           return [
-            Effect.gen(function* () {
-              const exit = yield* Fiber.await(fiber)
-              if (Exit.isSuccess(exit)) return exit.value
-              if (Cause.hasInterruptsOnly(exit.cause) && onInterrupt) return yield* onInterrupt
-              return yield* Effect.failCause(exit.cause)
-            }),
+            Deferred.await(done).pipe(
+              Effect.catch(
+                (e): Effect.Effect<A, E> => (e instanceof Cancelled ? (onInterrupt ?? Effect.die(e)) : Effect.fail(e as E)),
+              ),
+            ),
             { _tag: "Shell", shell },
           ] as const
         }),
@@ -166,9 +177,20 @@ export namespace Runner {
     // a retry sleep nested in an uninterruptible mask) holds the fiber
     // past this bound, we still surface the runner as Idle so the
     // session UI returns to a responsive state instead of looking
-    // wedged at retry status forever. The orphan fiber will resolve its
-    // own deferred when it eventually exits (RES-871).
-    const CANCEL_FIBER_AWAIT_MS = 5_000
+    // wedged at retry status forever. The interrupted fiber will resolve
+    // its own deferred when it eventually exits (RES-871).
+    const CANCEL_FIBER_AWAIT_MS = opts?.cancelAwaitMs ?? 5_000
+    const signalInterrupt = <B, E2>(fiber: Fiber.Fiber<B, E2>) =>
+      Effect.forkIn(Fiber.interrupt(fiber), scope, { startImmediately: true }).pipe(Effect.asVoid)
+    const awaitDoneOrCancel = (done: Deferred.Deferred<A, E | Cancelled>) =>
+      Deferred.await(done).pipe(
+        Effect.asVoid,
+        Effect.timeoutOrElse({
+          duration: Duration.millis(CANCEL_FIBER_AWAIT_MS),
+          orElse: () => Deferred.fail(done, new Cancelled()).pipe(Effect.asVoid),
+        }),
+        Effect.catch(() => Effect.void),
+      )
     const cancel = SynchronizedRef.modify(ref, (st) => {
       switch (st._tag) {
         case "Idle":
@@ -176,21 +198,11 @@ export namespace Runner {
         case "Running":
           return [
             Effect.gen(function* () {
-              // `Fiber.interrupt` in Effect 4 awaits termination
-              // (see `fiberInterruptAs` → `fiberAwait` in
-              // `effect/internal/effect.js`), which would make the
-              // timeout on `Deferred.await` below moot — both would
-              // block on the same wedged fiber. Fork the interrupt
-              // request as a daemon so it signals without awaiting,
-              // then bound the wait below. The daemon resolves on its
-              // own once the target fiber actually terminates.
-              yield* Effect.forkChild(Fiber.interrupt(st.run.fiber))
-              yield* Deferred.await(st.run.done).pipe(
-                Effect.exit,
-                Effect.asVoid,
-                Effect.timeout(Duration.millis(CANCEL_FIBER_AWAIT_MS)),
-                Effect.catch(() => Effect.void),
-              )
+              // `Fiber.interrupt` awaits termination, so run it in the
+              // runner scope and start it immediately. The interrupt signal
+              // is delivered before we begin the bounded wait below.
+              yield* signalInterrupt(st.run.fiber)
+              yield* awaitDoneOrCancel(st.run.done)
               yield* idleIfCurrent()
             }),
             { _tag: "Idle" } as const,
@@ -198,7 +210,8 @@ export namespace Runner {
         case "Shell":
           return [
             Effect.gen(function* () {
-              yield* stopShell(st.shell)
+              yield* signalInterrupt(st.shell.fiber)
+              yield* awaitDoneOrCancel(st.shell.done)
               yield* idleIfCurrent()
             }),
             { _tag: "Idle" } as const,
@@ -207,7 +220,8 @@ export namespace Runner {
           return [
             Effect.gen(function* () {
               yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-              yield* stopShell(st.shell)
+              yield* signalInterrupt(st.shell.fiber)
+              yield* awaitDoneOrCancel(st.shell.done)
               yield* idleIfCurrent()
             }),
             { _tag: "Idle" } as const,

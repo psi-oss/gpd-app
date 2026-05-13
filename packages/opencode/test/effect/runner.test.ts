@@ -190,6 +190,31 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "cancel resolves running callers when interrupted work does not exit promptly",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const release = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, {
+        cancelAwaitMs: 20,
+        onInterrupt: Effect.succeed("fallback"),
+      })
+      const fiber = yield* runner
+        .ensureRunning(Deferred.await(release).pipe(Effect.as("late"), Effect.uninterruptible))
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      yield* runner.cancel
+      expect(runner.busy).toBe(false)
+
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) expect(exit.value).toBe("fallback")
+
+      yield* Deferred.succeed(release, undefined)
+    }),
+  )
+
   test("cancel does not deadlock when replacement work starts before interrupted run exits", async () => {
     function defer() {
       let resolve!: () => void
@@ -331,6 +356,32 @@ describe("Runner", () => {
       expect(Exit.isFailure(shellExit)).toBe(true)
 
       yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
+    }),
+  )
+
+  it.live(
+    "cancel resolves shell callers when interrupted shell does not exit promptly",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const release = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, {
+        cancelAwaitMs: 20,
+        onInterrupt: Effect.succeed("fallback"),
+      })
+
+      const sh = yield* runner
+        .startShell(Deferred.await(release).pipe(Effect.as("late-shell"), Effect.uninterruptible))
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      yield* runner.cancel.pipe(Effect.timeout("250 millis"))
+      expect(runner.busy).toBe(false)
+
+      const exit = yield* Fiber.await(sh).pipe(Effect.timeout("250 millis"))
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) expect(exit.value).toBe("fallback")
+
+      yield* Deferred.succeed(release, undefined)
     }),
   )
 

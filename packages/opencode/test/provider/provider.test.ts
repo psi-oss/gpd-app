@@ -364,6 +364,33 @@ test("env variable takes precedence, config merges options", async () => {
   })
 })
 
+test("provider chunkTimeout accepts zero to disable the SSE chunk watchdog", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            gpd: {
+              options: {
+                chunkTimeout: 0,
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.make("gpd")].options.chunkTimeout).toBe(0)
+    },
+  })
+})
+
 test("getModel returns model for valid provider/model", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
