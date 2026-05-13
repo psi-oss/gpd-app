@@ -1057,6 +1057,19 @@ async fn initialize(app: AppHandle) {
                 }
             }
 
+            // Manifest reconciliation: ensures pip-installed Python deps stay
+            // in sync with the bundled python-manifest.json across desktop
+            // auto-updates. Fire-and-forget — never blocks app startup. Runs
+            // unconditionally because the manifest hash-marker short-circuits
+            // the no-diff case (zero pip activity, milliseconds). See
+            // gpd_setup::reconcile_manifest.
+            let reconcile_app = app_clone.clone();
+            tokio::spawn(async move {
+                if let Err(e) = gpd_setup::reconcile_manifest(reconcile_app).await {
+                    tracing::warn!("python-manifest reconciler error: {e}");
+                }
+            });
+
             tracing::info!("Loading task finished");
         }
     })

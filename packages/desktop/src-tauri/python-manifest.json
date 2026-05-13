@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "spec": "get-physics-done[arxiv]",
+      "import_check": "gpd"
+    },
+    {
+      "spec": "arxiv-mcp-server[pdf]>=0.4.11",
+      "import_check": "pymupdf4llm"
+    }
+  ]
+}

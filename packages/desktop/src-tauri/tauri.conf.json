@@ -36,6 +36,7 @@
     "externalBin": ["sidecars/opencode-cli"],
     "resources": {
       "uv-bundle/": "uv-bundle/",
+      "python-manifest.json": "python-manifest.json",
       "../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../../../LICENSE": "LICENSE"
     },

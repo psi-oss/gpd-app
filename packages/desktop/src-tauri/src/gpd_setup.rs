@@ -10,6 +10,8 @@
 //! MCP servers run locally via real Python from the venv.
 //! Subsequent launches skip all of this (marker file check).
 
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -22,6 +24,16 @@ const GPD_CONFIG_DIR_NAME: &str = "gpd";
 
 /// Marker file written after successful first-run setup
 const GPD_INIT_MARKER: &str = ".gpd-initialized";
+
+/// Marker file recording the SHA256 of the python-manifest.json that was
+/// last reconciled against the user's venv. Compared against the current
+/// bundled manifest on every launch — if they match, the reconciler short-
+/// circuits without touching pip. See `reconcile_manifest`.
+const GPD_DEPS_HASH_MARKER: &str = ".gpd-deps-hash";
+
+/// Tauri resource path for the Python dependency manifest. Resolved via
+/// `app.path().resolve(..., BaseDirectory::Resource)`.
+const PYTHON_MANIFEST_RESOURCE: &str = "python-manifest.json";
 
 /// LiteLLM proxy URL
 const LITELLM_URL: &str = "https://litellm-production-46bb.up.railway.app/v1";
@@ -82,7 +94,7 @@ pub fn build_config_json() -> String {
     // which overrode the user's saved model on every launch because env
     // tier wins over the global-file tier. See Decision 0.A
     // (docs/CONFIG_ARCHITECTURE.md) and Task 3.1.
-    format!(r#"{{"provider":{{"gpd":{{"name":"GPD (PSI)","api":"{url}","models":{{"claude-opus-4-6":{{"name":"Claude Opus 4.6","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":131072}}}},"claude-sonnet-4-6":{{"name":"Claude Sonnet 4.6","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":65536}}}},"claude-haiku-4-5":{{"name":"Claude Haiku 4.5","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":200000,"output":65536}}}},"gpt-5.5":{{"name":"GPT 5.5","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":128000}}}},"gpt-5.4":{{"name":"GPT 5.4","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.4-mini":{{"name":"GPT 5.4 mini","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.4-nano":{{"name":"GPT 5.4 nano","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.3-codex":{{"name":"GPT 5.3 Codex","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"gpt-4.1":{{"name":"GPT 4.1","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"gpt-4.1-mini":{{"name":"GPT 4.1 mini","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"o4-mini":{{"name":"o4-mini (reasoning)","tool_call":true,"reasoning":true,"temperature":true,{mt},"limit":{{"context":200000,"output":100000}}}},"gemini-3.1-pro-preview":{{"name":"Gemini 3.1 Pro","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{mg},"limit":{{"context":1000000,"output":65536}}}},"gemini-3-flash-preview":{{"name":"Gemini 3 Flash","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{mg},"limit":{{"context":1000000,"output":65536}}}},"gemini-3.1-flash-lite-preview":{{"name":"Gemini 3.1 Flash-Lite","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":65536}}}}}}}}}},"enabled_providers":["gpd"],"mcp":{mcp}}}"#,
+    format!(r#"{{"provider":{{"gpd":{{"name":"GPD (PSI)","api":"{url}","models":{{"claude-opus-4-6":{{"name":"Claude Opus 4.6","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":128000}}}},"claude-sonnet-4-6":{{"name":"Claude Sonnet 4.6","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":64000}}}},"claude-haiku-4-5":{{"name":"Claude Haiku 4.5","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":200000,"output":64000}}}},"gpt-5.5":{{"name":"GPT 5.5","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":128000}}}},"gpt-5.4":{{"name":"GPT 5.4","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.4-mini":{{"name":"GPT 5.4 mini","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.4-nano":{{"name":"GPT 5.4 nano","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1050000,"output":131072}}}},"gpt-5.3-codex":{{"name":"GPT 5.3 Codex","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"gpt-4.1":{{"name":"GPT 4.1","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"gpt-4.1-mini":{{"name":"GPT 4.1 mini","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":32768}}}},"o4-mini":{{"name":"o4-mini (reasoning)","tool_call":true,"reasoning":true,"temperature":true,{mt},"limit":{{"context":200000,"output":100000}}}},"gemini-3.1-pro-preview":{{"name":"Gemini 3.1 Pro","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{mg},"limit":{{"context":1000000,"output":65536}}}},"gemini-3-flash-preview":{{"name":"Gemini 3 Flash","tool_call":true,"reasoning":true,"attachment":true,"temperature":true,{mg},"limit":{{"context":1000000,"output":65536}}}},"gemini-3.1-flash-lite-preview":{{"name":"Gemini 3.1 Flash-Lite","tool_call":true,"attachment":true,"temperature":true,{m},"limit":{{"context":1000000,"output":65536}}}}}}}}}},"enabled_providers":["gpd"],"mcp":{mcp}}}"#,
         url = LITELLM_URL,
         mcp = mcp_servers,
     )
@@ -223,6 +235,168 @@ pub async fn run_first_setup(app: AppHandle) -> Result<(), String> {
 
     tracing::info!("GPD first-run setup completed");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Manifest reconciliation (existing-user dep upgrades)
+// ---------------------------------------------------------------------------
+
+/// One Python package the reconciler ensures is installed and importable.
+///
+/// `spec` is what gets passed to `uv pip install --upgrade` on probe-fail
+/// (e.g. `arxiv-mcp-server[pdf]>=0.4.11`). `import_check` is the module
+/// whose `import` MUST succeed in the venv — chosen to detect the specific
+/// failure mode this package fixes (e.g. `pymupdf4llm` for the [pdf] extra,
+/// not the package name itself).
+#[derive(Debug, Deserialize)]
+struct ManifestPackage {
+    spec: String,
+    import_check: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PythonManifest {
+    #[allow(dead_code)]
+    version: u32,
+    packages: Vec<ManifestPackage>,
+}
+
+/// Reconcile the user's `~/.gpd/venv` against the bundled
+/// `python-manifest.json`. Probes each package's `import_check` module; on
+/// failure runs `uv pip install --upgrade <spec>`.
+///
+/// Why: Tauri auto-update replaces the app bundle but never touches
+/// `~/.gpd/venv/`. `is_venv_valid()` only checks `import gpd` succeeds,
+/// never versions, so users who installed before a Python-side fix never
+/// receive it. This reconciler is the bridge — it runs on every launch
+/// (after the sidecar is healthy), short-circuits when the manifest SHA256
+/// matches `~/.gpd/.gpd-deps-hash`, and only does pip work on the first
+/// launch after a desktop release that bumps the manifest.
+///
+/// Fire-and-forget contract: this function should be invoked via
+/// `tokio::spawn(...)` so it never blocks app startup. All errors are
+/// returned for logging; the caller drops them. Failures are non-fatal —
+/// the existing venv keeps working at its previous state, and the hash
+/// marker is left untouched so the next launch retries.
+pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
+    let manifest_path = app
+        .path()
+        .resolve(PYTHON_MANIFEST_RESOURCE, tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("Couldn't locate python-manifest.json bundled resource. ({e})"))?;
+
+    let manifest_bytes = std::fs::read(&manifest_path)
+        .map_err(|e| format!("Couldn't read python-manifest.json at {}. ({e})", manifest_path.display()))?;
+
+    let hash_hex = hex::encode(Sha256::digest(&manifest_bytes));
+    let hash_marker = config_dir().join(GPD_DEPS_HASH_MARKER);
+
+    if let Ok(prev) = std::fs::read_to_string(&hash_marker) {
+        if prev.trim() == hash_hex {
+            tracing::debug!("python-manifest hash unchanged; reconciler skipping");
+            return Ok(());
+        }
+    }
+
+    let python = gpd_python();
+    if !python.exists() {
+        // First-run setup hasn't installed the venv yet. The first-run path
+        // will install the right packages; reconciler defers until next launch.
+        tracing::debug!("GPD venv not yet present; reconciler deferring");
+        return Ok(());
+    }
+
+    let manifest: PythonManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| format!("python-manifest.json is malformed. ({e})"))?;
+
+    let uv = uv_path(&app)?;
+    if !uv.exists() {
+        return Err(format!("uv binary missing at {}", uv.display()));
+    }
+
+    let mut all_ok = true;
+
+    for pkg in &manifest.packages {
+        let ok = probe_import(&python, &pkg.import_check).await;
+        if ok {
+            tracing::debug!(import = %pkg.import_check, "manifest probe ok; skipping pip");
+            continue;
+        }
+
+        tracing::info!(
+            spec = %pkg.spec,
+            import = %pkg.import_check,
+            "manifest probe failed; running uv pip install --upgrade"
+        );
+
+        let result = timeout(
+            Duration::from_secs(300),
+            Command::new(&uv)
+                .args([
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    &pkg.spec,
+                    "-p",
+                    &python.to_string_lossy(),
+                    "--quiet",
+                ])
+                .env("UV_HTTP_TIMEOUT", "120")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                tracing::info!(spec = %pkg.spec, "manifest entry upgraded");
+            }
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!(spec = %pkg.spec, %stderr, "uv pip install --upgrade failed");
+                all_ok = false;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(spec = %pkg.spec, error = %e, "couldn't start uv");
+                all_ok = false;
+            }
+            Err(_) => {
+                tracing::warn!(spec = %pkg.spec, "uv pip install --upgrade timed out");
+                all_ok = false;
+            }
+        }
+    }
+
+    // Only stamp the hash marker if every package reconciled cleanly. A partial
+    // success leaves the marker stale so the next launch retries the failed
+    // ones; a complete success means "we know the venv matches this manifest".
+    if all_ok {
+        let _ = std::fs::write(&hash_marker, &hash_hex);
+        tracing::info!(hash = %hash_hex, "python-manifest reconciled");
+    } else {
+        tracing::info!("python-manifest reconciliation had errors; will retry next launch");
+    }
+
+    Ok(())
+}
+
+/// Probe whether `python -c "import {module}"` exits 0 within 5 seconds.
+/// Returns false on any failure (missing module, syntax error, timeout, IO).
+async fn probe_import(python: &Path, module: &str) -> bool {
+    let cmd = format!("import {module}");
+    let result = timeout(
+        Duration::from_secs(5),
+        Command::new(python)
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await;
+
+    matches!(result, Ok(Ok(output)) if output.status.success())
 }
 
 // ---------------------------------------------------------------------------
@@ -496,9 +670,9 @@ fn inject_provider_config(config: &Path) -> Result<(), String> {
                 "name": "GPD (PSI)",
                 "api": LITELLM_URL,
                 "models": {
-                    "claude-opus-4-6": { "name": "Claude Opus 4.6", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1000000, "output": 131072 } },
-                    "claude-sonnet-4-6": { "name": "Claude Sonnet 4.6", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1000000, "output": 65536 } },
-                    "claude-haiku-4-5": { "name": "Claude Haiku 4.5", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 200000, "output": 65536 } },
+                    "claude-opus-4-6": { "name": "Claude Opus 4.6", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1000000, "output": 128000 } },
+                    "claude-sonnet-4-6": { "name": "Claude Sonnet 4.6", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1000000, "output": 64000 } },
+                    "claude-haiku-4-5": { "name": "Claude Haiku 4.5", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 200000, "output": 64000 } },
                     "gpt-5.5": { "name": "GPT 5.5", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1050000, "output": 128000 } },
                     "gpt-5.4": { "name": "GPT 5.4", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1050000, "output": 131072 } },
                     "gpt-5.4-mini": { "name": "GPT 5.4 mini", "tool_call": true, "reasoning": true, "attachment": true, "temperature": true, "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }, "limit": { "context": 1050000, "output": 131072 } },
@@ -676,6 +850,44 @@ mod tests {
             let limit = model["limit"].as_object().unwrap();
             assert!(limit["context"].is_number(), "model {name} limit missing 'context'");
             assert!(limit["output"].is_number(), "model {name} limit missing 'output'");
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_import_returns_true_for_stdlib_module() {
+        // Use system python3; if it's missing this test gracefully skips.
+        let python = PathBuf::from(if cfg!(windows) { "python" } else { "python3" });
+        let py_check = Command::new(&python)
+            .args(["--version"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .output()
+            .await;
+        if py_check.map(|o| !o.status.success()).unwrap_or(true) {
+            return;
+        }
+        assert!(probe_import(&python, "sys").await, "import sys should succeed");
+        assert!(
+            !probe_import(&python, "definitely_not_a_real_module_xyz").await,
+            "import of bogus module should fail"
+        );
+    }
+
+    #[test]
+    fn manifest_parses_as_python_manifest() {
+        // Bundled manifest must always be deserializable. Catches accidental
+        // schema drift between python-manifest.json and the Rust types.
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("python-manifest.json");
+        let bytes = std::fs::read(&manifest_path)
+            .expect("python-manifest.json must exist next to Cargo.toml");
+        let manifest: PythonManifest =
+            serde_json::from_slice(&bytes).expect("python-manifest.json must parse");
+        assert!(!manifest.packages.is_empty(), "manifest must list at least one package");
+        for pkg in &manifest.packages {
+            assert!(!pkg.spec.is_empty(), "every package needs a non-empty spec");
+            assert!(!pkg.import_check.is_empty(), "every package needs an import_check");
         }
     }
 }
