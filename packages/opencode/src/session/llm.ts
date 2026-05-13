@@ -559,10 +559,20 @@ export namespace LLM {
 
   async function* retryEarlyStreamErrors(input: AsyncIterable<Event>) {
     let committed = false
+    // Track terminal signals from the stream so we can distinguish a
+    // genuinely truncated SSE (no terminator of any kind) from a stream
+    // that completed with empty content or surfaced an in-stream error
+    // event (which the AI SDK delivers as `type: "error"` rather than a
+    // throw). ENG-561 fix #1, defense in depth.
+    let finishSeen = false
+    let errorSeen = false
     const buffered: Event[] = []
 
     try {
       for await (const event of input) {
+        const type = (event as { type?: string }).type
+        if (type === "finish") finishSeen = true
+        if (type === "error") errorSeen = true
         const retryable = retryableStreamErrorCode(event)
         if (retryable && !committed) {
           throw new RetryableEarlyStreamError(retryable, event)
@@ -589,6 +599,20 @@ export namespace LLM {
       }
 
       if (!committed) {
+        if (!finishSeen && !errorSeen) {
+          // Stream closed without visible output AND without any terminal
+          // signal (no `finish`, no `error` event) — e.g. an SSE channel
+          // that emitted `response.created` then FIN. Throw a retryable
+          // early-stream error so the retry loop in `attempt()` gets a
+          // chance, rather than silently completing as an empty assistant
+          // message (ENG-561 fix #1, defense in depth).
+          throw new RetryableEarlyStreamError("stream_closed_empty", {
+            bufferedCount: buffered.length,
+          })
+        }
+        // Stream finished or surfaced an error event but never committed.
+        // Yield whatever the SDK sent so the processor can act on it
+        // (empty `text("")` responses, in-stream error events, etc.).
         for (const pending of buffered) yield pending
       }
     } catch (err) {
