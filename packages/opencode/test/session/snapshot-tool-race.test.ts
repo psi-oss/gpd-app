@@ -109,6 +109,7 @@ const filetime = Layer.succeed(
     read: () => Effect.void,
     get: () => Effect.succeed(undefined),
     assert: () => Effect.void,
+    assertOrStamp: () => Effect.void,
     withLock: (_filepath, fn) => fn(),
   }),
 )

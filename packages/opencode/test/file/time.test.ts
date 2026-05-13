@@ -32,6 +32,9 @@ const get = (id: SessionID, file: string) => FileTime.Service.use((svc) => svc.g
 
 const check = (id: SessionID, file: string) => FileTime.Service.use((svc) => svc.assert(id, file))
 
+const checkOrStamp = (id: SessionID, file: string) =>
+  FileTime.Service.use((svc) => svc.assertOrStamp(id, file))
+
 const lock = <A>(file: string, fn: () => Effect.Effect<A>) => FileTime.Service.use((svc) => svc.withLock(file, fn))
 
 const fail = Effect.fn("FileTimeTest.fail")(function* <A, E, R>(self: Effect.Effect<A, E, R>) {
@@ -172,6 +175,71 @@ describe("file/time", () => {
           const err = yield* fail(check(id, file))
           expect(err.message).toContain("Last modification:")
           expect(err.message).toContain("Last read:")
+        }),
+      ),
+    )
+  })
+
+  describe("assertOrStamp()", () => {
+    it.live("stamps and succeeds when the file was not read first (RES-895)", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, "file.txt")
+          yield* put(file, "content")
+          yield* touch(file, 1_000)
+
+          const before = yield* get(id, file)
+          expect(before).toBeUndefined()
+
+          yield* checkOrStamp(id, file)
+
+          const after = yield* get(id, file)
+          expect(after).toBeInstanceOf(Date)
+        }),
+      ),
+    )
+
+    it.live("passes when prior read exists and file has not been modified", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, "file.txt")
+          yield* put(file, "content")
+          yield* touch(file, 1_000)
+
+          yield* read(id, file)
+          yield* checkOrStamp(id, file)
+        }),
+      ),
+    )
+
+    it.live("still throws 'modified since' when prior read exists and file changed", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, "file.txt")
+          yield* put(file, "content")
+          yield* touch(file, 1_000)
+
+          yield* read(id, file)
+          yield* put(file, "modified content")
+          yield* touch(file, 2_000)
+
+          const err = yield* fail(checkOrStamp(id, file))
+          expect(err.message).toContain("modified since it was last read")
+        }),
+      ),
+    )
+
+    it.live("subsequent assert (strict) succeeds after assertOrStamp stamped", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, "file.txt")
+          yield* put(file, "content")
+          yield* touch(file, 1_000)
+
+          yield* checkOrStamp(id, file)
+          // Strict assert should now pass because assertOrStamp recorded
+          // the stamp.
+          yield* check(id, file)
         }),
       ),
     )
