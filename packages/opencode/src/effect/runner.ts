@@ -176,7 +176,15 @@ export namespace Runner {
         case "Running":
           return [
             Effect.gen(function* () {
-              yield* Fiber.interrupt(st.run.fiber)
+              // `Fiber.interrupt` in Effect 4 awaits termination
+              // (see `fiberInterruptAs` → `fiberAwait` in
+              // `effect/internal/effect.js`), which would make the
+              // timeout on `Deferred.await` below moot — both would
+              // block on the same wedged fiber. Fork the interrupt
+              // request as a daemon so it signals without awaiting,
+              // then bound the wait below. The daemon resolves on its
+              // own once the target fiber actually terminates.
+              yield* Effect.forkChild(Fiber.interrupt(st.run.fiber))
               yield* Deferred.await(st.run.done).pipe(
                 Effect.exit,
                 Effect.asVoid,
