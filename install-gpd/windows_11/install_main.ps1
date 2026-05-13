@@ -890,10 +890,17 @@ function Install-Gpd {
     # at process startup. Without it, gpd.mcp.servers.arxiv_bridge raises
     # ModuleNotFoundError on first run and the desktop app shows a red
     # dot next to gpd-arxiv in the Tools panel.
-    Write-Log "Installing arxiv-mcp-server (powers the gpd-arxiv MCP bridge)..."
-    & $venvPip install --upgrade --quiet "arxiv-mcp-server>=0.4"
+    #
+    # The `[pdf]` extra pulls pymupdf4llm + pymupdf — required for the
+    # PDF-conversion fallback path in arxiv_mcp_server's download_paper
+    # tool (HTML 404 -> PDF). Mirrors the install-gpd/install macOS/Linux
+    # branch. Without `[pdf]`, ~45% of download_paper calls error out
+    # with "HTML version not available and PDF conversion requires the
+    # pdf extra" once arxiv.org/html lacks the paper.
+    Write-Log "Installing arxiv-mcp-server[pdf] (powers the gpd-arxiv MCP bridge)..."
+    & $venvPip install --upgrade --quiet "arxiv-mcp-server[pdf]>=0.4"
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "arxiv-mcp-server install failed -- gpd-arxiv MCP will show red-dot/disconnected. Retry: ~\.gpd\venv\Scripts\pip.exe install arxiv-mcp-server"
+        Write-Warn "arxiv-mcp-server[pdf] install failed -- gpd-arxiv MCP will show red-dot/disconnected. Retry: ~\.gpd\venv\Scripts\pip.exe install 'arxiv-mcp-server[pdf]'"
     }
 
 }

@@ -305,7 +305,12 @@ install_latex() {
         return 0
     fi
 
-    log "Installing LaTeX tools (~500MB download, takes a few minutes)..."
+    # AWG trace 2026-05-08: BasicTeX + texlive-latex-base were both too thin
+    # for real physics papers — agent hit 32 mid-build `tlmgr --usermode install`
+    # calls (biblatex, biber, physics, pgfplots, tcolorbox, mathabx, stmaryrd,
+    # mathtools, …) and biber failed with "not relocatable" on macOS usermode.
+    # Ship the full distribution up front; one-time ~3.5 GB beats the retry storm.
+    log "Installing LaTeX tools (~3.5GB download, takes several minutes)..."
 
     case "$os" in
         linux)
@@ -313,23 +318,25 @@ install_latex() {
                 warn "LaTeX auto-install only supports apt-based distros — install manually"
                 return 0
             fi
-            sudo apt-get install -y -qq texlive-latex-base texlive-binaries latexmk 2>&1 | tail -5 || \
-                warn "LaTeX install failed — run: sudo apt install texlive-latex-base texlive-binaries latexmk"
+            sudo apt-get install -y -qq \
+                texlive-latex-base texlive-latex-extra texlive-fonts-extra \
+                texlive-bibtex-extra texlive-science texlive-binaries \
+                biber latexmk 2>&1 | tail -5 || \
+                warn "LaTeX install failed — run: sudo apt install texlive-latex-base texlive-latex-extra texlive-fonts-extra texlive-bibtex-extra texlive-science texlive-binaries biber latexmk"
             ;;
         darwin)
             if ! command -v brew &>/dev/null; then
-                warn "Homebrew not found — skipping LaTeX. Install from https://brew.sh, then: brew install --cask basictex"
+                warn "Homebrew not found — skipping LaTeX. Install from https://brew.sh, then: brew install --cask mactex-no-gui"
                 return 0
             fi
-            brew install --cask basictex 2>&1 | tail -5 || \
-                warn "BasicTeX install failed — run: brew install --cask basictex"
+            # mactex-no-gui ships full TeX Live (biblatex, biber, physics,
+            # pgfplots, tcolorbox, mathabx, stmaryrd, mathtools, …) so we
+            # skip the tlmgr usermode dance entirely. Cask installer handles
+            # its own privilege prompt; no explicit sudo wrapper needed.
+            brew install --cask mactex-no-gui 2>&1 | tail -5 || \
+                warn "MacTeX install failed — run: brew install --cask mactex-no-gui"
             local texbin="/Library/TeX/texbin"
-            if [[ -x "$texbin/tlmgr" ]]; then
-                sudo "$texbin/tlmgr" update --self 2>/dev/null || true
-                sudo "$texbin/tlmgr" install latexmk 2>&1 | tail -3 || \
-                    warn "latexmk install failed — run: sudo tlmgr install latexmk"
-                export PATH="$texbin:$PATH"
-            fi
+            [[ -x "$texbin/pdflatex" ]] && export PATH="$texbin:$PATH"
             ;;
     esac
 
@@ -995,9 +1002,14 @@ install_gpd_package() {
     # Connection closed local mcp startup failed"). Pinned with the
     # other PyPI deps so a fresh install lands all 8 MCP servers in
     # green-dot state.
-    log "Installing arxiv-mcp-server (powers the gpd-arxiv MCP bridge)..."
-    "$venv_pip" install --upgrade --quiet "arxiv-mcp-server>=0.4" \
-        || warn "arxiv-mcp-server install failed — gpd-arxiv MCP will show red-dot/disconnected in the Tools panel. Retry: ~/.gpd/venv/bin/pip install arxiv-mcp-server"
+    # AWG trace 2026-05-08: without the [pdf] extra, gpd-arxiv_download_paper
+    # fails on PDFs and the agent silently falls back to download_source +
+    # `tar -xzf`, leaving extracted trees at
+    # ~/.arxiv-mcp-server/papers/sources/<id>-extracted/. The [pdf] extra
+    # pulls pypdf so download_paper works in-place.
+    log "Installing arxiv-mcp-server[pdf] (powers the gpd-arxiv MCP bridge)..."
+    "$venv_pip" install --upgrade --quiet "arxiv-mcp-server[pdf]>=0.4" \
+        || warn "arxiv-mcp-server install failed — gpd-arxiv MCP will show red-dot/disconnected in the Tools panel. Retry: ~/.gpd/venv/bin/pip install 'arxiv-mcp-server[pdf]'"
 }
 
 # Two-step liveness probe run after install. Split into two calls so the
