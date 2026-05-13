@@ -493,16 +493,6 @@ export namespace SessionProcessor {
         })
 
         const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
-          // Snapshot whether the stream produced anything before we clear
-          // ctx state below. Used to detect the "stream ended without output"
-          // case where halt was never called (clean SSE FIN, no exception)
-          // and we'd otherwise persist an empty assistant message with no
-          // error tag — the silent-terminator bug from ENG-561.
-          const producedOutput =
-            ctx.assistantMessage.finish !== undefined ||
-            !!ctx.currentText ||
-            Object.keys(ctx.reasoningMap).length > 0 ||
-            Object.keys(ctx.toolcalls).length > 0
           if (ctx.snapshot) {
             const patch = yield* snapshot.patch(ctx.snapshot)
             if (patch.files.length) {
@@ -560,12 +550,30 @@ export namespace SessionProcessor {
           }
           ctx.toolcalls = {}
           // Only synthesize "stream ended without output" when this really
-          // looks like a silent terminator: no output produced, no existing
-          // error, and no pending compaction (compaction returns "compact"
-          // with a legitimately empty assistant message — turning that into
-          // an error would break the compact loop). ENG-561 fix #1, defense
-          // in depth.
-          if (!producedOutput && !ctx.assistantMessage.error && !ctx.needsCompaction) {
+          // looks like a silent terminator:
+          //   1. Nothing visible was ever committed. `retrySafe` stays true
+          //      iff no `commitsVisibleOutput` event was seen at L231;
+          //      crucially, it flips to false on the first commit and stays
+          //      false even after the part is finalized and the per-part
+          //      state (`currentText`, `reasoningMap[id]`, `toolcalls[id]`)
+          //      is cleared. Using the per-part state directly would
+          //      under-report output for streams that completed parts
+          //      cleanly before being cut off.
+          //   2. No `finish` event was ever received. An empty-but-finished
+          //      response (e.g. `text("")` with a `finish_reason`) is the
+          //      model legitimately replying with nothing, not a truncated
+          //      SSE — it must pass through.
+          //   3. No error is already attached, and no compaction is pending
+          //      (compaction returns "compact" with a legitimately empty
+          //      assistant message — turning that into an error would
+          //      break the compact loop).
+          // ENG-561 fix #1, defense in depth.
+          if (
+            retrySafe &&
+            ctx.assistantMessage.finish === undefined &&
+            !ctx.assistantMessage.error &&
+            !ctx.needsCompaction
+          ) {
             ctx.assistantMessage.error = new MessageV2.APIError({
               message: "Stream ended without output",
               isRetryable: true,
