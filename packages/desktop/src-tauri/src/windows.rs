@@ -53,11 +53,22 @@ impl MainWindow {
             app,
             decorations,
         )
+        // Generous default size on first launch — feels like a real
+        // workspace without occupying the full screen the way maximized()
+        // did. tauri-plugin-window-state restores prior user-set
+        // size/position on subsequent launches (see
+        // setup_window_state_listener below + lib.rs:554), so this
+        // .inner_size + .center pair is overridden whenever a saved
+        // state exists. AWG flagged the prior .maximized(true) default
+        // as feeling overbearing on first open (PSI Org Priorities
+        // Review, 2026-05-08).
         .title("GPD")
         .disable_drag_drop_handler()
         .zoom_hotkeys_enabled(false)
         .visible(true)
-        .maximized(true)
+        .inner_size(1440.0, 900.0)
+        .min_inner_size(900.0, 600.0)
+        .center()
         .initialization_script(format!(
             r#"
             window.__OPENCODE__ ??= {{}};

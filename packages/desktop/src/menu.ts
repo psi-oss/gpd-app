@@ -20,6 +20,32 @@ export async function createMenu(trigger: (id: string) => void) {
           await PredefinedMenuItem.new({
             item: { About: null },
           }),
+          await PredefinedMenuItem.new({
+            item: "Separator",
+          }),
+          // v1.0.3: dedicated Settings / API Key / Send Feedback entries
+          // wired to command-system ids registered in pages/layout.tsx.
+          // Cmd+, accelerator matches the existing "settings.open" keybind
+          // so the menu item displays the correct shortcut natively.
+          await MenuItem.new({
+            text: t("command.settings.open"),
+            accelerator: "Cmd+,",
+            action: () => trigger("settings.open"),
+          }),
+          await MenuItem.new({
+            // Reuses settings.account.accessKey.title ("API key") for the
+            // label — the menu item opens the dedicated API Key pane
+            // where the user can change or revoke their saved key.
+            text: t("settings.account.accessKey.title"),
+            action: () => trigger("settings.openApiKey"),
+          }),
+          await MenuItem.new({
+            text: t("settings.feedback.title"),
+            action: () => trigger("settings.openFeedback"),
+          }),
+          await PredefinedMenuItem.new({
+            item: "Separator",
+          }),
           await MenuItem.new({
             enabled: UPDATER_ENABLED,
             action: () => runUpdater({ alertOnFail: true }),
@@ -151,6 +177,25 @@ export async function createMenu(trigger: (id: string) => void) {
           await PredefinedMenuItem.new({
             item: "Separator",
           }),
+        ],
+      }),
+      // v1.0.3: standard macOS Window submenu. Predefined items (Minimize,
+      // Maximize, Fullscreen) carry their own native localization from the
+      // OS, so no new i18n strings are required for the children. The
+      // submenu title is hardcoded "Window" — adding a translatable key
+      // would require touching all 15 desktop-i18n locale dicts to keep
+      // them in parity, which is out of scope for the v1.0.3 menu pass.
+      // Tauri v2 PredefinedMenuItem does not expose BringAllToFront in
+      // its enum (see node_modules @tauri-apps/api/menu/predefinedMenuItem.d.ts),
+      // so it is intentionally omitted; macOS still synthesizes the
+      // standard window-cycling shortcuts independently.
+      await Submenu.new({
+        text: "Window",
+        items: [
+          await PredefinedMenuItem.new({ item: "Minimize" }),
+          await PredefinedMenuItem.new({ item: "Maximize" }),
+          await PredefinedMenuItem.new({ item: "Separator" }),
+          await PredefinedMenuItem.new({ item: "Fullscreen" }),
         ],
       }),
       await Submenu.new({
