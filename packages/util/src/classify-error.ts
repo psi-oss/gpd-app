@@ -33,8 +33,35 @@ export function classifyError(error: unknown): string {
     return "error.classified.timeout"
   }
 
-  // Provider unavailable (HTTP 502/503)
-  if (status === 502 || status === 503 || containsAny(msg, ["service unavailable", "bad gateway", "overloaded"])) {
+  // Provider unavailable — HTTP 502/503 or a transient upstream-side failure
+  // that the user can resolve by retrying or switching model/provider. Catches:
+  //   - "internal server error" — LiteLLM passes through Anthropic's 500-class
+  //     SSE error events as `AnthropicException - Internal server error`
+  //   - "midstreamfallback" / "midstream fallback" — LiteLLM's unconditional
+  //     wrapper for any mid-stream upstream failure (see
+  //     streaming_handler.py:2250-2323; not actually about fallbacks)
+  //   - provider exception names — `AnthropicException`, `OpenAIException`,
+  //     `GeminiException`, `VertexAIException` — surface from the LiteLLM
+  //     proxy when the upstream is degraded
+  //   - HTTP 500 — generic upstream 5xx not already covered by 502/503
+  if (
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    containsAny(msg, [
+      "service unavailable",
+      "bad gateway",
+      "overloaded",
+      "internal server error",
+      "internalservererror",
+      "midstreamfallback",
+      "midstream fallback",
+      "anthropicexception",
+      "openaiexception",
+      "geminiexception",
+      "vertexaiexception",
+    ])
+  ) {
     return "error.classified.providerUnavailable"
   }
 

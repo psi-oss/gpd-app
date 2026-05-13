@@ -177,7 +177,7 @@ export const dict: Record<string, string> = {
     "The conversation is too long for the assistant to keep in memory. Try starting a new conversation or picking a model with larger memory.",
   "error.classified.network": "Couldn't reach the server. Check your internet connection.",
   "error.classified.providerUnavailable":
-    "The AI service is temporarily unavailable. Please try again in a moment.",
+    "The AI service had a hiccup. Please try again — if it keeps happening, try a different model or provider in Settings.",
   "error.classified.timeout": "The request timed out. Try again or try a simpler prompt.",
   "error.classified.invalidRequest": "The AI service rejected the request.",
   "error.classified.unknown": "Something went wrong. See details for more.",
