@@ -299,8 +299,16 @@ export function Titlebar() {
               <div
                 class="flex items-center gap-0 transition-transform"
                 classList={{
-                  "translate-x-0": !layout.sidebar.opened(),
-                  "-translate-x-[36px]": layout.sidebar.opened(),
+                  // The -36px slide reclaims the slot vacated by the
+                  // new-session button when the sidebar opens. That
+                  // button only renders when params.dir is set (line
+                  // 255 Show gate), so on the home page (params.dir
+                  // undefined) the slot doesn't exist and the slide
+                  // would land the back chevron directly on top of
+                  // the panel-toggle button at line 244 — making the
+                  // toggle unclickable. Gate the slide on params.dir.
+                  "translate-x-0": !layout.sidebar.opened() || !params.dir,
+                  "-translate-x-[36px]": layout.sidebar.opened() && !!params.dir,
                   "duration-180 ease-out": !layout.sidebar.opened(),
                   "duration-180 ease-in": layout.sidebar.opened(),
                 }}
