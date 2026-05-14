@@ -226,7 +226,18 @@ export const SidebarContent = (props: {
         classList={{ "flex-1 flex h-full min-h-0 min-w-0 overflow-hidden": true, "pointer-events-none": !expanded() }}
         aria-hidden={!expanded()}
       >
-        {props.renderPanel()}
+        {/*
+          Only render the panel content when expanded. The wrapper has
+          width:0 + overflow:hidden when collapsed, but SidebarPanel's
+          `box-border px-3 border-l` forces a min computed width of 25px
+          so its descendants (e.g. the full-width "New conversation"
+          button) get painted past the wrapper's box. WebKit on macOS
+          does not paint-clip them despite overflow:hidden, so the
+          button appears to overlap the main content area. Skipping the
+          render entirely keeps the wrapper as a 0-width flex sibling
+          for layout and stops the overflow at the source.
+        */}
+        <Show when={expanded()}>{props.renderPanel()}</Show>
       </div>
     </div>
   )
