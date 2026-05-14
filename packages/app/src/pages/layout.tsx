@@ -267,7 +267,14 @@ export default function Layout(props: ParentProps) {
 
   createEffect(() => {
     const p = hoverProjectData()
-    if (p) {
+    // The peek panel exists to let users see a project's sessions when
+    // the rail is narrow (icons-only) without committing to a full
+    // panel open. When the rail is already in wide mode the project's
+    // name is visible inline, AND the absolutely-positioned peek panel
+    // overflows the nav's right edge and paints over the chat area
+    // (rail=240 + peek=280 = 520px, but nav is only 240px when sidebar
+    // is closed). Skip peek activation entirely in wide-rail mode.
+    if (p && !layout.projectRail.opened()) {
       if (peekt !== undefined) {
         clearTimeout(peekt)
         peekt = undefined
