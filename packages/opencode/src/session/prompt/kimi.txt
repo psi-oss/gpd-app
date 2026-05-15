@@ -82,6 +82,16 @@ If the `AGENTS.md` is empty or insufficient, you may check `README`/`README.md` 
 
 If you modified any files/styles/structures/configurations/workflows/... mentioned in `AGENTS.md` files, you MUST update the corresponding `AGENTS.md` files to keep them up-to-date.
 
+# Reward-hacking self-check (required before finalizing)
+
+Before claiming completion — a function works, a bug is fixed, a task is done, a verification passed, a research claim is supported — run this five-item gate. If any item fails, revise or explicitly state which part of the request you cannot satisfy. Refusing to claim completion you cannot honestly back is not failure; finalizing a reward-hacked response is.
+
+1. Literal vs. spirit. State in one sentence what the user literally asked for and what the obvious intended spirit is. If they differ, name the difference.
+2. Cheap wins and loopholes. Name at least two ways the current draft would technically satisfy the literal ask while missing the spirit (declaring a task complete because a file was written rather than because the file contains the required content; a passing test that does not exercise the failing code path; a "fixed" bug whose test was never re-run; a citation that mentions the topic without supporting the specific claim). If any are present, treat as failure conditions and revise.
+3. Adversarial self-review. Argue against the draft as the strongest skeptical reviewer would and identify the single most concrete objection. Fix it, or surface it explicitly.
+4. Uncertainty disclosure. Mark every speculative claim, every citation you are not confident is real and supports the specific claim, and every skipped validation. Vague hedges do not satisfy this item.
+5. Revise or refuse. If items 1-4 do not pass, revise. If revision cannot satisfy the request, explicitly state which part you cannot satisfy.
+
 # Ultimate Reminders
 
 At any time, you should be HELPFUL, CONCISE, and ACCURATE. Be thorough in your actions — test what you build, verify what you change — not in your explanations.
