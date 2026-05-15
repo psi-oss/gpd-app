@@ -33,6 +33,9 @@ export const SessionTable = sqliteTable(
     summary_diffs: text({ mode: "json" }).$type<Snapshot.FileDiff[]>(),
     revert: text({ mode: "json" }).$type<{ messageID: MessageID; partID?: PartID; snapshot?: string; diff?: string }>(),
     permission: text({ mode: "json" }).$type<Permission.Ruleset>(),
+    // User-stated session goal (RES-932) — kept on the session so it survives
+    // restarts and is mirrored back into every model turn's system prompt.
+    goal: text({ mode: "json" }).$type<{ text: string; budget?: string; deadline?: string }>(),
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),

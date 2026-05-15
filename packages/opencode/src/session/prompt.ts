@@ -1517,7 +1517,23 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 instruction.system().pipe(Effect.orDie),
                 MessageV2.toModelMessagesEffect(msgs, model),
               ])
-              const system = [...env, ...(skills ? [skills] : []), ...instructions]
+              // RES-932: surface the user-stated session goal on every turn.
+              // Re-read the session here (rather than relying on the loop-scope
+              // `session` value) so a /goal update in the middle of a run is
+              // visible to the very next model call instead of waiting for a
+              // fresh loop entry.
+              const goalBlock = yield* sessions
+                .get(sessionID)
+                .pipe(
+                  Effect.map((s) => Session.goalSystemPrompt(s.goal)),
+                  Effect.orElseSucceed(() => undefined as string | undefined),
+                )
+              const system = [
+                ...env,
+                ...(skills ? [skills] : []),
+                ...instructions,
+                ...(goalBlock ? [goalBlock] : []),
+              ]
               const format = lastUser.format ?? { type: "text" as const }
               if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
               const rootSessionID = session.parentID

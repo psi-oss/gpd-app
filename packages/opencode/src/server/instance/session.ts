@@ -280,6 +280,15 @@ export const SessionRoutes = lazy(() =>
               archived: z.number().optional(),
             })
             .optional(),
+          // RES-932: pass `goal: null` to clear; pass an object to set/replace.
+          goal: z
+            .object({
+              text: z.string(),
+              budget: z.string().optional(),
+              deadline: z.string().optional(),
+            })
+            .nullable()
+            .optional(),
         }),
       ),
       async (c) => {
@@ -301,6 +310,10 @@ export const SessionRoutes = lazy(() =>
             }
             if (updates.time?.archived !== undefined) {
               yield* session.setArchived({ sessionID, time: updates.time.archived })
+            }
+            if (updates.goal !== undefined) {
+              if (updates.goal === null) yield* session.clearGoal(sessionID)
+              else yield* session.setGoal({ sessionID, goal: updates.goal })
             }
 
             return yield* session.get(sessionID)
