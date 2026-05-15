@@ -72,7 +72,6 @@ export namespace Session {
       share,
       revert,
       permission: row.permission ?? undefined,
-      goal: row.goal ?? undefined,
       time: {
         created: row.time_created,
         updated: row.time_updated,
@@ -99,7 +98,6 @@ export namespace Session {
       summary_diffs: info.summary?.diffs,
       revert: info.revert ?? null,
       permission: info.permission,
-      goal: info.goal ?? null,
       time_created: info.time.created,
       time_updated: info.time.updated,
       time_compacting: info.time.compacting,
@@ -153,16 +151,6 @@ export namespace Session {
           partID: PartID.zod.optional(),
           snapshot: z.string().optional(),
           diff: z.string().optional(),
-        })
-        .optional(),
-      // RES-932: user-stated session goal. `text` is the only required field;
-      // `budget` and `deadline` are free-form strings so callers can pass values
-      // like "$50" or "2026-05-20" / "2h" without locking in a parser.
-      goal: z
-        .object({
-          text: z.string(),
-          budget: z.string().optional(),
-          deadline: z.string().optional(),
         })
         .optional(),
     })
@@ -262,23 +250,6 @@ export namespace Session {
         error: MessageV2.Assistant.shape.error,
       }),
     ),
-  }
-
-  /**
-   * RES-932: render the user-stated session goal as a system-prompt block.
-   * Returns undefined when no goal is set so callers can drop it from the
-   * system prompt array without producing an empty section.
-   */
-  export function goalSystemPrompt(goal: Info["goal"]): string | undefined {
-    if (!goal || !goal.text || !goal.text.trim()) return undefined
-    const lines = ["<session-goal>", `Goal: ${goal.text.trim()}`]
-    if (goal.budget && goal.budget.trim()) lines.push(`Target budget: ${goal.budget.trim()}`)
-    if (goal.deadline && goal.deadline.trim()) lines.push(`Target finish: ${goal.deadline.trim()}`)
-    lines.push(
-      "Keep this goal in view across every turn. Surface it when the conversation drifts and reflect it back in your plan.",
-      "</session-goal>",
-    )
-    return lines.join("\n")
   }
 
   export function plan(input: { slug: string; time: { created: number } }) {
@@ -381,8 +352,6 @@ export namespace Session {
     }) => Effect.Effect<void>
     readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
     readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
-    readonly setGoal: (input: { sessionID: SessionID; goal: Info["goal"] }) => Effect.Effect<void>
-    readonly clearGoal: (sessionID: SessionID) => Effect.Effect<void>
     readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
     readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]>
     readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
@@ -667,17 +636,6 @@ export namespace Session {
         yield* patch(input.sessionID, { time: { updated: Date.now() }, summary: input.summary })
       })
 
-      const setGoal = Effect.fn("Session.setGoal")(function* (input: {
-        sessionID: SessionID
-        goal: Info["goal"]
-      }) {
-        yield* patch(input.sessionID, { time: { updated: Date.now() }, goal: input.goal })
-      })
-
-      const clearGoal = Effect.fn("Session.clearGoal")(function* (sessionID: SessionID) {
-        yield* patch(sessionID, { time: { updated: Date.now() }, goal: null })
-      })
-
       const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
         return yield* storage
           .read<Snapshot.FileDiff[]>(["session_diff", sessionID])
@@ -751,8 +709,6 @@ export namespace Session {
         setRevert,
         clearRevert,
         setSummary,
-        setGoal,
-        clearGoal,
         diff,
         messages,
         children,

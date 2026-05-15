@@ -62,7 +62,6 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
-import { DialogSessionGoal } from "../../component/dialog-session-goal"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { Flag } from "@/flag/flag"
@@ -419,20 +418,6 @@ export function Session() {
       },
       onSelect: (dialog) => {
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
-      },
-    },
-    {
-      // RES-932: pin a session goal that gets surfaced in the system prompt
-      // on every turn. Optional --budget=<v> and --time=<v> flags are parsed
-      // from the same input field; submitting an empty value clears the goal.
-      title: "Set session goal",
-      value: "session.goal",
-      category: "Session",
-      slash: {
-        name: "goal",
-      },
-      onSelect: (dialog) => {
-        dialog.replace(() => <DialogSessionGoal session={route.sessionID} />)
       },
     },
     {

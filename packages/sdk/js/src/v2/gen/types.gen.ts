@@ -958,11 +958,6 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
-  goal?: {
-    text: string
-    budget?: string
-    deadline?: string
-  }
 }
 
 export type EventSessionCreated = {
@@ -3666,11 +3661,6 @@ export type SessionUpdateData = {
     time?: {
       archived?: number
     }
-    goal?: {
-      text: string
-      budget?: string
-      deadline?: string
-    } | null
   }
   path: {
     sessionID: string
