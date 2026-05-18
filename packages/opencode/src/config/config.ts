@@ -1647,7 +1647,7 @@ export namespace Config {
       const get = Effect.fn("Config.get")(function* () {
         const current = yield* InstanceState.get(state)
         const latest = yield* Effect.promise(() => fingerprintFiles(current.files))
-        const changed = current.files.some((file) => latest[file] !== current.fingerprints[file])
+        const changed = current.files.some((file: string) => latest[file] !== current.fingerprints[file])
 
         if (changed) {
           yield* invalidateGlobal
