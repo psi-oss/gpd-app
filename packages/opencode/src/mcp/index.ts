@@ -25,7 +25,7 @@ import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
-import { Effect, Exit, Layer, Option, Context, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Context, Stream, Schedule, Duration } from "effect"
 import { EffectLogger } from "@/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -466,6 +466,15 @@ export namespace MCP {
         yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
       })
 
+      function dropConnection(s: State, name: string, client: MCPClient, reason: string) {
+        if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
+        log.warn("mcp server disconnected, marking as failed", { server: name, reason })
+        s.status[name] = { status: "failed", error: reason }
+        delete s.clients[name]
+        delete s.defs[name]
+        void Effect.runPromise(stopClient(client).pipe(Effect.provide(EffectLogger.layer)))
+      }
+
       function watch(s: State, name: string, client: MCPClient, timeout?: number) {
         client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
           log.info("tools list changed notification received", { server: name })
@@ -480,7 +489,50 @@ export namespace MCP {
             bus.publish(ToolsChanged, { server: name }).pipe(Effect.ignore, Effect.provide(EffectLogger.layer)),
           )
         })
+
+        // Reactive reconnect: when the underlying MCP transport closes
+        // unexpectedly, mark the server as failed so the 30s health-check
+        // (or the next tool call's transport-error path) can attempt
+        // reconnection. Without this, the cached "connected" status lingers
+        // and every subsequent callTool hits the same dead client.
+        client.onclose = () => {
+          dropConnection(s, name, client, "MCP transport closed unexpectedly")
+        }
       }
+
+      // Periodic health-check: attempt to reconnect failed servers every 30s.
+      // Refs `state` + `reconnectClient` via closure; both are resolved at
+      // call-time (not closure-capture-time), so it is safe that they are
+      // defined further down in the outer Effect.gen. The fiber is forked
+      // inside the state init body via Effect.forkScoped so it is bound to
+      // the per-instance ScopedCache scope and dies when the instance is
+      // disposed.
+      const runHealthCheckOnce = (): Effect.Effect<void, never, never> =>
+        Effect.gen(function* () {
+          const s = yield* InstanceState.get(state)
+          const cfg = yield* cfgSvc.get()
+          const config = cfg.mcp ?? {}
+          const failedServers = Object.entries(s.status).filter(
+            ([name, st]) => st.status === "failed" && config[name] && isMcpConfigured(config[name]),
+          )
+          if (failedServers.length > 0) {
+            log.info("mcp health-check: attempting reconnect for failed servers", {
+              servers: failedServers.map(([name]) => name),
+            })
+          }
+          for (const [name] of failedServers) {
+            // Skip if already reconnecting
+            if (reconnecting.has(name)) continue
+            const mcp = config[name]
+            if (!mcp) continue
+            const ok = yield* Effect.promise(() => reconnectClient(name))
+            if (ok) {
+              log.info("mcp health-check: reconnected", { server: name })
+            } else {
+              log.debug("mcp health-check: reconnect still failed", { server: name })
+            }
+          }
+        }).pipe(Effect.catchCause(() => Effect.void))
 
       const state = yield* InstanceState.make<State>(
         Effect.fn("MCP.state")(function* () {
@@ -506,7 +558,14 @@ export namespace MCP {
                   return
                 }
 
-                const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
+                const result = yield* create(key, mcp).pipe(
+                  Effect.catch((err: unknown) => {
+                    const msg = err instanceof Error ? err.message : String(err)
+                    log.error("mcp server initialization failed, marking as failed", { key, error: msg })
+                    s.status[key] = { status: "failed", error: msg }
+                    return Effect.void
+                  }),
+                )
                 if (!result) return
 
                 s.status[key] = result.status
@@ -528,6 +587,11 @@ export namespace MCP {
               yield* stopOAuthCallback
             }),
           )
+
+          // Start periodic health-check (every 30s) to auto-reconnect failed
+          // MCP servers. forkScoped ties the fiber to this state's scope so
+          // it dies on instance disposal.
+          yield* runHealthCheckOnce().pipe(Effect.repeat(Schedule.spaced(Duration.seconds(30))), Effect.forkScoped)
 
           return s
         }),
