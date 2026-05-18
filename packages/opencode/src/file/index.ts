@@ -9,7 +9,7 @@ import { createHash, randomUUID } from "crypto"
 import { formatPatch, structuredPatch } from "diff"
 import fuzzysort from "fuzzysort"
 import ignore from "ignore"
-import { rename, unlink } from "fs/promises"
+import { open, rename, unlink } from "fs/promises"
 import path from "path"
 import z from "zod"
 import { Global } from "../global"
@@ -379,6 +379,18 @@ export namespace File {
     return ["image", "audio", "video", "font", "model", "multipart"].includes(top)
   }
 
+  const SNIFF_BYTES = 8192
+
+  // Sniff a small prefix of bytes to detect binary content. Used as a fallback
+  // for files whose extension/MIME does not classify them (e.g. extensionless
+  // compiled executables), which would otherwise be read as a UTF-8 string and
+  // fed to `git diff` — slow or hung for large binaries.
+  function isBinaryBySniff(bytes: Uint8Array) {
+    if (bytes.length === 0) return false
+    if (bytes.includes(0)) return true
+    return bytes.filter((b) => b < 9 || (b > 13 && b < 32)).length / bytes.length > 0.3
+  }
+
   const hidden = (item: string) => {
     const normalized = item.replaceAll("\\", "/").replace(/\/+$/, "")
     return normalized.split("/").some((part) => part.startsWith(".") && part.length > 1)
@@ -667,6 +679,27 @@ export namespace File {
             hash: hash(bytes),
             mimeType,
             encoding: "base64" as const,
+          }
+        }
+
+        if (!knownText) {
+          const sniff = yield* Effect.scoped(
+            Effect.acquireRelease(
+              Effect.promise(() => open(full, "r")),
+              (fh) => Effect.promise(() => fh.close()),
+            ).pipe(
+              Effect.flatMap((fh) =>
+                Effect.promise(async () => {
+                  const buf = new Uint8Array(SNIFF_BYTES)
+                  const result = await fh.read(buf, 0, SNIFF_BYTES, 0)
+                  return buf.subarray(0, result.bytesRead)
+                }),
+              ),
+            ),
+          ).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+          if (isBinaryBySniff(sniff)) {
+            const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+            return { type: "binary" as const, content: "", hash: hash(bytes), mimeType }
           }
         }
 
