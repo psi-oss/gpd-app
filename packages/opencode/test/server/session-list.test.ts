@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { Instance } from "../../src/project/instance"
 import { Session as SessionNs } from "../../src/session"
+import { SessionTable } from "../../src/session/session.sql"
+import { Database, eq } from "../../src/storage/db"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 
@@ -104,6 +106,73 @@ describe("session.list", () => {
 
         const sessions = [...svc.list({ limit: 2 })]
         expect(sessions.length).toBe(2)
+      },
+    })
+  })
+
+  test("excludes archived sessions by default", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const active = await svc.create({ title: "active-session" })
+        const archived = await svc.create({ title: "archived-session" })
+
+        Database.use((db) =>
+          db.update(SessionTable).set({ time_archived: Date.now() }).where(eq(SessionTable.id, archived.id)).run(),
+        )
+
+        const sessions = [...svc.list()]
+        const ids = sessions.map((s) => s.id)
+        expect(ids).toContain(active.id)
+        expect(ids).not.toContain(archived.id)
+      },
+    })
+  })
+
+  test("archived sessions do not consume limit slots", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const s1 = await svc.create({ title: "session-1" })
+        const s2 = await svc.create({ title: "session-2" })
+        const archived = await svc.create({ title: "archived-session" })
+
+        Database.use((db) =>
+          db
+            .update(SessionTable)
+            .set({ time_archived: Date.now(), time_updated: Date.now() + 1000 })
+            .where(eq(SessionTable.id, archived.id))
+            .run(),
+        )
+
+        const sessions = [...svc.list({ limit: 2 })]
+        const ids = sessions.map((s) => s.id)
+        expect(sessions.length).toBe(2)
+        expect(ids).toContain(s1.id)
+        expect(ids).toContain(s2.id)
+        expect(ids).not.toContain(archived.id)
+      },
+    })
+  })
+
+  test("includes archived sessions when archived option is true", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const active = await svc.create({ title: "active-session" })
+        const archived = await svc.create({ title: "archived-session" })
+
+        Database.use((db) =>
+          db.update(SessionTable).set({ time_archived: Date.now() }).where(eq(SessionTable.id, archived.id)).run(),
+        )
+
+        const sessions = [...svc.list({ archived: true })]
+        const ids = sessions.map((s) => s.id)
+        expect(ids).toContain(active.id)
+        expect(ids).toContain(archived.id)
       },
     })
   })
