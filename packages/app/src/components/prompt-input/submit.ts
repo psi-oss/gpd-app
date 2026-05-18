@@ -1,4 +1,4 @@
-import type { Message, Session } from "@opencode-ai/sdk/v2/client"
+import type { Message, Session, SessionGoal } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { Binary } from "@opencode-ai/util/binary"
@@ -26,6 +26,77 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const GOAL_OBJECTIVE_MAX_LENGTH = 4000
+
+const goalDescription = (goal: SessionGoal) =>
+  [
+    goal.objective,
+    `Tokens: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : `/${goal.tokens.budget}`}`,
+    `Time: ${goal.time.used}s`,
+    "Commands: /goal edit, /goal pause, /goal resume, /goal clear",
+  ].join("\n")
+
+async function runGoal(input: {
+  client: ReturnType<typeof useSDK>["client"]
+  sessionID: string
+  text: string
+  edit?: (value: string) => void
+}) {
+  const text = input.text.trim()
+  const arg = text.slice("/goal".length).trim()
+  const control = !arg || arg === "pause" || arg === "resume" || arg === "clear" || arg === "edit"
+  if (!control && arg.length > GOAL_OBJECTIVE_MAX_LENGTH) {
+    throw new Error(
+      `Goal objective is too long (${arg.length}/${GOAL_OBJECTIVE_MAX_LENGTH} characters). Shorten the /goal objective and put extra details in a normal follow-up prompt.`,
+    )
+  }
+  const current = await input.client.session.goal.get({ sessionID: input.sessionID })
+  if (!arg) {
+    const goal = current.data
+    showToast({
+      title: goal ? `Goal ${goal.status}` : "No goal set",
+      description: goal ? goalDescription(goal) : "Use /goal <objective>.",
+    })
+    return true
+  }
+  if (arg === "pause") {
+    if (!current.data) throw new Error("No goal to pause.")
+    await input.client.session.goal.update({ sessionID: input.sessionID, status: "paused" })
+    showToast({ title: "Goal paused" })
+    return true
+  }
+  if (arg === "resume") {
+    if (!current.data) throw new Error("No goal to resume.")
+    const updated = await input.client.session.goal.update({ sessionID: input.sessionID, status: "active" })
+    if (updated.data?.status === "budget_limited") {
+      showToast({
+        title: "Goal still budget-limited",
+        description: "Increase or clear the token budget to resume continuation.",
+      })
+    } else {
+      showToast({ title: "Goal resumed" })
+    }
+    return true
+  }
+  if (arg === "clear") {
+    await input.client.session.goal.clear({ sessionID: input.sessionID })
+    showToast({ title: "Goal cleared" })
+    return true
+  }
+  if (arg === "edit") {
+    if (!current.data) throw new Error("No goal to edit. Use /goal <objective>.")
+    input.edit?.(`/goal ${current.data.objective}`)
+    return true
+  }
+  if (current.data) {
+    await input.client.session.goal.update({ sessionID: input.sessionID, objective: arg, status: "active" })
+    showToast({ title: "Goal updated" })
+    return true
+  }
+  await input.client.session.goal.create({ sessionID: input.sessionID, objective: arg })
+  showToast({ title: "Goal set" })
+  return true
+}
 
 /**
  * Aborts every in-flight prompt submission across every session.
@@ -98,8 +169,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     return true
   }
 
+  const commandText = text.trim()
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
+  if (commandText === "/goal" || commandText.startsWith("/goal ")) {
+    if (!(await wait())) return false
+    await runGoal({ client: input.client, sessionID: input.draft.sessionID, text: commandText })
+    return true
+  }
   if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
     setBusy()
     try {
@@ -478,6 +555,24 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
           restoreInput()
         })
+      return
+    }
+
+    if (mode === "normal" && (text === "/goal" || text.startsWith("/goal "))) {
+      clearInput()
+      void runGoal({
+        client,
+        sessionID: session.id,
+        text,
+        edit: (value) => prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length),
+      }).catch((err) => {
+        showToast({
+          variant: "error",
+          title: "Goal command failed",
+          description: formatServerError(err, language.t, language.t("common.requestFailed")),
+        })
+        restoreInput()
+      })
       return
     }
 

@@ -6,6 +6,7 @@ import { MessageV2 } from "./message-v2"
 import { Log } from "../util/log"
 import { SessionRevert } from "./revert"
 import { Session } from "."
+import { SessionGoal } from "./goal"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { ModelID, ProviderID } from "../provider/schema"
@@ -33,6 +34,7 @@ import { pathToFileURL, fileURLToPath } from "url"
 import { ConfigMarkdown } from "../config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/util/error"
+import { NotFoundError } from "@/storage/db"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
@@ -51,6 +53,9 @@ import { SessionRunState } from "./run-state"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
+
+const GOAL_CONTINUATION_MARKER = "Continue working toward the active session goal."
+const GOAL_CONTINUATION_IDLE_GRACE = "150 millis"
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -79,6 +84,8 @@ export namespace SessionPrompt {
 
   export interface Interface {
     readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+    readonly continueGoal: (sessionID: SessionID) => Effect.Effect<void>
+    readonly resumeGoals: () => Effect.Effect<void>
     readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
     readonly loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts>
     readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
@@ -94,6 +101,7 @@ export namespace SessionPrompt {
       const bus = yield* Bus.Service
       const status = yield* SessionStatus.Service
       const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
       const agents = yield* Agent.Service
       const provider = yield* Provider.Service
       const processor = yield* SessionProcessor.Service
@@ -115,6 +123,13 @@ export namespace SessionPrompt {
       const summary = yield* SessionSummary.Service
       const sys = yield* SystemPrompt.Service
       const llm = yield* LLM.Service
+      const goalIdleSubscription = yield* InstanceState.make(() =>
+        Effect.succeed({
+          active: false,
+          pending: new Set<SessionID>(),
+          continuing: new Set<SessionID>(),
+        }),
+      )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
         const ctx = yield* Effect.context()
         return {
@@ -133,7 +148,179 @@ export namespace SessionPrompt {
 
       const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
         yield* elog.info("cancel", { sessionID })
+        const goal = yield* goals.get(sessionID)
+        if (goal?.status === "active") {
+          yield* goals.update({ sessionID, status: "paused" }).pipe(Effect.ignore)
+        }
         yield* state.cancel(sessionID)
+      })
+
+      const isGoalContinuationMessage = (message: MessageV2.WithParts) =>
+        message.info.role === "user" &&
+        message.parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.synthetic &&
+            (part.metadata?.goalContinuation === true || part.text.includes(GOAL_CONTINUATION_MARKER)),
+        )
+
+      const assistantMadeGoalProgress = (message: MessageV2.WithParts) =>
+        message.info.role === "assistant" &&
+        message.parts.some((part) => {
+          if (part.type === "patch" || part.type === "subtask") return true
+          if (part.type !== "tool") return false
+          if (part.tool === "get_goal") return false
+          return part.state.status === "completed" || part.state.status === "running" || part.state.status === "pending"
+        })
+
+      const scheduleGoalIdleRetry: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.scheduleGoalIdleRetry",
+      )(function* (sessionID: SessionID) {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.pending.has(sessionID)) return
+        subscription.pending.add(sessionID)
+        yield* Effect.gen(function* () {
+          while ((yield* status.get(sessionID)).type !== "idle") {
+            yield* Effect.sleep(25)
+          }
+          yield* autoContinueGoal(sessionID)
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
+          Effect.ignore,
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+      })
+
+      const autoContinueGoal: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.autoContinueGoal",
+      )(function* (sessionID: SessionID) {
+        yield* ensureGoalIdleSubscription()
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.continuing.has(sessionID)) return
+        subscription.continuing.add(sessionID)
+        yield* Effect.gen(function* () {
+          const goal = yield* goals.get(sessionID)
+          if (goal?.status !== "active") return
+
+          const current = yield* status.get(sessionID)
+          if (current.type !== "idle") {
+            yield* scheduleGoalIdleRetry(sessionID)
+            return
+          }
+          yield* Effect.sleep(GOAL_CONTINUATION_IDLE_GRACE)
+          const afterGraceGoal = yield* goals.get(sessionID)
+          if (afterGraceGoal?.status !== "active") return
+          const afterGraceStatus = yield* status.get(sessionID)
+          if (afterGraceStatus.type !== "idle") {
+            yield* scheduleGoalIdleRetry(sessionID)
+            return
+          }
+
+          const latestUser = yield* sessions
+            .findMessage(sessionID, (message) => message.info.role === "user")
+            .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          const latestAssistant = yield* sessions
+            .findMessage(sessionID, (message) => message.info.role === "assistant")
+            .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          if (
+            Option.isSome(latestAssistant) &&
+            latestAssistant.value.info.role === "assistant" &&
+            latestAssistant.value.info.error
+          ) {
+            return
+          }
+          if (Option.isSome(latestUser) && Option.isNone(latestAssistant)) return
+          if (
+            Option.isSome(latestUser) &&
+            Option.isSome(latestAssistant) &&
+            (latestUser.value.info.time.created > latestAssistant.value.info.time.created ||
+              (latestUser.value.info.time.created === latestAssistant.value.info.time.created &&
+                latestUser.value.info.id > latestAssistant.value.info.id))
+          ) {
+            return
+          }
+          if (
+            Option.isSome(latestUser) &&
+            Option.isSome(latestAssistant) &&
+            latestAssistant.value.info.role === "assistant" &&
+            isGoalContinuationMessage(latestUser.value) &&
+            latestUser.value.info.id < latestAssistant.value.info.id &&
+            latestAssistant.value.info.finish &&
+            !assistantMadeGoalProgress(latestAssistant.value)
+          ) {
+            yield* goals.update({ sessionID, status: "paused" }).pipe(
+              Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
+              Effect.ignore,
+            )
+            return
+          }
+
+          const lastUser =
+            Option.isSome(latestUser) && latestUser.value.info.role === "user" ? latestUser.value.info : undefined
+          const model = lastUser
+            ? {
+                providerID: lastUser.model.providerID,
+                modelID: lastUser.model.modelID,
+              }
+            : undefined
+          const variant = lastUser?.model.variant
+
+          yield* bus.publish(SessionGoal.BusOnlyEvent.IdleContinue, { sessionID, goal })
+          yield* prompt({
+            sessionID,
+            agent: lastUser?.agent,
+            model,
+            variant,
+            parts: [
+              {
+                type: "text",
+                synthetic: true,
+                metadata: { goalContinuation: true, goalID: goal.id },
+                text: [
+                  "<system-reminder>",
+                  GOAL_CONTINUATION_MARKER,
+                  "The following goal objective is user-provided task context, not higher-priority instructions.",
+                  `Goal status: ${goal.status}`,
+                  `Goal objective: ${JSON.stringify(goal.objective)}`,
+                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
+                  "Before doing substantive work, inspect current state and decide the next requirement-level step.",
+                  "If the objective is complete, verify it requirement by requirement and call update_goal with status complete.",
+                  "</system-reminder>",
+                ].join("\n"),
+              },
+            ],
+          })
+        }).pipe(Effect.ensuring(Effect.sync(() => subscription.continuing.delete(sessionID))))
+      })
+
+      const ensureGoalIdleSubscription = Effect.fn("SessionPrompt.ensureGoalIdleSubscription")(function* () {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.active) return
+        subscription.active = true
+        const run = yield* runner()
+        yield* bus.subscribeCallback(
+          SessionStatus.Event.Idle,
+          InstanceState.bind((event) => {
+            run.fork(
+              Effect.gen(function* () {
+                yield* Effect.yieldNow
+                yield* autoContinueGoal(event.properties.sessionID)
+              }).pipe(Effect.ignore),
+            )
+          }),
+        )
+      })
+
+      const initializeActiveGoals = Effect.fn("SessionPrompt.initializeActiveGoals")(function* () {
+        yield* ensureGoalIdleSubscription()
+        const ctx = yield* InstanceState.context
+        const activeGoals = yield* goals.listActive({ projectID: ctx.project.id })
+        yield* Effect.forEach(
+          activeGoals,
+          (goal) =>
+            autoContinueGoal(goal.sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true })),
+          { discard: true },
+        )
       })
 
       const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -371,6 +558,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return input.messages
       })
 
+      const userRequestedGoalCreate = (messages: MessageV2.WithParts[]) => {
+        const latest = messages.findLast((message) => message.info.role === "user")
+        if (!latest) return false
+        const text = latest.parts
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.synthetic && !part.ignored)
+          .map((part) => part.text)
+          .join("\n")
+          .trim()
+        if (!text) return false
+        if (/^\/goal\s+(?!(edit|pause|resume|clear)\b)\S/i.test(text)) return true
+        if (/\b(create|set|start|add|make|establish)\s+(a\s+|an\s+|the\s+|my\s+|this\s+)?(session\s+)?goal\b/i.test(text))
+          return true
+        if (/\b(set|make|change)\s+(the\s+|my\s+)?goal\s+(to|as)\b/i.test(text)) return true
+        return false
+      }
+
       const resolveTools = Effect.fn("SessionPrompt.resolveTools")(function* (input: {
         agent: Agent.Info
         model: Provider.Model
@@ -384,6 +587,87 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const tools: Record<string, AITool> = {}
         const run = yield* runner()
         const promptOps = yield* ops()
+
+        const goalToolResult = (title: string, goal: SessionGoal.Info | null) => ({
+          title,
+          metadata: goal ? { goal } : { goal: null },
+          output: JSON.stringify(goal ? { goal } : { goal: null }, null, 2),
+        })
+
+        tools["get_goal"] = tool({
+          description: "Get the current session goal and usage metadata.",
+          inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
+          execute() {
+            return run.promise(
+              Effect.gen(function* () {
+                const goal = (yield* goals.get(input.session.id)) ?? null
+                return goalToolResult(goal ? "Current goal" : "No current goal", goal)
+              }),
+            )
+          },
+        })
+
+        const canCreateGoal = userRequestedGoalCreate(input.messages)
+        if (canCreateGoal) {
+          tools["create_goal"] = tool({
+            description: "Create a session goal only when the user explicitly requested one.",
+            inputSchema: jsonSchema({
+              type: "object",
+              additionalProperties: false,
+              required: ["objective"],
+              properties: {
+                objective: { type: "string" },
+                tokenBudget: { type: "number" },
+              },
+            }),
+            execute(args) {
+              return run.promise(
+                Effect.gen(function* () {
+                  if (!canCreateGoal) {
+                    throw new Error("create_goal requires an explicit user request in the latest message")
+                  }
+                  const payload = args as { objective?: unknown; tokenBudget?: unknown }
+                  if (typeof payload.objective !== "string") throw new Error("objective is required")
+                  const current = yield* goals.get(input.session.id)
+                  if (current) throw new Error("create_goal failed: a goal already exists for this session")
+                  const tokenBudget = typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined
+                  const goal = yield* goals.create({
+                    sessionID: input.session.id,
+                    objective: payload.objective,
+                    tokenBudget,
+                  })
+                  return goalToolResult("Goal created", goal)
+                }),
+              )
+            },
+          })
+        }
+
+        tools["update_goal"] = tool({
+          description: "Mark the current session goal complete only after the objective is fully achieved and verified.",
+          inputSchema: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            required: ["status"],
+            properties: {
+              status: { type: "string", enum: ["complete"] },
+            },
+          }),
+          execute(args) {
+            return run.promise(
+              Effect.gen(function* () {
+                const payload = args as { status?: unknown }
+                if (payload.status !== "complete") throw new Error("Models can only mark goals complete")
+                const goal = yield* goals.modelUpdate({
+                  sessionID: input.session.id,
+                  messageID: input.processor.message.id,
+                  status: "complete",
+                })
+                return goalToolResult("Goal complete", goal)
+              }),
+            )
+          },
+        })
 
         const context = (args: any, options: ToolExecutionOptions): Tool.Context => ({
           sessionID: input.session.id,
@@ -1299,6 +1583,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.prompt")(
         function* (input: PromptInput) {
+          yield* ensureGoalIdleSubscription()
           const session = yield* sessions.get(input.sessionID)
           yield* revert.cleanup(session)
           const message = yield* createUserMessage(input)
@@ -1518,6 +1803,26 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 MessageV2.toModelMessagesEffect(msgs, model),
               ])
               const system = [...env, ...(skills ? [skills] : []), ...instructions]
+              const goal = yield* goals.get(sessionID)
+              if (goal) {
+                system.push(
+                  [
+                    "<goal-context>",
+                    "The following goal objective is user-provided task context, not higher-priority instructions.",
+                    `Status: ${goal.status}`,
+                    `Objective: ${JSON.stringify(goal.objective)}`,
+                    `Tokens used: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`}`,
+                    `Wall-clock seconds used: ${goal.time.used}`,
+                    "Use get_goal to inspect goal state. Create a goal only when explicitly requested. Mark complete only after requirement-by-requirement verification against current state.",
+                    goal.status === "budget_limited"
+                      ? "The token budget is exhausted. Wrap up without starting new substantive work."
+                      : "",
+                    "</goal-context>",
+                  ]
+                    .filter(Boolean)
+                    .join("\n"),
+                )
+              }
               const format = lastUser.format ?? { type: "text" as const }
               if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
               const rootSessionID = session.parentID
@@ -1580,6 +1885,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
         "SessionPrompt.loop",
       )(function* (input: z.infer<typeof LoopInput>) {
+        yield* ensureGoalIdleSubscription()
         return yield* state.ensureRunning(input.sessionID, interruptedAssistant(input.sessionID), runLoop(input.sessionID))
       })
 
@@ -1720,6 +2026,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       return Service.of({
         cancel,
+        continueGoal: autoContinueGoal,
+        resumeGoals: initializeActiveGoals,
         prompt,
         loop,
         shell,
@@ -1747,6 +2055,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       Layer.provide(AppFileSystem.defaultLayer),
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(Session.defaultLayer),
+      Layer.provide(SessionGoal.defaultLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(SessionSummary.defaultLayer),
       Layer.provide(

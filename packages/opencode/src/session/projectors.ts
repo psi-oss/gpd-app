@@ -1,8 +1,9 @@
 import { NotFoundError, eq, and, sql } from "../storage/db"
 import { SyncEvent } from "@/sync"
 import { Session } from "./index"
+import { SessionGoal } from "./goal"
 import { MessageV2 } from "./message-v2"
-import { SessionTable, MessageTable, PartTable, SessionEntryTable } from "./session.sql"
+import { SessionTable, MessageTable, PartTable, SessionEntryTable, SessionGoalTable } from "./session.sql"
 import { Log } from "../util/log"
 import { DateTime } from "effect"
 import { SessionEntry } from "@/v2/session-entry"
@@ -80,6 +81,20 @@ export default [
 
   SyncEvent.project(Session.Event.Deleted, (db, data) => {
     db.delete(SessionTable).where(eq(SessionTable.id, data.sessionID)).run()
+  }),
+
+  SyncEvent.project(SessionGoal.Event.Updated, (db, data) => {
+    db.insert(SessionGoalTable)
+      .values(SessionGoal.toRow(data.goal as SessionGoal.Info))
+      .onConflictDoUpdate({
+        target: SessionGoalTable.session_id,
+        set: SessionGoal.toRow(data.goal as SessionGoal.Info),
+      })
+      .run()
+  }),
+
+  SyncEvent.project(SessionGoal.Event.Cleared, (db, data) => {
+    db.delete(SessionGoalTable).where(eq(SessionGoalTable.session_id, data.sessionID)).run()
   }),
 
   SyncEvent.project(MessageV2.Event.Updated, (db, data) => {

@@ -17,6 +17,7 @@ import { Storage } from "@/storage/storage"
 import { Log } from "../util/log"
 import { updateSchema } from "../util/update-schema"
 import { MessageV2 } from "./message-v2"
+import { SessionGoal } from "./goal"
 import { Instance } from "../project/instance"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
@@ -396,66 +397,71 @@ export namespace Session {
   const db = <T>(fn: (d: Parameters<typeof Database.use>[0] extends (trx: infer D) => any ? D : never) => T) =>
     Effect.sync(() => Database.use(fn))
 
-  export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> = Layer.effect(
+  /**
+   * Mark every persisted assistant message that lacks `time.completed` as
+   * finalized with an APIError. Runs once per sidecar startup. Without it,
+   * any assistant message left mid-stream by a previous process (crash,
+   * SIGKILL, dev HMR restart) stays "pending" forever in the client, which
+   * keeps the session-progress bar stuck on.
+   *
+   * Runs at Session.Service Layer construction, before any new session
+   * accepts work, so it cannot race a live stream on this sidecar. The
+   * SQLite DB is shared across projects, so this finalizes orphans across
+   * all projects in one pass.
+   *
+   * Exported (not file-local) so tests can drive it with a hand-rolled DB.
+   */
+  export function finalizeOrphanedAssistants(now: number = Date.now()) {
+    const rows = Database.use((d) =>
+      d
+        .select()
+        .from(MessageTable)
+        .where(
+          and(
+            sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+            sql`json_extract(${MessageTable.data}, '$.time.completed') IS NULL`,
+          ),
+        )
+        .all(),
+    )
+    if (rows.length === 0) return 0
+    for (const row of rows) {
+      const data = row.data as MessageV2.Assistant
+      const finalized: MessageV2.Assistant = {
+        ...data,
+        id: row.id,
+        sessionID: row.session_id,
+        error:
+          data.error ??
+          new MessageV2.APIError({
+            message: "Stream interrupted by server restart",
+            isRetryable: true,
+          }).toObject(),
+        time: { ...data.time, completed: now },
+      }
+      SyncEvent.run(MessageV2.Event.Updated, {
+        sessionID: finalized.sessionID,
+        info: finalized,
+      })
+    }
+    log.info("finalized orphaned assistant messages", { count: rows.length })
+    return rows.length
+  }
+
+  export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | SessionGoal.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
       const bus = yield* Bus.Service
       const storage = yield* Storage.Service
+      const goal = yield* SessionGoal.Service
 
       // Finalize assistant messages that were mid-stream when the previous
-      // sidecar exited. Each such row has `time.created` set but no
-      // `time.completed`, no `finish`, and no `error` — the runner's
-      // onIdle hook didn't get to fire (process killed before the fiber
-      // exited, dev HMR, OS SIGKILL, etc.).
-      //
-      // Without this pass, the UI keeps a stuck "working" spinner forever:
-      // `pending()` in message-timeline.tsx finds the orphan via
-      // `time.completed !== "number"`, which keeps `working()` true
-      // regardless of the in-memory session_status (which the new sidecar
-      // initializes empty/idle). Confirmed against a stuck spinner where
-      // /session/status returned {} but the latest assistant message JSON
-      // had created-no-completed.
-      //
-      // Runs once at Layer construction, before any session is accepted,
-      // so it cannot race with a live stream on this sidecar. Cross-
-      // sidecar races are out of scope — opencode is single-server per
-      // project.
-      yield* Effect.sync(() => {
-        const rows = Database.use((d) =>
-          d
-            .select()
-            .from(MessageTable)
-            .where(
-              and(
-                sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
-                sql`json_extract(${MessageTable.data}, '$.time.completed') IS NULL`,
-              ),
-            )
-            .all(),
-        )
-        if (rows.length === 0) return
-        const now = Date.now()
-        for (const row of rows) {
-          const data = row.data as MessageV2.Assistant
-          const finalized: MessageV2.Assistant = {
-            ...data,
-            id: row.id,
-            sessionID: row.session_id,
-            error:
-              data.error ??
-              new MessageV2.APIError({
-                message: "Stream interrupted by server restart",
-                isRetryable: true,
-              }).toObject(),
-            time: { ...data.time, completed: now },
-          }
-          SyncEvent.run(MessageV2.Event.Updated, {
-            sessionID: finalized.sessionID,
-            info: finalized,
-          })
-        }
-        log.info("finalized orphaned assistant messages", { count: rows.length })
-      }).pipe(
+      // sidecar exited. Without this pass, the UI keeps a stuck "working"
+      // spinner forever: `pending()` in message-timeline.tsx finds the
+      // orphan via `time.completed !== "number"` and `working()` stays true
+      // regardless of the in-memory session_status (which a fresh sidecar
+      // initializes empty/idle). See finalizeOrphanedAssistants below.
+      yield* Effect.sync(finalizeOrphanedAssistants).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => log.error("orphan recovery failed", { cause: String(cause) })),
         ),
@@ -562,12 +568,50 @@ export namespace Session {
 
       const updateMessage = <T extends MessageV2.Info>(msg: T): Effect.Effect<T> =>
         Effect.gen(function* () {
+          const previous =
+            msg.role === "assistant"
+              ? yield* Effect.sync(() => {
+                  try {
+                    return MessageV2.get({ sessionID: msg.sessionID, messageID: msg.id }).info
+                  } catch {
+                    return undefined
+                  }
+                })
+              : undefined
           yield* Effect.sync(() => SyncEvent.run(MessageV2.Event.Updated, { sessionID: msg.sessionID, info: msg }))
+          if (
+            msg.role === "assistant" &&
+            !msg.summary &&
+            msg.time.completed !== undefined &&
+            previous?.role === "assistant" &&
+            previous.time.completed === undefined
+          ) {
+            yield* goal
+              .account({
+                sessionID: msg.sessionID,
+                messageID: msg.id,
+                tokens: 0,
+                seconds: Math.max(0, Math.ceil((msg.time.completed - msg.time.created) / 1000)),
+              })
+              .pipe(Effect.ignore)
+          }
           return msg
         }).pipe(Effect.withSpan("Session.updateMessage"))
 
       const updatePart = <T extends MessageV2.Part>(part: T): Effect.Effect<T> =>
         Effect.gen(function* () {
+          const previous =
+            part.type === "step-finish"
+              ? yield* Effect.sync(() =>
+                  Database.use((d) =>
+                    d
+                      .select()
+                      .from(PartTable)
+                      .where(and(eq(PartTable.id, part.id), eq(PartTable.session_id, part.sessionID)))
+                      .get(),
+                  ),
+                )
+              : undefined
           yield* Effect.sync(() =>
             SyncEvent.run(MessageV2.Event.PartUpdated, {
               sessionID: part.sessionID,
@@ -575,6 +619,27 @@ export namespace Session {
               time: Date.now(),
             }),
           )
+          if (part.type === "step-finish" && previous?.data.type !== "step-finish") {
+            const message = yield* Effect.sync(() =>
+              Database.use((d) =>
+                d
+                  .select()
+                  .from(MessageTable)
+                  .where(and(eq(MessageTable.id, part.messageID), eq(MessageTable.session_id, part.sessionID)))
+                  .get(),
+              ),
+            )
+            if (message?.data.role === "assistant" && !message.data.summary) {
+              yield* goal
+                .account({
+                  sessionID: part.sessionID,
+                  messageID: part.messageID,
+                  tokens: Math.max(0, part.tokens.input + part.tokens.output),
+                  seconds: 0,
+                })
+                .pipe(Effect.ignore)
+            }
+          }
           return part
         }).pipe(Effect.withSpan("Session.updatePart"))
 
@@ -784,7 +849,11 @@ export namespace Session {
     }),
   )
 
-  export const defaultLayer = layer.pipe(Layer.provide(Bus.layer), Layer.provide(Storage.defaultLayer))
+  export const defaultLayer = layer.pipe(
+    Layer.provide(Bus.layer),
+    Layer.provide(Storage.defaultLayer),
+    Layer.provide(SessionGoal.defaultLayer),
+  )
 
   export function* list(input?: {
     directory?: string

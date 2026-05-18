@@ -4,6 +4,7 @@ import type {
   Part,
   PermissionRequest,
   QuestionRequest,
+  SessionGoal,
   SessionStatus,
   SnapshotFileDiff,
   Todo,
@@ -39,6 +40,7 @@ describe("app session cache", () => {
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
+      session_goal: Record<string, SessionGoal | undefined>
     } = {
       session_status: { ses_1: { type: "busy" } as SessionStatus },
       session_diff: { ses_1: [] },
@@ -47,6 +49,7 @@ describe("app session cache", () => {
       part: { msg_1: [part("prt_1", "ses_1", "msg_1")] },
       permission: { ses_1: [] as PermissionRequest[] },
       question: { ses_1: [] as QuestionRequest[] },
+      session_goal: { ses_1: undefined },
     }
 
     dropSessionCaches(store, ["ses_1"])
@@ -58,6 +61,7 @@ describe("app session cache", () => {
     expect(store.session_status.ses_1).toBeUndefined()
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
+    expect(store.session_goal.ses_1).toBeUndefined()
   })
 
   test("dropSessionCaches clears message-backed parts", () => {
@@ -70,6 +74,7 @@ describe("app session cache", () => {
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
+      session_goal: Record<string, SessionGoal | undefined>
     } = {
       session_status: {},
       session_diff: {},
@@ -78,6 +83,7 @@ describe("app session cache", () => {
       part: { [m.id]: [part("prt_1", "ses_1", m.id)] },
       permission: {},
       question: {},
+      session_goal: {},
     }
 
     dropSessionCaches(store, ["ses_1"])

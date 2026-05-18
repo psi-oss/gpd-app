@@ -496,7 +496,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                     limit,
                   })
 
-            await Promise.all([sessionReq, messagesReq])
+            const goalReq = retry(() => client.session.goal.get({ sessionID })).then((goal) => {
+              if (!tracked(directory, sessionID)) return
+              setStore("session_goal", sessionID, goal.data ?? undefined)
+            })
+
+            await Promise.all([sessionReq, messagesReq, goalReq])
           })
         },
         async diff(sessionID: string, opts?: { force?: boolean }) {

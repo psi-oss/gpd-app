@@ -12,6 +12,7 @@ import type {
   ProviderListResponse,
   QuestionRequest,
   Session,
+  SessionGoal,
   SessionStatus,
   SnapshotFileDiff,
   Todo,
@@ -46,6 +47,9 @@ export type State = {
   sessionTotal: number
   session_status: {
     [sessionID: string]: SessionStatus
+  }
+  session_goal: {
+    [sessionID: string]: SessionGoal | undefined
   }
   session_diff: {
     [sessionID: string]: SnapshotFileDiff[]

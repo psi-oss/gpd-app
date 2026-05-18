@@ -73,8 +73,8 @@ export namespace SessionStatus {
         const data = yield* InstanceState.get(state)
         yield* bus.publish(Event.Status, { sessionID, status })
         if (status.type === "idle") {
-          yield* bus.publish(Event.Idle, { sessionID })
           data.delete(sessionID)
+          yield* bus.publish(Event.Idle, { sessionID })
           return
         }
         data.set(sessionID, status)
