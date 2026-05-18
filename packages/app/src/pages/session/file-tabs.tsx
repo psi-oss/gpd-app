@@ -22,6 +22,7 @@ import { useSettings } from "@/context/settings"
 import { getSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
+import { isAutoOpened as isPaperAutoOpened } from "@/pages/session/paper-artifact-watcher"
 import { FileEditor } from "@/components/file-edit/file-editor"
 
 function FileCommentMenu(props: {
@@ -499,7 +500,10 @@ export function FileTabContent(props: { tab: string }) {
     const p = path()
     return !!p && p.toLowerCase().endsWith(".tex")
   })
-  const [buildPaneOpen, setBuildPaneOpen] = createSignal(false)
+  // RES-1012: when the tab was auto-opened by the paper-artifact watcher,
+  // surface the PDF/build pane on first mount so the user lands on the
+  // rendered manuscript rather than the .tex source.
+  const [buildPaneOpen, setBuildPaneOpen] = createSignal(isPaperAutoOpened(sessionKey(), props.tab))
   const [buildPaneMaximized, setBuildPaneMaximized] = createSignal(false)
 
   const toggleBuildPane = () => setBuildPaneOpen((v) => !v)

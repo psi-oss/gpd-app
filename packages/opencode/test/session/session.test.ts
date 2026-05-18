@@ -7,6 +7,8 @@ import { Instance } from "../../src/project/instance"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 import { AppRuntime } from "../../src/effect/app-runtime"
+import { Database, eq } from "../../src/storage/db"
+import { MessageTable } from "../../src/session/session.sql"
 import { tmpdir } from "../fixture/fixture"
 
 const projectRoot = path.join(__dirname, "../..")
@@ -177,5 +179,139 @@ describe("Session", () => {
     })
 
     expect(missing).toBe(true)
+  })
+})
+
+describe("finalizeOrphanedAssistants", () => {
+  test("finalizes mid-stream assistant messages from a previous sidecar", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await create({ title: "orphan-recovery" })
+
+        // Simulate a prior sidecar that wrote a user message + an assistant
+        // message that streamed reasoning then died before time.completed.
+        const userID = MessageID.ascending()
+        await updateMessage({
+          id: userID,
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "build",
+          model: { providerID: "test", modelID: "test" },
+        } as unknown as MessageV2.Info)
+
+        const orphanID = MessageID.ascending()
+        const orphan: MessageV2.Assistant = {
+          id: orphanID,
+          sessionID: session.id,
+          parentID: userID,
+          role: "assistant",
+          time: { created: Date.now() }, // no `completed` — the bug condition
+          modelID: "test" as unknown as MessageV2.Assistant["modelID"],
+          providerID: "test" as unknown as MessageV2.Assistant["providerID"],
+          mode: "build",
+          agent: "build",
+          path: { cwd: tmp.path, root: tmp.path },
+          cost: 0,
+          tokens: {
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+        }
+        await updateMessage(orphan)
+
+        // Sanity-check: row exists, time.completed not set.
+        const beforeRow = Database.use((d) =>
+          d.select().from(MessageTable).where(eq(MessageTable.id, orphanID)).get(),
+        )
+        expect(beforeRow).toBeDefined()
+        expect((beforeRow!.data as MessageV2.Assistant).time.completed).toBeUndefined()
+
+        // Drive the recovery pass directly (Layer init already ran above
+        // and found nothing; this simulates a fresh sidecar starting up
+        // against the now-orphaned row).
+        const fixedAt = Date.now()
+        const count = SessionNs.finalizeOrphanedAssistants(fixedAt)
+        expect(count).toBe(1)
+
+        // Wait for projector + bus delivery.
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        const afterRow = Database.use((d) =>
+          d.select().from(MessageTable).where(eq(MessageTable.id, orphanID)).get(),
+        )
+        const after = afterRow!.data as MessageV2.Assistant
+        expect(after.time.completed).toBe(fixedAt)
+        expect(after.error?.name).toBe("APIError")
+        expect((after.error as MessageV2.APIError).data.isRetryable).toBe(true)
+
+        // Idempotent: a second pass should be a no-op (the row no longer
+        // matches the orphan predicate).
+        const secondCount = SessionNs.finalizeOrphanedAssistants(fixedAt + 1)
+        expect(secondCount).toBe(0)
+
+        // Pre-existing error is preserved, not overwritten.
+        const alreadyErroredID = MessageID.ascending()
+        const preExistingError = new MessageV2.AbortedError({ message: "user abort" }).toObject()
+        await updateMessage({
+          ...orphan,
+          id: alreadyErroredID,
+          time: { created: Date.now() },
+          error: preExistingError,
+        } satisfies MessageV2.Assistant)
+        const thirdCount = SessionNs.finalizeOrphanedAssistants(fixedAt + 2)
+        expect(thirdCount).toBe(1)
+        const stillAborted = Database.use((d) =>
+          d.select().from(MessageTable).where(eq(MessageTable.id, alreadyErroredID)).get(),
+        )
+        expect((stillAborted!.data as MessageV2.Assistant).error?.name).toBe("MessageAbortedError")
+        expect((stillAborted!.data as MessageV2.Assistant).time.completed).toBe(fixedAt + 2)
+
+        await remove(session.id)
+      },
+    })
+  })
+
+  test("leaves completed assistant messages alone", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await create({ title: "no-orphans" })
+
+        const completedID = MessageID.ascending()
+        const completedAt = Date.now()
+        await updateMessage({
+          id: completedID,
+          sessionID: session.id,
+          parentID: MessageID.ascending(),
+          role: "assistant",
+          time: { created: completedAt - 1000, completed: completedAt },
+          modelID: "test" as unknown as MessageV2.Assistant["modelID"],
+          providerID: "test" as unknown as MessageV2.Assistant["providerID"],
+          mode: "build",
+          agent: "build",
+          path: { cwd: tmp.path, root: tmp.path },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        } satisfies MessageV2.Assistant)
+
+        const count = SessionNs.finalizeOrphanedAssistants(Date.now())
+        expect(count).toBe(0)
+
+        const row = Database.use((d) =>
+          d.select().from(MessageTable).where(eq(MessageTable.id, completedID)).get(),
+        )
+        expect((row!.data as MessageV2.Assistant).time.completed).toBe(completedAt)
+
+        await remove(session.id)
+      },
+    })
   })
 })

@@ -31,7 +31,6 @@ const GOAL_OBJECTIVE_MAX_LENGTH = 4000
 const goalDescription = (goal: SessionGoal) =>
   [
     goal.objective,
-    `Tokens: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : `/${goal.tokens.budget}`}`,
     `Time: ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : `/${goal.time.budgetSeconds}s`}`,
     `Cost: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : `/$${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
     "Commands: /goal edit, /goal pause, /goal resume, /goal clear",
@@ -47,13 +46,13 @@ function parseDuration(raw: string): number | undefined {
   return h * 3600 + m * 60 + s
 }
 
-type GoalFlags = { tokenBudget?: number; timeBudgetSeconds?: number; costBudgetUSD?: number }
+type GoalFlags = { timeBudgetSeconds?: number; costBudgetUSD?: number }
 
-// Extract trailing --budget=$X --time=Yh --tokens=N flags from objective text.
+// Extract trailing --budget=$X --time=Yh flags from objective text.
 // Returns the cleaned text + parsed flags. Throws on malformed flag values.
 function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
   const flags: GoalFlags = {}
-  const flagPattern = /\s+--(budget|time|tokens)=(\S+)/g
+  const flagPattern = /\s+--(budget|time)=(\S+)/g
   let cleanArg = arg
   for (const match of arg.matchAll(flagPattern)) {
     cleanArg = cleanArg.replace(match[0], "").trim()
@@ -70,12 +69,6 @@ function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
         throw new Error(`Invalid --time=${raw}; expected e.g. 30m, 2h, 1h30m, 120s`)
       }
       flags.timeBudgetSeconds = seconds
-    } else if (key === "tokens") {
-      const n = parseInt(raw, 10)
-      if (!Number.isFinite(n) || n <= 0 || String(n) !== raw.replace(/^\+/, "")) {
-        throw new Error(`Invalid --tokens=${raw}; expected positive integer`)
-      }
-      flags.tokenBudget = n
     }
   }
   return { cleanArg, flags }

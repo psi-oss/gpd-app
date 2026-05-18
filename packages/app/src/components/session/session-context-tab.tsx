@@ -102,17 +102,12 @@ export function SessionContextTab() {
 
   function usageSummary(g: SessionGoal): string {
     const parts: string[] = []
-    parts.push(
-      g.tokens.budget !== undefined
-        ? `${g.tokens.used.toLocaleString()} / ${g.tokens.budget.toLocaleString()} tokens`
-        : `${g.tokens.used.toLocaleString()} tokens`,
-    )
     if (g.time.budgetSeconds !== undefined) parts.push(`${g.time.used}s / ${g.time.budgetSeconds}s`)
     else if (g.time.used > 0) parts.push(`${g.time.used}s`)
     if (g.cost.budgetMicroUSD !== undefined)
       parts.push(`$${(g.cost.usedMicroUSD / 1_000_000).toFixed(2)} / $${(g.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`)
     else if (g.cost.usedMicroUSD > 0) parts.push(`$${(g.cost.usedMicroUSD / 1_000_000).toFixed(2)}`)
-    return parts.join(" · ")
+    return parts.length > 0 ? parts.join(" · ") : "—"
   }
 
   const messages = createMemo(

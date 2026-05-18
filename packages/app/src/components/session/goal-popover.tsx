@@ -145,12 +145,6 @@ export function GoalPopover(props: { goal: SessionGoal }) {
           </div>
           <div class="flex flex-col gap-2.5">
             <GoalBar
-              label={language.t("session.goal.tokens")}
-              used={props.goal.tokens.used}
-              budget={props.goal.tokens.budget}
-              formatValue={(n) => n.toLocaleString()}
-            />
-            <GoalBar
               label={language.t("session.goal.time")}
               used={props.goal.time.used}
               budget={props.goal.time.budgetSeconds}

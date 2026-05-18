@@ -25,14 +25,10 @@ const GPD_CONFIG_DIR_NAME: &str = "gpd";
 /// Marker file written after successful first-run setup
 const GPD_INIT_MARKER: &str = ".gpd-initialized";
 
-/// Marker file recording the SHA256 of the python-manifest.json that was
-/// last reconciled against the user's venv. Compared against the current
-/// bundled manifest on every launch — if they match, the reconciler short-
-/// circuits without touching pip. See `reconcile_manifest`.
+/// SHA256 of the last-reconciled python-manifest.json.
 const GPD_DEPS_HASH_MARKER: &str = ".gpd-deps-hash";
 
-/// Tauri resource path for the Python dependency manifest. Resolved via
-/// `app.path().resolve(..., BaseDirectory::Resource)`.
+/// Bundled Python dependency manifest (Tauri resource path).
 const PYTHON_MANIFEST_RESOURCE: &str = "python-manifest.json";
 
 /// LiteLLM proxy URL
@@ -237,17 +233,6 @@ pub async fn run_first_setup(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Manifest reconciliation (existing-user dep upgrades)
-// ---------------------------------------------------------------------------
-
-/// One Python package the reconciler ensures is installed and importable.
-///
-/// `spec` is what gets passed to `uv pip install --upgrade` on probe-fail
-/// (e.g. `arxiv-mcp-server[pdf]>=0.4.11`). `import_check` is the module
-/// whose `import` MUST succeed in the venv — chosen to detect the specific
-/// failure mode this package fixes (e.g. `pymupdf4llm` for the [pdf] extra,
-/// not the package name itself).
 #[derive(Debug, Deserialize)]
 struct ManifestPackage {
     spec: String,
@@ -261,23 +246,11 @@ struct PythonManifest {
     packages: Vec<ManifestPackage>,
 }
 
-/// Reconcile the user's `~/.gpd/venv` against the bundled
-/// `python-manifest.json`. Probes each package's `import_check` module; on
-/// failure runs `uv pip install --upgrade <spec>`.
+/// Reconcile `~/.gpd/venv` against the bundled `python-manifest.json`.
 ///
-/// Why: Tauri auto-update replaces the app bundle but never touches
-/// `~/.gpd/venv/`. `is_venv_valid()` only checks `import gpd` succeeds,
-/// never versions, so users who installed before a Python-side fix never
-/// receive it. This reconciler is the bridge — it runs on every launch
-/// (after the sidecar is healthy), short-circuits when the manifest SHA256
-/// matches `~/.gpd/.gpd-deps-hash`, and only does pip work on the first
-/// launch after a desktop release that bumps the manifest.
-///
-/// Fire-and-forget contract: this function should be invoked via
-/// `tokio::spawn(...)` so it never blocks app startup. All errors are
-/// returned for logging; the caller drops them. Failures are non-fatal —
-/// the existing venv keeps working at its previous state, and the hash
-/// marker is left untouched so the next launch retries.
+/// Fire-and-forget — must be invoked via `tokio::spawn(...)`. The hash
+/// marker at `~/.gpd/.gpd-deps-hash` short-circuits the no-op case so
+/// the steady-state cost is one SHA256 + one file read.
 pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     let manifest_path = app
         .path()
@@ -299,8 +272,6 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
 
     let python = gpd_python();
     if !python.exists() {
-        // First-run setup hasn't installed the venv yet. The first-run path
-        // will install the right packages; reconciler defers until next launch.
         tracing::debug!("GPD venv not yet present; reconciler deferring");
         return Ok(());
     }
@@ -368,9 +339,6 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    // Only stamp the hash marker if every package reconciled cleanly. A partial
-    // success leaves the marker stale so the next launch retries the failed
-    // ones; a complete success means "we know the venv matches this manifest".
     if all_ok {
         let _ = std::fs::write(&hash_marker, &hash_hex);
         tracing::info!(hash = %hash_hex, "python-manifest reconciled");
@@ -381,8 +349,6 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Probe whether `python -c "import {module}"` exits 0 within 5 seconds.
-/// Returns false on any failure (missing module, syntax error, timeout, IO).
 async fn probe_import(python: &Path, module: &str) -> bool {
     let cmd = format!("import {module}");
     let result = timeout(

@@ -52,6 +52,11 @@ import {
 import { MessageTimeline } from "@/pages/session/message-timeline"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import {
+  listAutoOpened as listPaperAutoOpened,
+  markUserClosed as markPaperUserClosed,
+  subscribePaperArtifactWatcher,
+} from "@/pages/session/paper-artifact-watcher"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
@@ -951,6 +956,31 @@ export default function Page() {
     refreshVcs()
   })
   onCleanup(stopVcs)
+
+  // RES-1012: auto-open the manuscript .tex when `gpd paper-build` writes
+  // ARTIFACT-MANIFEST.json. State (auto-opened + sticky user-close) lives
+  // in the watcher module keyed by sessionKey(); intentionally not cleared
+  // on unmount so a user-close survives navigation away and back.
+  const stopPaperArtifactWatcher = subscribePaperArtifactWatcher({
+    sdk,
+    sessionKey,
+    normalize: file.normalize,
+    pathToTab: file.tab,
+    openTab: (tab) => {
+      void tabs().open(tab)
+    },
+  })
+  onCleanup(stopPaperArtifactWatcher)
+
+  // Track auto-opened tabs against the current tab list; if one disappears
+  // (user clicked the X), mark the path user-closed so subsequent manifest
+  // re-emissions in this session do not re-open it.
+  createEffect(() => {
+    const open = new Set(tabs().all())
+    for (const tab of listPaperAutoOpened(sessionKey())) {
+      if (!open.has(tab)) markPaperUserClosed(sessionKey(), tab)
+    }
+  })
 
   createEffect(
     on(
