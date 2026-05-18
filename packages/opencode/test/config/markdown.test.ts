@@ -226,3 +226,41 @@ describe("ConfigMarkdown: frontmatter has weird model id", async () => {
     expect(result.content.trim()).toBe("Strictly follow da rules")
   })
 })
+
+describe("ConfigMarkdown: frontmatter with colon in value followed by other fields", async () => {
+  const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/colon-in-value.md")
+
+  test("should preserve full description including colons", () => {
+    expect(result.data.description).toBe("Reviews changes: returns a verdict.")
+  })
+
+  test("should preserve subsequent mode field", () => {
+    expect(result.data.mode).toBe("subagent")
+  })
+
+  test("should preserve hidden field", () => {
+    expect(result.data.hidden).toBe(true)
+  })
+
+  test("should preserve model field", () => {
+    expect(result.data.model).toBe("anthropic/claude-sonnet-4-5")
+  })
+
+  test("should preserve temperature field", () => {
+    expect(result.data.temperature).toBe(0.2)
+  })
+
+  test("should preserve steps field", () => {
+    expect(result.data.steps).toBe(7)
+  })
+
+  test("should preserve nested permission fields", () => {
+    expect(result.data.permission.read).toBe("allow")
+    expect(result.data.permission.bash["npm test"]).toBe("allow")
+    expect(result.data.permission.bash["rm -rf *"]).toBe("deny")
+  })
+
+  test("should preserve body content", () => {
+    expect(result.content.trim()).toStartWith("You are the code review agent.")
+  })
+})
