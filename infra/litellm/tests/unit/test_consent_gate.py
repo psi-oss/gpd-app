@@ -71,13 +71,13 @@ async def _run_gate(user_id: str | None) -> None:
     )
 
 
-async def test_admin_key_passes_through(migrated_db):
+async def test_admin_key_passes_through(migrated_db, _clear_consent_cache):
     # user_id None = master / admin key → always allowed
     await _run_gate(None)
     await _run_gate("")
 
 
-async def test_never_accepted_is_blocked(migrated_db):
+async def test_never_accepted_is_blocked(migrated_db, _clear_consent_cache):
     # User with zero rows in gpd_tos_acceptance is blocked. Reaching the
     # gate without an acceptance row means the client TOS flow was bypassed
     # (or the accept insert failed). The error code is `consent_required`,
@@ -91,13 +91,13 @@ async def test_never_accepted_is_blocked(migrated_db):
     assert "consent_revoked" not in exc.value.detail
 
 
-async def test_accepted_not_revoked_passes(migrated_db):
+async def test_accepted_not_revoked_passes(migrated_db, _clear_consent_cache):
     uid = "test-accepted-1"
     await _accept_row(uid)
     await _run_gate(uid)  # must not raise
 
 
-async def test_revoked_is_blocked(migrated_db):
+async def test_revoked_is_blocked(migrated_db, _clear_consent_cache):
     uid = "test-revoked-1"
     await _accept_row(uid)
     touched = await _revoke(uid)
@@ -109,7 +109,7 @@ async def test_revoked_is_blocked(migrated_db):
     assert "consent_revoked" in exc.value.detail
 
 
-async def test_reaccept_after_revoke_unblocks(migrated_db):
+async def test_reaccept_after_revoke_unblocks(migrated_db, _clear_consent_cache):
     uid = "test-reaccept-1"
     await _accept_row(uid)
     await _revoke(uid)
@@ -125,7 +125,7 @@ async def test_reaccept_after_revoke_unblocks(migrated_db):
     await _run_gate(uid)  # must not raise
 
 
-async def test_cache_hit_avoids_db_query(migrated_db, monkeypatch):
+async def test_cache_hit_avoids_db_query(migrated_db, _clear_consent_cache, monkeypatch):
     uid = "test-cache-hit"
     await _accept_row(uid)
     await _run_gate(uid)  # populates cache with False
@@ -141,7 +141,7 @@ async def test_cache_hit_avoids_db_query(migrated_db, monkeypatch):
     await _run_gate(uid)  # still passes — cache hit
 
 
-async def test_db_outage_fails_closed(migrated_db, monkeypatch):
+async def test_db_outage_fails_closed(migrated_db, _clear_consent_cache, monkeypatch):
     uid = "test-db-outage"
     # No cache entry — gate must hit DB. Force DB to blow up.
     from gpd_consent import db as consent_db
@@ -157,7 +157,7 @@ async def test_db_outage_fails_closed(migrated_db, monkeypatch):
     assert "consent_check_unavailable" in exc.value.detail
 
 
-async def test_cache_invalidate_forces_requery(migrated_db):
+async def test_cache_invalidate_forces_requery(migrated_db, _clear_consent_cache):
     uid = "test-invalidate-1"
     await _accept_row(uid)
     await _run_gate(uid)  # caches False
@@ -175,7 +175,7 @@ async def test_cache_invalidate_forces_requery(migrated_db):
     assert exc.value.status_code == 403
 
 
-async def test_revoke_handler_invalidates_cache(migrated_db):
+async def test_revoke_handler_invalidates_cache(migrated_db, _clear_consent_cache):
     """End-to-end cache coherence: calling gpd_tos_revoke's DB call path
     plus the cache.invalidate side-effect (as wired in the handler) must
     make the next gate check re-read the DB and block."""

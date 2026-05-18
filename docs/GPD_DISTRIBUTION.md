@@ -112,17 +112,30 @@ When `github` is selected, the CI also installs `get-physics-done` directly from
 
 **Generate a key for a professor:**
 ```bash
+# Recommended: use the wrapper, which defaults to the gpd-chat access
+# group (the 11 models the desktop picker actually shows).
+scripts/mint_key.sh prof-smith                        # $2000 lifetime
+scripts/mint_key.sh prof-smith --duration=30d         # $2000 / 30d recurring
+
+# Or hit the API directly:
 curl -X POST 'https://litellm-production-46bb.up.railway.app/key/generate' \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H 'Content-Type: application/json' \
   -d '{
     "user_id": "prof-smith",
     "key_alias": "prof-smith",
-    "models": ["all-models"],
+    "models": ["gpd-chat"],
     "max_budget": 2000,
     "budget_duration": "30d"
   }'
 ```
+
+`gpd-chat` is the proxy-side access group that stays in sync with
+`packages/opencode/src/provider/gpd-models.ts` `GPD_MODEL_METADATA`.
+Use `["all-models"]` only if you specifically need the 17-model
+superset (adds `gpt-4.1`, `gpt-4.1-mini`, `o4-mini`,
+`gemini-3-flash-preview`, `gpt-5.4-pro`, `gpt-5.5-pro` — none visible
+in the picker; reachable via raw API).
 
 **Revoke a key:**
 ```bash
@@ -150,10 +163,15 @@ curl -X POST 'https://litellm-production-46bb.up.railway.app/model/new' \
       "api_key": "os.environ/PROVIDER_API_KEY"
     },
     "model_info": {
-      "access_groups": ["all-models"]
+      "access_groups": ["all-models", "gpd-chat"]
     }
   }'
 ```
+
+Include `"gpd-chat"` in `access_groups` if the model should appear in
+the desktop picker for everyone holding a `gpd-chat` key (the default
+for new mints). `all-models` alone makes it reachable via raw API but
+invisible in the picker.
 
 Then add model metadata to `packages/opencode/src/provider/gpd-models.ts` and the desktop fallback list in `gpd_setup.rs:provider_config_json()` so the app shows the correct name, capabilities, limits, and reasoning-effort variants.
 
@@ -303,7 +321,7 @@ gh workflow run gpd-release.yml --repo psi-oss/gpd-app --ref gpd
 curl -X POST 'https://litellm-production-46bb.up.railway.app/model/new' \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"model_name": "new-model", "litellm_params": {"model": "provider/model-id", "api_key": "os.environ/PROVIDER_KEY"}, "model_info": {"access_groups": ["all-models"]}}'
+  -d '{"model_name": "new-model", "litellm_params": {"model": "provider/model-id", "api_key": "os.environ/PROVIDER_KEY"}, "model_info": {"access_groups": ["all-models", "gpd-chat"]}}'
 ```
 
 2. **Add to the fork's provider metadata** (requires rebuild):
@@ -343,7 +361,7 @@ while IFS=, read -r user_id email; do
     -d "{
       \"user_id\": \"$user_id\",
       \"key_alias\": \"$user_id\",
-      \"models\": [\"all-models\"],
+      \"models\": [\"gpd-chat\"],
       \"max_budget\": 2000,
       \"budget_duration\": \"30d\"
     }" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])")
