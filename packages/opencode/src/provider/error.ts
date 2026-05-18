@@ -118,7 +118,10 @@ export namespace ProviderError {
       }
 
   export function parseStreamError(input: unknown): ParsedStreamError | undefined {
-    const body = json(input)
+    const raw = json(input)
+    // Some SDKs wrap stream-error envelopes inside `{ message: "<json>" }`.
+    // Unwrap before classifying so the inner `type: "error"` envelope is seen.
+    const body = typeof raw?.message === "string" ? (json(raw.message) ?? raw) : raw
     if (!body) return
 
     const responseBody = JSON.stringify(body)
