@@ -256,6 +256,8 @@ export namespace MCP {
 
       type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
+      const stopOAuthCallback = Effect.tryPromise(() => McpOAuthCallback.stop()).pipe(Effect.ignore)
+
       /**
        * Connect a client via the given transport with resource safety:
        * on failure the transport is closed; on success the caller owns it.
@@ -549,6 +551,7 @@ export namespace MCP {
                 concurrency: "unbounded",
               })
               pendingOAuthTransports.clear()
+              yield* stopOAuthCallback
             }),
           )
 
@@ -792,92 +795,97 @@ export namespace MCP {
       })
 
       const authenticate = Effect.fn("MCP.authenticate")(function* (mcpName: string) {
-        const result = yield* startAuth(mcpName)
-        if (!result.authorizationUrl) {
-          const client = "client" in result ? result.client : undefined
-          const mcpConfig = yield* getMcpConfig(mcpName)
-          if (!mcpConfig) {
-            yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
-            return { status: "failed", error: "MCP config not found after auth" } as Status
+        return yield* Effect.gen(function* () {
+          const result = yield* startAuth(mcpName)
+          if (!result.authorizationUrl) {
+            const client = "client" in result ? result.client : undefined
+            const mcpConfig = yield* getMcpConfig(mcpName)
+            if (!mcpConfig) {
+              yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
+              return { status: "failed", error: "MCP config not found after auth" } as Status
+            }
+
+            const listed = client ? yield* defs(mcpName, client, mcpConfig.timeout) : undefined
+            if (!client || !listed) {
+              yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
+              return { status: "failed", error: "Failed to get tools" } as Status
+            }
+
+            const s = yield* InstanceState.get(state)
+            yield* auth.clearOAuthState(mcpName)
+            return yield* storeClient(s, mcpName, client, listed, mcpConfig.timeout)
           }
 
-          const listed = client ? yield* defs(mcpName, client, mcpConfig.timeout) : undefined
-          if (!client || !listed) {
-            yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
-            return { status: "failed", error: "Failed to get tools" } as Status
-          }
+          log.info("opening browser for oauth", { mcpName, url: result.authorizationUrl, state: result.oauthState })
 
-          const s = yield* InstanceState.get(state)
-          yield* auth.clearOAuthState(mcpName)
-          return yield* storeClient(s, mcpName, client, listed, mcpConfig.timeout)
-        }
+          const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
 
-        log.info("opening browser for oauth", { mcpName, url: result.authorizationUrl, state: result.oauthState })
-
-        const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
-
-        yield* Effect.tryPromise(() => open(result.authorizationUrl)).pipe(
-          Effect.flatMap((subprocess) =>
-            Effect.callback<void, Error>((resume) => {
-              const timer = setTimeout(() => resume(Effect.void), 500)
-              subprocess.on("error", (err) => {
-                clearTimeout(timer)
-                resume(Effect.fail(err))
-              })
-              subprocess.on("exit", (code) => {
-                if (code !== null && code !== 0) {
+          yield* Effect.tryPromise(() => open(result.authorizationUrl)).pipe(
+            Effect.flatMap((subprocess) =>
+              Effect.callback<void, Error>((resume) => {
+                const timer = setTimeout(() => resume(Effect.void), 500)
+                subprocess.on("error", (err) => {
                   clearTimeout(timer)
-                  resume(Effect.fail(new Error(`Browser open failed with exit code ${code}`)))
-                }
-              })
+                  resume(Effect.fail(err))
+                })
+                subprocess.on("exit", (code) => {
+                  if (code !== null && code !== 0) {
+                    clearTimeout(timer)
+                    resume(Effect.fail(new Error(`Browser open failed with exit code ${code}`)))
+                  }
+                })
+              }),
+            ),
+            Effect.catch(() => {
+              log.warn("failed to open browser, user must open URL manually", { mcpName })
+              return bus.publish(BrowserOpenFailed, { mcpName, url: result.authorizationUrl }).pipe(Effect.ignore)
             }),
-          ),
-          Effect.catch(() => {
-            log.warn("failed to open browser, user must open URL manually", { mcpName })
-            return bus.publish(BrowserOpenFailed, { mcpName, url: result.authorizationUrl }).pipe(Effect.ignore)
-          }),
-        )
+          )
 
-        const code = yield* Effect.promise(() => callbackPromise)
+          const code = yield* Effect.promise(() => callbackPromise)
 
-        const storedState = yield* auth.getOAuthState(mcpName)
-        if (storedState !== result.oauthState) {
+          const storedState = yield* auth.getOAuthState(mcpName)
+          if (storedState !== result.oauthState) {
+            yield* auth.clearOAuthState(mcpName)
+            throw new Error("OAuth state mismatch - potential CSRF attack")
+          }
           yield* auth.clearOAuthState(mcpName)
-          throw new Error("OAuth state mismatch - potential CSRF attack")
-        }
-        yield* auth.clearOAuthState(mcpName)
-        return yield* finishAuth(mcpName, code)
+          return yield* finishAuth(mcpName, code)
+        }).pipe(Effect.ensuring(stopOAuthCallback))
       })
 
       const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string) {
-        const transport = pendingOAuthTransports.get(mcpName)
-        if (!transport) throw new Error(`No pending OAuth flow for MCP server: ${mcpName}`)
+        return yield* Effect.gen(function* () {
+          const transport = pendingOAuthTransports.get(mcpName)
+          if (!transport) throw new Error(`No pending OAuth flow for MCP server: ${mcpName}`)
 
-        const result = yield* Effect.tryPromise({
-          try: () => transport.finishAuth(authorizationCode).then(() => true as const),
-          catch: (error) => {
-            log.error("failed to finish oauth", { mcpName, error })
-            return error
-          },
-        }).pipe(Effect.option)
+          const result = yield* Effect.tryPromise({
+            try: () => transport.finishAuth(authorizationCode).then(() => true as const),
+            catch: (error) => {
+              log.error("failed to finish oauth", { mcpName, error })
+              return error
+            },
+          }).pipe(Effect.option)
 
-        if (Option.isNone(result)) {
-          return { status: "failed", error: "OAuth completion failed" } as Status
-        }
+          if (Option.isNone(result)) {
+            return { status: "failed", error: "OAuth completion failed" } as Status
+          }
 
-        yield* auth.clearCodeVerifier(mcpName)
-        pendingOAuthTransports.delete(mcpName)
+          yield* auth.clearCodeVerifier(mcpName)
+          pendingOAuthTransports.delete(mcpName)
 
-        const mcpConfig = yield* getMcpConfig(mcpName)
-        if (!mcpConfig) return { status: "failed", error: "MCP config not found after auth" } as Status
+          const mcpConfig = yield* getMcpConfig(mcpName)
+          if (!mcpConfig) return { status: "failed", error: "MCP config not found after auth" } as Status
 
-        return yield* createAndStore(mcpName, mcpConfig)
+          return yield* createAndStore(mcpName, mcpConfig)
+        }).pipe(Effect.ensuring(stopOAuthCallback))
       })
 
       const removeAuth = Effect.fn("MCP.removeAuth")(function* (mcpName: string) {
         yield* auth.remove(mcpName)
         McpOAuthCallback.cancelPending(mcpName)
         pendingOAuthTransports.delete(mcpName)
+        yield* stopOAuthCallback
         log.info("removed oauth credentials", { mcpName })
       })
 
