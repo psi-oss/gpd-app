@@ -28,6 +28,19 @@ const TRANSPORT_ERROR_CODES = new Set([
   "FailedToOpenSocket",
 ])
 
+// Detect server-side session-expiration errors so we can transparently
+// reconnect the streamable-HTTP transport on the next tool call.
+//
+// Streamable HTTP servers may invalidate an `mcp-session-id` for any reason
+// (server restart, idle timeout, periodic rotation). The SDK surfaces this as
+// a wrapped error like `Error POSTing to endpoint: {"error":"Session not
+// found"}`. Without recovery, every subsequent tool call on that server fails
+// until the user manually disconnects and reconnects.
+export function isSessionExpiredError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? "")
+  return /session\s*not\s*found/i.test(msg) || /invalid\s*session/i.test(msg) || /mcp-session-id/i.test(msg)
+}
+
 export function isTransportError(e: unknown): boolean {
   if (e instanceof StreamableHTTPError) {
     // -1 = SDK protocol-level breakage (unexpected content-type, etc.)

@@ -20,7 +20,7 @@ import { AppFileSystem } from "@/filesystem"
 import { McpOAuthProvider } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
-import { isTransportError } from "./transport-error"
+import { isTransportError, isSessionExpiredError } from "./transport-error"
 import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
@@ -730,8 +730,9 @@ export namespace MCP {
             // and long-running tools hit the default 60s timeout.
             const opts = { onprogress: () => {}, resetTimeoutOnProgress: true, timeout }
             return client.callTool(payload, CallToolResultSchema, opts).catch(async (e) => {
-              if (!isTransportError(e)) throw e
-              log.warn("mcp transport error, attempting reconnect", {
+              const isSession = isSessionExpiredError(e)
+              if (!isSession && !isTransportError(e)) throw e
+              log.warn(isSession ? "mcp session expired, reconnecting" : "mcp transport error, attempting reconnect", {
                 clientName,
                 tool: mcpTool.name,
                 error: e instanceof Error ? e.message : String(e),
