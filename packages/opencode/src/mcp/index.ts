@@ -725,7 +725,10 @@ export namespace MCP {
               name: mcpTool.name,
               arguments: (args || {}) as Record<string, unknown>,
             }
-            const opts = { resetTimeoutOnProgress: true, timeout }
+            // `onprogress` must be set for the MCP SDK to inject a
+            // progressToken; without it, `resetTimeoutOnProgress` is a no-op
+            // and long-running tools hit the default 60s timeout.
+            const opts = { onprogress: () => {}, resetTimeoutOnProgress: true, timeout }
             return client.callTool(payload, CallToolResultSchema, opts).catch(async (e) => {
               if (!isTransportError(e)) throw e
               log.warn("mcp transport error, attempting reconnect", {
