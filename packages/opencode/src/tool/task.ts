@@ -17,6 +17,19 @@ export interface TaskPromptOps {
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<MessageV2.WithParts>
 }
 
+/**
+ * Strip leading/trailing whitespace and zero-width / BOM characters from a
+ * subagent_type string before it is used for agent lookup.  Defensive fix for
+ * issue #24276 where upstream skill emitters can prefix the value with a
+ * zero-width space (U+200B), causing ProviderModelNotFoundError.
+ *
+ * Characters removed: U+200B ZERO-WIDTH SPACE, U+200C ZERO-WIDTH NON-JOINER,
+ * U+200D ZERO-WIDTH JOINER, U+FEFF BOM / ZERO-WIDTH NO-BREAK SPACE.
+ */
+export function sanitizeAgentTypeId(value: string): string {
+  return value.replace(/[​‌‍﻿]/g, "").trim()
+}
+
 const id = "task"
 
 const parameters = z.object({
@@ -54,9 +67,10 @@ export const TaskTool = Tool.define(
         })
       }
 
-      const next = yield* agent.get(params.subagent_type)
+      const agentTypeId = sanitizeAgentTypeId(params.subagent_type)
+      const next = yield* agent.get(agentTypeId)
       if (!next) {
-        return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
+        return yield* Effect.fail(new Error(`Unknown agent type: ${agentTypeId} is not a valid agent type`))
       }
 
       const taskID = params.task_id
