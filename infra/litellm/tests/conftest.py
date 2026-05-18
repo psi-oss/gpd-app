@@ -63,9 +63,14 @@ def postgres_url() -> str:
         container.stop()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _env_audit_url(postgres_url):
-    """Wire the audit-DB env var so gpd_tos.db._get_pool() connects here."""
+    """Wire the audit-DB env var so gpd_tos.db._get_pool() connects here.
+
+    Not autouse — tests that don't touch Postgres skip the Docker-backed
+    container fixture chain. `migrated_db` depends on this, so consent /
+    TOS tests still get the env var wired transparently.
+    """
     prior = os.environ.get("GPD_AUDIT_DATABASE_URL")
     os.environ["GPD_AUDIT_DATABASE_URL"] = postgres_url
     yield
@@ -76,7 +81,7 @@ def _env_audit_url(postgres_url):
 
 
 @pytest.fixture(scope="session")
-async def migrated_db(postgres_url):
+async def migrated_db(postgres_url, _env_audit_url):
     """Apply gpd_tos migrations against the session Postgres.
 
     Session-scoped so we pay the DDL cost once. Tests must isolate on
@@ -90,11 +95,16 @@ async def migrated_db(postgres_url):
     # postgres_url fixture's finalizer.
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 async def _clear_consent_cache():
     """Each test gets a cold consent-gate cache so TTL state from the
     previous test can't leak. Also reset the TOS DB pool because pytest's
-    default function-scoped event loops cannot share asyncpg pools."""
+    default function-scoped event loops cannot share asyncpg pools.
+
+    Not autouse — explicitly request from consent-gate tests. Mint /
+    signature / whitelist unit tests don't import gpd_consent and don't
+    need this.
+    """
     from gpd_consent import cache
     from gpd_tos import db
 

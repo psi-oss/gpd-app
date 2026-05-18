@@ -21,8 +21,13 @@
 #                       "7d", "24h"). Omit (default) for the lump-sum policy
 #                       used for current keys. Set only if you want a
 #                       self-resetting allowance.
-#   --access=<group>    LiteLLM access group. Default "all-models" (full
-#                       provider catalogue). Use "gpd-chat" to restrict.
+#   --access=<group>    LiteLLM access group. Default "gpd-chat" — the
+#                       11 models the desktop picker actually surfaces
+#                       (sync'd with gpd-models.ts GPD_MODEL_METADATA).
+#                       Use "all-models" for the 17-model superset
+#                       (adds gpt-4.1*, o4-mini, gemini-3-flash-preview,
+#                       gpt-5.4-pro, gpt-5.5-pro — invisible in the
+#                       picker but reachable via raw API).
 #   --metadata=<json>   Extra metadata stored on the key row.
 #
 # Output: the freshly-minted `sk-...` key on stdout (and nothing else),
@@ -56,7 +61,7 @@ NAME="$1"; shift
 
 BUDGET=2000
 DURATION=""
-ACCESS="all-models"
+ACCESS="gpd-chat"
 METADATA='{}'
 HAS_BUDGET=true
 

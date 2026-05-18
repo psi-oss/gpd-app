@@ -50,7 +50,7 @@ Mint a short-lived test key:
 MASTER=$(railway variables --service litellm --kv | awk -F= '/^LITELLM_MASTER_KEY=/{print $2}')
 curl -s -X POST 'https://litellm-production-46bb.up.railway.app/key/generate' \
   -H "Authorization: Bearer $MASTER" -H 'Content-Type: application/json' \
-  -d '{"key_alias":"local-test","models":["all-models"],"max_budget":50,"budget_duration":"7d"}' \
+  -d '{"key_alias":"local-test","models":["gpd-chat"],"max_budget":50,"budget_duration":"7d"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])"
 ```
 

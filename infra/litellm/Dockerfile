@@ -86,11 +86,22 @@ RUN uv pip install --python /app/.venv/bin/python --no-cache-dir \
 #                  reject unknown top-level keys with HTTP 400; OpenAI
 #                  Responses API tolerates. See gpd_sanitize/hook.py for
 #                  the full root-cause writeup.
+#   gpd_mint     → POST /gpd/slack/mint (Slack slash-command + modal for
+#                  on-demand virtual-key minting by approved operators).
+#                  Auth is HMAC of GPD_MINT_SLACK_SIGNING_SECRET plus an
+#                  explicit allowlist of Slack user IDs in
+#                  GPD_MINT_AUTHORIZED_USERS — NOT virtual-key auth like
+#                  the other /gpd/* routes. Calls LiteLLM /key/generate
+#                  internally using LITELLM_MASTER_KEY (already in env)
+#                  with `models: ["gpd-chat"]` so new mints stay aligned
+#                  with the desktop picker's 11-model subset. See
+#                  infra/litellm/gpd_mint/README.md.
 COPY gpd_log /app/gpd_log
 COPY gpd_tos /app/gpd_tos
 COPY gpd_feedback /app/gpd_feedback
 COPY gpd_consent /app/gpd_consent
 COPY gpd_sanitize /app/gpd_sanitize
+COPY gpd_mint /app/gpd_mint
 
 # Activate hooks in order. LiteLLM iterates this comma-separated list
 # during worker startup (proxy_server.py:777-803, PR #22931) and calls
@@ -103,5 +114,5 @@ COPY gpd_sanitize /app/gpd_sanitize
 # request-body stripper with no DB dependencies; order against the
 # others doesn't matter, but we register it after gpd_consent so the
 # consent gate gets first look at the (still-untouched) body.
-ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register,gpd_sanitize.hook:register
+ENV LITELLM_WORKER_STARTUP_HOOKS=gpd_log.hook:register,gpd_tos.hook:register,gpd_feedback.hook:register,gpd_consent.hook:register,gpd_sanitize.hook:register,gpd_mint.hook:register
 ENV PYTHONPATH=/app
