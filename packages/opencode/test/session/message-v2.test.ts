@@ -1060,7 +1060,6 @@ describe("session.message-v2.latest", () => {
         ...basePart(COMPACTION_USER, "p1"),
         type: "compaction",
         auto: true,
-        tail_start_id: TAIL_USER,
       },
     ] as MessageV2.Part[],
   }

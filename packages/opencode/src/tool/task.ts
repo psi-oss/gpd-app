@@ -64,8 +64,8 @@ export const TaskTool = Tool.define(
         ? yield* sessions.get(SessionID.make(taskID)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       const parent = yield* sessions.get(ctx.sessionID)
-      const parentAgent = parent.agent
-        ? yield* agent.get(parent.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      const parentAgent = ctx.agent
+        ? yield* agent.get(ctx.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       const nextSession =
         session ??
