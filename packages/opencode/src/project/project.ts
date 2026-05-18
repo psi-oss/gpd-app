@@ -295,10 +295,14 @@ export namespace Project {
               vcs: fakeVcs,
             }
           }
-          const worktree = (() => {
-            const common = resolveGitPath(sandbox, commonDir.text.trim())
-            return common === sandbox ? sandbox : pathSvc.dirname(common)
-          })()
+          const common = resolveGitPath(sandbox, commonDir.text.trim())
+          const bareCheck = yield* git(["config", "--bool", "core.bare"], { cwd: sandbox })
+          const isBareRepo = bareCheck.code === 0 && bareCheck.text.trim() === "true"
+          // Bare-backed worktree: cache lives in git-common-dir (so sibling
+          // bare repos don't collide), but the project worktree is the
+          // checked-out sandbox path so UI/cwd surfaces work.
+          const worktree = common === sandbox ? sandbox : isBareRepo ? sandbox : pathSvc.dirname(common)
+          const cacheDir = common === sandbox ? pathSvc.join(sandbox, ".git") : isBareRepo ? common : pathSvc.join(worktree, ".git")
 
           // Re-check after worktree-from-common-dir: a `git worktree`
           // setup or `core.worktree` config can lift the effective
@@ -314,7 +318,7 @@ export namespace Project {
           }
 
           if (id == null) {
-            id = yield* readCachedProjectId(pathSvc.join(worktree, ".git"))
+            id = yield* readCachedProjectId(cacheDir)
           }
 
           if (!id) {
@@ -327,7 +331,7 @@ export namespace Project {
 
             id = roots[0] ? ProjectID.make(roots[0]) : undefined
             if (id) {
-              yield* fs.writeFileString(pathSvc.join(worktree, ".git", "opencode"), id).pipe(Effect.ignore)
+              yield* fs.writeFileString(pathSvc.join(cacheDir, "opencode"), id).pipe(Effect.ignore)
             }
           }
 
