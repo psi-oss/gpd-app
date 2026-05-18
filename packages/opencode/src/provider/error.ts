@@ -155,6 +155,7 @@ export namespace ProviderError {
           isRetryable: false,
           responseBody,
         }
+      case "server_is_overloaded":
       case "server_error":
       case "internal_server_error":
       case "overloaded_error":
