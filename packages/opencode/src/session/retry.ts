@@ -62,7 +62,11 @@ export namespace SessionRetry {
     // context overflow errors should not be retried
     if (MessageV2.ContextOverflowError.isInstance(error)) return undefined
     if (MessageV2.APIError.isInstance(error)) {
-      if (!error.data.isRetryable) return undefined
+      const status = error.data.statusCode
+      // Allow 5xx responses through retry classification even when the
+      // provider SDK doesn't explicitly mark them as retryable — overload
+      // markers are often embedded in the response body of a 503.
+      if (!error.data.isRetryable && !(status !== undefined && status >= 500)) return undefined
       if (error.data.responseBody?.includes("FreeUsageLimitError")) return GO_UPSELL_MESSAGE
       const text = [error.data.message, error.data.responseBody].filter(Boolean).join(" ").toLowerCase()
       if (error.data.message.includes("Overloaded") || OVERLOAD_MARKERS.some((marker) => text.includes(marker))) {
@@ -116,6 +120,15 @@ export namespace SessionRetry {
     }
     if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit")) {
       return "Rate Limited"
+    }
+    if (
+      json.type === "error" &&
+      (nestedType === "server_error" ||
+        nestedCode === "server_error" ||
+        nestedType === "upstream_error" ||
+        nestedCode === "stream_read_error")
+    ) {
+      return nestedMessage?.trim() ? nestedMessage : "Provider is overloaded"
     }
     return undefined
   }
