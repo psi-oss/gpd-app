@@ -25,6 +25,7 @@ import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
 import { StatusPopover } from "../status-popover"
+import { GoalPopover } from "./goal-popover"
 
 const OPEN_APPS = [
   "vscode",
@@ -442,11 +443,7 @@ export function SessionHeader() {
               </Show>
               <div class="flex items-center gap-1">
                 <Show when={goal()}>
-                  {(item) => (
-                    <div class="text-muted-foreground max-w-48 truncate rounded border px-2 py-1 text-xs">
-                      goal {item().status}
-                    </div>
-                  )}
+                  {(item) => <GoalPopover goal={item()} />}
                 </Show>
                 <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
                   <StatusPopover />

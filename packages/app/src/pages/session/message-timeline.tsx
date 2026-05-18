@@ -1047,6 +1047,16 @@ export function MessageTimeline(props: {
                       ),
                   })
                   const commentCount = createMemo(() => comments().length)
+                  const isGoalContinuation = createMemo(() => {
+                    const parts = sync.data.part[messageID] ?? []
+                    return parts.some(
+                      (p) =>
+                        p.type === "text" &&
+                        (p as TextPart).synthetic === true &&
+                        ((p as TextPart).metadata as { goalContinuation?: unknown } | undefined)?.goalContinuation ===
+                          true,
+                    )
+                  })
                   return (
                     <div
                       id={props.anchor(messageID)}
@@ -1097,6 +1107,14 @@ export function MessageTimeline(props: {
                                 }}
                               </Index>
                             </div>
+                          </div>
+                        </div>
+                      </Show>
+                      <Show when={isGoalContinuation()}>
+                        <div class="px-4 md:px-5 pb-2">
+                          <div class="inline-flex items-center gap-1.5 rounded-full border border-border-weak-base bg-background-stronger px-2 py-0.5 text-xs text-text-weak">
+                            <span>↻</span>
+                            <span>{language.t("session.goal.continuation")}</span>
                           </div>
                         </div>
                       </Show>
