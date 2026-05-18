@@ -1161,6 +1161,16 @@ export default function Layout(props: ParentProps) {
         onSelect: () => openSettings("api-key"),
       },
       {
+        // RES-867: menu bar "Profile" item triggers this. Routes to the
+        // dedicated SettingsProfile pane where the user manages their
+        // preferred byline + affiliations (stored in ~/.gpd/profile.json,
+        // read by the get-physics-done paper-writer skill).
+        id: "settings.openProfile",
+        title: language.t("settings.profile.title"),
+        category: language.t("command.category.settings"),
+        onSelect: () => openSettings("profile"),
+      },
+      {
         // Native macOS menu bar "Send Feedback…" item triggers this.
         // Routes through the same dialog-settings opener so the
         // existing SettingsFeedback pane handles the form submission.

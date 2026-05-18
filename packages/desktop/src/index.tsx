@@ -385,6 +385,10 @@ const createPlatform = (): Platform => {
     removeGpdKey: async () => {
       await commands.removeGpdKey()
     },
+    readProfile: () => commands.readProfile(),
+    writeProfile: async (json: string) => {
+      await commands.writeProfile(json)
+    },
 
     webviewZoom,
 

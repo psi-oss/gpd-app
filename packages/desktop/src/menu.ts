@@ -40,6 +40,12 @@ export async function createMenu(trigger: (id: string) => void) {
             action: () => trigger("settings.openApiKey"),
           }),
           await MenuItem.new({
+            // RES-867: opens the Profile pane where the user manages
+            // their preferred byline + affiliations for paper drafts.
+            text: t("settings.profile.title"),
+            action: () => trigger("settings.openProfile"),
+          }),
+          await MenuItem.new({
             text: t("settings.feedback.title"),
             action: () => trigger("settings.openFeedback"),
           }),

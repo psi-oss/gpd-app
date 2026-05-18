@@ -117,6 +117,26 @@ export type Platform = {
    */
   removeGpdKey?(): Promise<void>
 
+  /**
+   * Read the author-profile JSON at `~/.gpd/profile.json` (desktop only).
+   * Returns the raw string so the Settings → Profile pane can parse it
+   * with its own schema; returns `null` when the file is missing. The
+   * file is also read by the get-physics-done `gpd.core.profile` Python
+   * helper, which is what the paper-writer skill calls — both sides
+   * resolve to the same default path so a profile saved here pre-fills
+   * authors[] in new PAPER-CONFIG.json on the next paper draft.
+   */
+  readProfile?(): Promise<string | null>
+
+  /**
+   * Atomically write the author profile JSON. The Rust side validates
+   * that the body parses as JSON (so malformed strings never clobber a
+   * good file) and chmod 0o600 on Unix to keep PII off the multi-user
+   * inspection path, then renames into place so a concurrent paper-draft
+   * read never observes a half-written file.
+   */
+  writeProfile?(json: string): Promise<void>
+
   /** Webview zoom level (desktop only) */
   webviewZoom?: Accessor<number>
 
