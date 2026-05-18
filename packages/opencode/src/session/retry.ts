@@ -15,6 +15,11 @@ export namespace SessionRetry {
   export const RETRY_MAX_ATTEMPTS = 5
   export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
   export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
+  const OVERLOAD_MARKERS = [
+    "server_is_overloaded",
+    "service_unavailable_error",
+    "servers are currently overloaded",
+  ]
 
   function cap(ms: number) {
     return Math.min(ms, RETRY_MAX_DELAY)
@@ -59,7 +64,11 @@ export namespace SessionRetry {
     if (MessageV2.APIError.isInstance(error)) {
       if (!error.data.isRetryable) return undefined
       if (error.data.responseBody?.includes("FreeUsageLimitError")) return GO_UPSELL_MESSAGE
-      return error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message
+      const text = [error.data.message, error.data.responseBody].filter(Boolean).join(" ").toLowerCase()
+      if (error.data.message.includes("Overloaded") || OVERLOAD_MARKERS.some((marker) => text.includes(marker))) {
+        return "Provider is overloaded"
+      }
+      return error.data.message
     }
 
     // Check for rate limit patterns in plain text error messages
@@ -67,6 +76,7 @@ export namespace SessionRetry {
     if (typeof msg === "string") {
       const lower = msg.toLowerCase()
       if (
+        OVERLOAD_MARKERS.some((marker) => lower.includes(marker)) ||
         lower.includes("rate increased too quickly") ||
         lower.includes("rate limit") ||
         lower.includes("too many requests")
@@ -92,6 +102,14 @@ export namespace SessionRetry {
 
     if (json.type === "error" && json.error?.type === "too_many_requests") {
       return "Too Many Requests"
+    }
+    const type = typeof json.type === "string" ? json.type : ""
+    const nestedType = typeof json.error?.type === "string" ? json.error.type : ""
+    const nestedCode = typeof json.error?.code === "string" ? json.error.code : ""
+    const nestedMessage = typeof json.error?.message === "string" ? json.error.message : ""
+    const overloadText = [code, type, nestedType, nestedCode, nestedMessage].join(" ").toLowerCase()
+    if (OVERLOAD_MARKERS.some((marker) => overloadText.includes(marker))) {
+      return "Provider is overloaded"
     }
     if (code.includes("exhausted") || code.includes("unavailable")) {
       return "Provider is overloaded"
