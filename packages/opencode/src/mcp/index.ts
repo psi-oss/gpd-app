@@ -127,7 +127,7 @@ export namespace MCP {
     return typeof entry === "object" && entry !== null && "type" in entry
   }
 
-  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_]/g, "_")
 
   // Convert MCP tool definition to AI SDK Tool type
   function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
