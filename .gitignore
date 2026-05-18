@@ -40,3 +40,15 @@ tsconfig.tsbuildinfo
 .playwright-mcp/
 console-debug.log
 *.console.log
+
+# Local secret stash for gpd_mint Slack-app setup (config tokens, bot
+# tokens, signing secrets). Lives in /tmp by convention — but if anyone
+# ever moves it into the repo, ensure git never sees it.
+gpd-mint-secrets.env
+**/gpd-mint-secrets.env
+*.slack-config.env
+*.slack-secrets.env
+
+# Python bytecode (infra/litellm/* test runs)
+**/__pycache__/
+*.pyc
