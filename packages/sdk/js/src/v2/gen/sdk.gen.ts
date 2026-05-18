@@ -660,6 +660,7 @@ export class Project extends HeyApiClient {
         url?: string
         override?: string
         color?: string
+        character?: string
       }
       commands?: {
         /**

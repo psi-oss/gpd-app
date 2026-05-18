@@ -26,6 +26,10 @@ export type ProjectMeta = {
   icon?: {
     override?: string
     color?: string
+    // RES-1010: optional 1-2 char glyph that overrides the auto-derived
+    // first-letter avatar fallback. Mirrors `Project.icon.character` in
+    // the SDK so the projectMeta patch surface stays in sync.
+    character?: string
   }
   commands?: {
     start?: string

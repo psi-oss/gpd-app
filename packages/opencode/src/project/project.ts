@@ -81,6 +81,12 @@ export namespace Project {
           url: z.string().optional(),
           override: z.string().optional(),
           color: z.string().optional(),
+          // 1-2 character user-chosen glyph (max 2 graphemes). Renders
+          // in place of the first-letter avatar fallback. Distinct from
+          // `override` (image data URL) and `url` (favicon discovery
+          // result) — populated only by explicit user choice in the
+          // Edit-Project dialog. RES-1010.
+          character: z.string().max(2).optional(),
         })
         .optional(),
       commands: z
@@ -109,8 +115,12 @@ export namespace Project {
 
   export function fromRow(row: Row): Info {
     const icon =
-      row.icon_url || row.icon_color
-        ? { url: row.icon_url ?? undefined, color: row.icon_color ?? undefined }
+      row.icon_url || row.icon_color || row.icon_character
+        ? {
+            url: row.icon_url ?? undefined,
+            color: row.icon_color ?? undefined,
+            character: row.icon_character ?? undefined,
+          }
         : undefined
     return {
       id: row.id,
@@ -382,6 +392,7 @@ export namespace Project {
               name: result.name,
               icon_url: result.icon?.url,
               icon_color: result.icon?.color,
+              icon_character: result.icon?.character,
               time_created: result.time.created,
               time_updated: result.time.updated,
               time_initialized: result.time.initialized,
@@ -396,6 +407,7 @@ export namespace Project {
                 name: result.name,
                 icon_url: result.icon?.url,
                 icon_color: result.icon?.color,
+                icon_character: result.icon?.character,
                 time_updated: result.time.updated,
                 time_initialized: result.time.initialized,
                 sandboxes: result.sandboxes,
@@ -458,6 +470,10 @@ export namespace Project {
               name: input.name,
               icon_url: input.icon?.url,
               icon_color: input.icon?.color,
+              // RES-1010: persist the user-chosen 1-2 char glyph. An
+              // empty string from the dialog clears it; undefined leaves
+              // the prior value intact (drizzle skips undefined fields).
+              icon_character: input.icon?.character === "" ? null : input.icon?.character,
               commands: input.commands,
               time_updated: Date.now(),
             })

@@ -28,6 +28,10 @@ export function DialogEditProject(props: { project: LocalProject }) {
     name: defaultName(),
     color: props.project.icon?.color || "pink",
     iconUrl: props.project.icon?.override || "",
+    // RES-1010: optional 1-2 char glyph that wins over the auto-derived
+    // first-letter fallback. Persisted via icon_character on the
+    // backend (drizzle migration 20260518200617_productive_rafael_vega).
+    character: props.project.icon?.character || "",
     startup: props.project.commands?.start ?? "",
     dragOver: false,
     iconHover: false,
@@ -76,12 +80,17 @@ export function DialogEditProject(props: { project: LocalProject }) {
       const name = store.name.trim() === folderName() ? "" : store.name.trim()
       const start = store.startup.trim()
 
+      // Trim the character glyph and clamp to two graphemes — the
+      // backend zod allows up to 2 but the input is free-form text;
+      // explicit empty (after trim) clears the prior value on save.
+      const character = store.character.trim().slice(0, 2)
+
       if (props.project.id && props.project.id !== "global") {
         await globalSDK.client.project.update({
           projectID: props.project.id,
           directory: props.project.worktree,
           name,
-          icon: { color: store.color, override: store.iconUrl },
+          icon: { color: store.color, override: store.iconUrl, character },
           commands: { start },
         })
         globalSync.project.icon(props.project.worktree, store.iconUrl || undefined)
@@ -91,7 +100,11 @@ export function DialogEditProject(props: { project: LocalProject }) {
 
       globalSync.project.meta(props.project.worktree, {
         name,
-        icon: { color: store.color, override: store.iconUrl || undefined },
+        icon: {
+          color: store.color,
+          override: store.iconUrl || undefined,
+          character: character || undefined,
+        },
         commands: { start: start || undefined },
       })
       dialog.close()
@@ -219,6 +232,7 @@ export function DialogEditProject(props: { project: LocalProject }) {
                     >
                       <Avatar
                         fallback={store.name || defaultName()}
+                        text={store.character}
                         {...getAvatarColors(color)}
                         class="size-full rounded"
                       />
@@ -227,6 +241,19 @@ export function DialogEditProject(props: { project: LocalProject }) {
                 </For>
               </div>
             </div>
+
+            {/* RES-1010: optional 1-2 char glyph override. Empties out
+                to the auto-derived first-letter fallback when blank. */}
+            <TextField
+              type="text"
+              label={language.t("dialog.project.edit.icon.character")}
+              description={language.t("dialog.project.edit.icon.character.description")}
+              placeholder={language.t("dialog.project.edit.icon.character.placeholder")}
+              value={store.character}
+              onChange={(v) => setStore("character", v.slice(0, 2))}
+              spellcheck={false}
+              class="w-full"
+            />
           </Show>
 
           <TextField

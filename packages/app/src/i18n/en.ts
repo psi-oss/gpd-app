@@ -420,6 +420,10 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Recommended: 128x128px",
   "dialog.project.edit.color": "Color",
   "dialog.project.edit.color.select": "Select {{color}} color",
+  "dialog.project.edit.icon.character": "Icon letter",
+  "dialog.project.edit.icon.character.description":
+    "One or two characters shown in the sidebar instead of the first letter of the name. Useful when two projects start with the same letter.",
+  "dialog.project.edit.icon.character.placeholder": "e.g. CC",
   "dialog.project.edit.worktree.startup": "Workspace setup script",
   "dialog.project.edit.worktree.startup.description": "Runs after creating a new workspace.",
   "dialog.project.edit.worktree.startup.placeholder": "e.g. pip install -r requirements.txt",

@@ -13,6 +13,7 @@ export type Project = {
     url?: string
     override?: string
     color?: string
+    character?: string
   }
   commands?: {
     /**
@@ -2791,6 +2792,7 @@ export type ProjectUpdateData = {
       url?: string
       override?: string
       color?: string
+      character?: string
     }
     commands?: {
       /**
