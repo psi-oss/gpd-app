@@ -218,6 +218,7 @@ export function MessageTimeline(props: {
   onAutoScrollHandleScroll: () => void
   onMarkScrollGesture: (target?: EventTarget | null) => void
   hasScrollGesture: () => boolean
+  onSessionScroll: () => void
   onUserScroll: () => void
   onTurnBackfillScroll: () => void
   onAutoScrollInteraction: (event: MouseEvent) => void
@@ -697,6 +698,7 @@ export function MessageTimeline(props: {
           onScroll={(e) => {
             props.onScheduleScrollState(e.currentTarget)
             props.onTurnBackfillScroll()
+            props.onSessionScroll()
             if (!props.hasScrollGesture()) return
             props.onUserScroll()
             props.onAutoScrollHandleScroll()
