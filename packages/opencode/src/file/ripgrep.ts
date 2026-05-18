@@ -233,7 +233,7 @@ export namespace Ripgrep {
   }
 
   function filesArgs(input: FilesInput) {
-    const args = ["--files", "--glob=!.git/*"]
+    const args = ["--files", "--no-messages", "--glob=!.git/*"]
     if (input.follow) args.push("--follow")
     if (input.hidden !== false) args.push("--hidden")
     if (input.maxDepth !== undefined) args.push(`--max-depth=${input.maxDepth}`)
@@ -412,7 +412,10 @@ export namespace Ripgrep {
               catch: toError,
             })
             if (buf) Queue.offerUnsafe(queue, clean(buf))
-            if (ret.code === 0 || ret.code === 1) {
+            // Exit codes: 0 = files found, 1 = no files found, 2 = soft errors
+            // (e.g. broken symlinks, permission denied) but valid results on stdout.
+            // This matches how searchArgs uses --no-messages and search() treats code 2.
+            if (ret.code === 0 || ret.code === 1 || ret.code === 2) {
               Queue.endUnsafe(queue)
               return
             }
