@@ -20,6 +20,7 @@ import { AppFileSystem } from "@/filesystem"
 import { McpOAuthProvider } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
+import { isTransportError } from "./transport-error"
 import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
@@ -129,37 +130,6 @@ export namespace MCP {
 
   const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_]/g, "_")
 
-  // Convert MCP tool definition to AI SDK Tool type
-  function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
-    const inputSchema = mcpTool.inputSchema
-
-    // Spread first, then override type to ensure it's always "object"
-    const schema: JSONSchema7 = {
-      ...(inputSchema as JSONSchema7),
-      type: "object",
-      properties: (inputSchema.properties ?? {}) as JSONSchema7["properties"],
-      additionalProperties: false,
-    }
-
-    return dynamicTool({
-      description: mcpTool.description ?? "",
-      inputSchema: jsonSchema(schema),
-      execute: async (args: unknown) => {
-        return client.callTool(
-          {
-            name: mcpTool.name,
-            arguments: (args || {}) as Record<string, unknown>,
-          },
-          CallToolResultSchema,
-          {
-            resetTimeoutOnProgress: true,
-            timeout,
-          },
-        )
-      },
-    })
-  }
-
   function defs(key: string, client: MCPClient, timeout?: number) {
     return Effect.tryPromise({
       try: () => withTimeout(client.listTools(), timeout ?? DEFAULT_TIMEOUT),
@@ -253,6 +223,10 @@ export namespace MCP {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const auth = yield* McpAuth.Service
       const bus = yield* Bus.Service
+
+      // Single-flight reconnect dedup: concurrent tool calls for the same MCP
+      // share one in-flight reconnect Promise instead of racing N connects.
+      const reconnecting = new Map<string, Promise<boolean>>()
 
       type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
@@ -637,6 +611,75 @@ export namespace MCP {
         s.status[name] = { status: "disabled" }
       })
 
+      // Run an Effect that depends only on services baked into the layer
+      // closure (cfgSvc, bus, spawner) as a Promise. Needed because tool
+      // `execute` callbacks live in AI SDK Promise-land, outside the Effect
+      // runtime that built the layer.
+      const runLayerPromise = <A>(eff: Effect.Effect<A, any, any>): Promise<A> =>
+        Effect.runPromise(eff.pipe(Effect.provide(EffectLogger.layer)) as Effect.Effect<A, any, never>)
+
+      // Single-flight reconnect: concurrent tool calls for the same MCP name
+      // share one in-flight Promise instead of each triggering a new connect.
+      // Entry is removed on both success and failure.
+      const reconnectClient = (name: string): Promise<boolean> => {
+        const existing = reconnecting.get(name)
+        if (existing) return existing
+        const p = runLayerPromise(getMcpConfig(name))
+          .then((mcp) => {
+            if (!mcp) return false
+            return runLayerPromise(createAndStore(name, { ...mcp, enabled: true })).then(
+              (status) => status.status === "connected",
+            )
+          })
+          .catch((err) => {
+            log.error("mcp reconnect failed", { name, error: err instanceof Error ? err.message : String(err) })
+            return false
+          })
+          .finally(() => {
+            reconnecting.delete(name)
+          })
+        reconnecting.set(name, p)
+        return p
+      }
+
+      // Wraps an MCP tool as an AI SDK dynamicTool. The catch branch in
+      // execute is the key piece: on a transport error, call reconnectClient
+      // and retry once with the fresh client. Non-transport errors and
+      // failed reconnects rethrow as-is so business errors stay visible.
+      const makeTool = (clientName: string, mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool => {
+        const schema: JSONSchema7 = {
+          ...(mcpTool.inputSchema as JSONSchema7),
+          type: "object",
+          properties: (mcpTool.inputSchema.properties ?? {}) as JSONSchema7["properties"],
+          additionalProperties: false,
+        }
+        return dynamicTool({
+          description: mcpTool.description ?? "",
+          inputSchema: jsonSchema(schema),
+          execute: (args: unknown) => {
+            const payload = {
+              name: mcpTool.name,
+              arguments: (args || {}) as Record<string, unknown>,
+            }
+            const opts = { resetTimeoutOnProgress: true, timeout }
+            return client.callTool(payload, CallToolResultSchema, opts).catch(async (e) => {
+              if (!isTransportError(e)) throw e
+              log.warn("mcp transport error, attempting reconnect", {
+                clientName,
+                tool: mcpTool.name,
+                error: e instanceof Error ? e.message : String(e),
+              })
+              const ok = await reconnectClient(clientName)
+              if (!ok) throw e
+              const next = await runLayerPromise(InstanceState.get(state))
+              const fresh = next.clients[clientName]
+              if (!fresh || next.status[clientName]?.status !== "connected") throw e
+              return fresh.callTool(payload, CallToolResultSchema, opts)
+            })
+          },
+        })
+      }
+
       const tools = Effect.fn("MCP.tools")(function* () {
         const result: Record<string, Tool> = {}
         const s = yield* InstanceState.get(state)
@@ -664,7 +707,12 @@ export namespace MCP {
 
               const timeout = entry?.timeout ?? defaultTimeout
               for (const mcpTool of listed) {
-                result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+                result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = makeTool(
+                  clientName,
+                  mcpTool,
+                  client,
+                  timeout,
+                )
               }
             }),
           { concurrency: "unbounded" },
