@@ -636,6 +636,7 @@ export namespace Session {
                   messageID: part.messageID,
                   tokens: Math.max(0, part.tokens.input + part.tokens.output),
                   seconds: 0,
+                  costMicroUSD: Math.max(0, Math.round((part.cost ?? 0) * 1_000_000)),
                 })
                 .pipe(Effect.ignore)
             }

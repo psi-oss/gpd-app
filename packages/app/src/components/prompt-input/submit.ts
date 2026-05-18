@@ -32,9 +32,54 @@ const goalDescription = (goal: SessionGoal) =>
   [
     goal.objective,
     `Tokens: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : `/${goal.tokens.budget}`}`,
-    `Time: ${goal.time.used}s`,
+    `Time: ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : `/${goal.time.budgetSeconds}s`}`,
+    `Cost: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : `/$${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
     "Commands: /goal edit, /goal pause, /goal resume, /goal clear",
   ].join("\n")
+
+// Parse durations like "30m", "2h", "1h30m", "120s", "1h30m45s"
+function parseDuration(raw: string): number | undefined {
+  const match = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/)
+  if (!match || (!match[1] && !match[2] && !match[3])) return undefined
+  const h = match[1] ? parseInt(match[1], 10) : 0
+  const m = match[2] ? parseInt(match[2], 10) : 0
+  const s = match[3] ? parseInt(match[3], 10) : 0
+  return h * 3600 + m * 60 + s
+}
+
+type GoalFlags = { tokenBudget?: number; timeBudgetSeconds?: number; costBudgetUSD?: number }
+
+// Extract trailing --budget=$X --time=Yh --tokens=N flags from objective text.
+// Returns the cleaned text + parsed flags. Throws on malformed flag values.
+function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
+  const flags: GoalFlags = {}
+  const flagPattern = /\s+--(budget|time|tokens)=(\S+)/g
+  let cleanArg = arg
+  for (const match of arg.matchAll(flagPattern)) {
+    cleanArg = cleanArg.replace(match[0], "").trim()
+    const [, key, raw] = match
+    if (key === "budget") {
+      const usd = parseFloat(raw.replace(/^\$/, ""))
+      if (!Number.isFinite(usd) || usd <= 0) {
+        throw new Error(`Invalid --budget=${raw}; expected $<positive number>`)
+      }
+      flags.costBudgetUSD = usd
+    } else if (key === "time") {
+      const seconds = parseDuration(raw)
+      if (seconds === undefined || seconds <= 0) {
+        throw new Error(`Invalid --time=${raw}; expected e.g. 30m, 2h, 1h30m, 120s`)
+      }
+      flags.timeBudgetSeconds = seconds
+    } else if (key === "tokens") {
+      const n = parseInt(raw, 10)
+      if (!Number.isFinite(n) || n <= 0 || String(n) !== raw.replace(/^\+/, "")) {
+        throw new Error(`Invalid --tokens=${raw}; expected positive integer`)
+      }
+      flags.tokenBudget = n
+    }
+  }
+  return { cleanArg, flags }
+}
 
 async function runGoal(input: {
   client: ReturnType<typeof useSDK>["client"]
@@ -88,12 +133,24 @@ async function runGoal(input: {
     input.edit?.(`/goal ${current.data.objective}`)
     return true
   }
+  const { cleanArg, flags } = parseGoalFlags(arg)
+  const objective = cleanArg.trim() || arg.trim() // fall back to raw if flags consumed everything
+  if (!objective) throw new Error("Goal objective is required.")
   if (current.data) {
-    await input.client.session.goal.update({ sessionID: input.sessionID, objective: arg, status: "active" })
+    await input.client.session.goal.update({
+      sessionID: input.sessionID,
+      objective,
+      status: "active",
+      ...flags,
+    })
     showToast({ title: "Goal updated" })
     return true
   }
-  await input.client.session.goal.create({ sessionID: input.sessionID, objective: arg })
+  await input.client.session.goal.create({
+    sessionID: input.sessionID,
+    objective,
+    ...flags,
+  })
   showToast({ title: "Goal set" })
   return true
 }

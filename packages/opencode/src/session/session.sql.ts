@@ -107,7 +107,10 @@ export const SessionGoalTable = sqliteTable(
     status: text().notNull(),
     token_budget: integer(),
     tokens_used: integer().notNull().default(0),
+    time_budget: integer(),
     time_used: integer().notNull().default(0),
+    cost_budget_micro: integer(),
+    cost_used_micro: integer().notNull().default(0),
     ...Timestamps,
   },
   (table) => [

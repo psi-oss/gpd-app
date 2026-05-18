@@ -127,8 +127,13 @@ export type SessionGoal = {
   }
   time: {
     used: number
+    budgetSeconds?: number
     created: number
     updated: number
+  }
+  cost: {
+    usedMicroUSD: number
+    budgetMicroUSD?: number
   }
 }
 
@@ -3905,6 +3910,8 @@ export type SessionGoalUpdateData = {
     objective?: string
     status?: "active" | "paused" | "budget_limited" | "complete"
     tokenBudget?: number | null
+    timeBudgetSeconds?: number | null
+    costBudgetUSD?: number | null
   }
   path: {
     sessionID: string
@@ -3942,6 +3949,8 @@ export type SessionGoalCreateData = {
   body?: {
     objective: string
     tokenBudget?: number
+    timeBudgetSeconds?: number
+    costBudgetUSD?: number
   }
   path: {
     sessionID: string

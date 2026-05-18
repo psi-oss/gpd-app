@@ -255,6 +255,8 @@ export const SessionRoutes = lazy(() =>
         z.object({
           objective: z.string(),
           tokenBudget: z.number().int().positive().optional(),
+          timeBudgetSeconds: z.number().int().positive().optional(),
+          costBudgetUSD: z.number().positive().optional(),
         }),
       ),
       async (c) => {
@@ -304,6 +306,8 @@ export const SessionRoutes = lazy(() =>
           objective: z.string().optional(),
           status: z.enum(["active", "paused", "budget_limited", "complete"]).optional(),
           tokenBudget: z.number().int().positive().nullable().optional(),
+          timeBudgetSeconds: z.number().int().positive().nullable().optional(),
+          costBudgetUSD: z.number().positive().nullable().optional(),
         }),
       ),
       async (c) => {

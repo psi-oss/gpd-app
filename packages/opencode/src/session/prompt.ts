@@ -1805,10 +1805,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     `Status: ${goal.status}`,
                     `Objective: ${JSON.stringify(goal.objective)}`,
                     `Tokens used: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`}`,
-                    `Wall-clock seconds used: ${goal.time.used}`,
+                    `Wall-clock seconds used: ${goal.time.used}${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}`}`,
+                    `Cost used: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
                     "Use get_goal to inspect goal state. Create a goal only when explicitly requested. Mark complete only after requirement-by-requirement verification against current state.",
                     goal.status === "budget_limited"
-                      ? "The token budget is exhausted. Wrap up without starting new substantive work."
+                      ? "A budget (tokens, time, or cost) is exhausted. Wrap up without starting new substantive work."
                       : "",
                     "</goal-context>",
                   ]

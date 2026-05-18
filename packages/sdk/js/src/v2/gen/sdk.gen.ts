@@ -1746,6 +1746,8 @@ export class Goal extends HeyApiClient {
       objective?: string
       status?: "active" | "paused" | "budget_limited" | "complete"
       tokenBudget?: number | null
+      timeBudgetSeconds?: number | null
+      costBudgetUSD?: number | null
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1760,6 +1762,8 @@ export class Goal extends HeyApiClient {
             { in: "body", key: "objective" },
             { in: "body", key: "status" },
             { in: "body", key: "tokenBudget" },
+            { in: "body", key: "timeBudgetSeconds" },
+            { in: "body", key: "costBudgetUSD" },
           ],
         },
       ],
@@ -1788,6 +1792,8 @@ export class Goal extends HeyApiClient {
       workspace?: string
       objective?: string
       tokenBudget?: number
+      timeBudgetSeconds?: number
+      costBudgetUSD?: number
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1801,6 +1807,8 @@ export class Goal extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "objective" },
             { in: "body", key: "tokenBudget" },
+            { in: "body", key: "timeBudgetSeconds" },
+            { in: "body", key: "costBudgetUSD" },
           ],
         },
       ],

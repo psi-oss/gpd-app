@@ -18,8 +18,14 @@ export namespace SessionGoal {
 
   const Time = z.object({
     used: z.number().int().nonnegative(),
+    budgetSeconds: z.number().int().positive().optional(),
     created: z.number().int().nonnegative(),
     updated: z.number().int().nonnegative(),
+  })
+
+  const Cost = z.object({
+    usedMicroUSD: z.number().int().nonnegative(),
+    budgetMicroUSD: z.number().int().positive().optional(),
   })
 
   export const Info = z
@@ -30,6 +36,7 @@ export namespace SessionGoal {
       status: StatusSchema,
       tokens: Tokens,
       time: Time,
+      cost: Cost,
     })
     .meta({ ref: "SessionGoal" })
   export type Info = z.infer<typeof Info>
@@ -38,6 +45,8 @@ export namespace SessionGoal {
     sessionID: SessionID.zod,
     objective: z.string(),
     tokenBudget: z.number().int().positive().optional(),
+    timeBudgetSeconds: z.number().int().positive().optional(),
+    costBudgetUSD: z.number().positive().optional(),
   })
   export type CreateInput = z.infer<typeof CreateInput>
 
@@ -46,6 +55,8 @@ export namespace SessionGoal {
     objective: z.string().optional(),
     status: StatusSchema.optional(),
     tokenBudget: z.number().int().positive().nullable().optional(),
+    timeBudgetSeconds: z.number().int().positive().nullable().optional(),
+    costBudgetUSD: z.number().positive().nullable().optional(),
   })
   export type UpdateInput = z.infer<typeof UpdateInput>
 
@@ -54,6 +65,7 @@ export namespace SessionGoal {
     messageID: MessageID.zod.optional(),
     tokens: z.number().int().nonnegative(),
     seconds: z.number().int().nonnegative(),
+    costMicroUSD: z.number().int().nonnegative().optional(),
   })
   export type AccountInput = z.infer<typeof AccountInput>
 
@@ -121,8 +133,13 @@ export namespace SessionGoal {
       },
       time: {
         used: row.time_used,
+        budgetSeconds: row.time_budget ?? undefined,
         created: row.time_created,
         updated: row.time_updated,
+      },
+      cost: {
+        usedMicroUSD: row.cost_used_micro,
+        budgetMicroUSD: row.cost_budget_micro ?? undefined,
       },
     }
   }
@@ -135,7 +152,10 @@ export namespace SessionGoal {
       status: goal.status,
       token_budget: goal.tokens.budget ?? null,
       tokens_used: goal.tokens.used,
+      time_budget: goal.time.budgetSeconds ?? null,
       time_used: goal.time.used,
+      cost_budget_micro: goal.cost.budgetMicroUSD ?? null,
+      cost_used_micro: goal.cost.usedMicroUSD,
       time_created: goal.time.created,
       time_updated: goal.time.updated,
     }
@@ -155,6 +175,25 @@ export namespace SessionGoal {
     return Effect.void
   }
 
+  function timeBudget(input: number | null | undefined) {
+    if (input !== undefined && input !== null && input <= 0) {
+      return Effect.fail(new GoalError("Goal time budget must be positive"))
+    }
+    return Effect.void
+  }
+
+  function costBudget(input: number | null | undefined) {
+    if (input !== undefined && input !== null && input <= 0) {
+      return Effect.fail(new GoalError("Goal cost budget must be positive"))
+    }
+    return Effect.void
+  }
+
+  function usdToMicro(usd: number | null | undefined): number | undefined {
+    if (usd === undefined || usd === null) return undefined
+    return Math.round(usd * 1_000_000)
+  }
+
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -164,6 +203,7 @@ export namespace SessionGoal {
           messageID: MessageID
           tokens: boolean
           time: boolean
+          cost: boolean
         }
       >()
       const budgetAccounting = new Map<
@@ -193,7 +233,10 @@ export namespace SessionGoal {
               status: SessionGoalTable.status,
               token_budget: SessionGoalTable.token_budget,
               tokens_used: SessionGoalTable.tokens_used,
+              time_budget: SessionGoalTable.time_budget,
               time_used: SessionGoalTable.time_used,
+              cost_budget_micro: SessionGoalTable.cost_budget_micro,
+              cost_used_micro: SessionGoalTable.cost_used_micro,
               time_created: SessionGoalTable.time_created,
               time_updated: SessionGoalTable.time_updated,
             })
@@ -213,6 +256,8 @@ export namespace SessionGoal {
       const create = Effect.fn("SessionGoal.create")(function* (input: CreateInput) {
         const text = yield* objective(input.objective)
         yield* budget(input.tokenBudget)
+        yield* timeBudget(input.timeBudgetSeconds)
+        yield* costBudget(input.costBudgetUSD)
         if (yield* get(input.sessionID)) return yield* Effect.fail(new GoalError("Goal already exists"))
 
         return yield* emit({
@@ -226,8 +271,13 @@ export namespace SessionGoal {
           },
           time: {
             used: 0,
+            budgetSeconds: input.timeBudgetSeconds,
             created: Date.now(),
             updated: Date.now(),
+          },
+          cost: {
+            usedMicroUSD: 0,
+            budgetMicroUSD: usdToMicro(input.costBudgetUSD),
           },
         })
       })
@@ -239,9 +289,23 @@ export namespace SessionGoal {
         }
         const text = input.objective === undefined ? current.objective : yield* objective(input.objective)
         yield* budget(input.tokenBudget)
-        const nextBudget = input.tokenBudget === undefined ? current.tokens.budget : (input.tokenBudget ?? undefined)
+        yield* timeBudget(input.timeBudgetSeconds)
+        yield* costBudget(input.costBudgetUSD)
+        const nextTokenBudget =
+          input.tokenBudget === undefined ? current.tokens.budget : (input.tokenBudget ?? undefined)
+        const nextTimeBudget =
+          input.timeBudgetSeconds === undefined ? current.time.budgetSeconds : (input.timeBudgetSeconds ?? undefined)
+        const nextCostBudgetMicro =
+          input.costBudgetUSD === undefined
+            ? current.cost.budgetMicroUSD
+            : input.costBudgetUSD === null
+              ? undefined
+              : usdToMicro(input.costBudgetUSD)
         const nextStatus = input.status ?? current.status
-        const exhausted = nextBudget !== undefined && current.tokens.used >= nextBudget
+        const tokensExhausted = nextTokenBudget !== undefined && current.tokens.used >= nextTokenBudget
+        const timeExhausted = nextTimeBudget !== undefined && current.time.used >= nextTimeBudget
+        const costExhausted = nextCostBudgetMicro !== undefined && current.cost.usedMicroUSD >= nextCostBudgetMicro
+        const exhausted = tokensExhausted || timeExhausted || costExhausted
         const status: Status =
           nextStatus === "active" || nextStatus === "budget_limited"
             ? exhausted
@@ -254,11 +318,16 @@ export namespace SessionGoal {
           status,
           tokens: {
             ...current.tokens,
-            budget: nextBudget,
+            budget: nextTokenBudget,
           },
           time: {
             ...current.time,
+            budgetSeconds: nextTimeBudget,
             updated: Date.now(),
+          },
+          cost: {
+            ...current.cost,
+            budgetMicroUSD: nextCostBudgetMicro,
           },
         }
         if (next.status !== "complete") completeAccounting.delete(input.sessionID)
@@ -275,15 +344,18 @@ export namespace SessionGoal {
       const account = Effect.fn("SessionGoal.account")(function* (input: AccountInput) {
         const current = yield* get(input.sessionID)
         if (!current) return undefined
+        const costMicroUSD = input.costMicroUSD ?? 0
         if (current.status === "complete") {
           const completion = completeAccounting.get(input.sessionID)
           if (!input.messageID || completion?.messageID !== input.messageID) return current
           const tokens = completion.tokens ? 0 : input.tokens
           const seconds = completion.time ? 0 : input.seconds
-          if (tokens === 0 && seconds === 0) return current
+          const cost = completion.cost ? 0 : costMicroUSD
+          if (tokens === 0 && seconds === 0 && cost === 0) return current
           if (input.tokens > 0) completion.tokens = true
           if (input.seconds > 0) completion.time = true
-          if (completion.tokens && completion.time) completeAccounting.delete(input.sessionID)
+          if (costMicroUSD > 0) completion.cost = true
+          if (completion.tokens && completion.time && completion.cost) completeAccounting.delete(input.sessionID)
           return yield* emit({
             ...current,
             tokens: {
@@ -294,6 +366,10 @@ export namespace SessionGoal {
               ...current.time,
               used: current.time.used + seconds,
               updated: Date.now(),
+            },
+            cost: {
+              ...current.cost,
+              usedMicroUSD: current.cost.usedMicroUSD + cost,
             },
           })
         }
@@ -313,11 +389,14 @@ export namespace SessionGoal {
             },
           })
         }
-        const used = current.tokens.used + input.tokens
-        const status: Status =
-          current.status === "active" && current.tokens.budget !== undefined && used >= current.tokens.budget
-            ? "budget_limited"
-            : current.status
+        const newTokensUsed = current.tokens.used + input.tokens
+        const newTimeUsed = current.time.used + input.seconds
+        const newCostUsed = current.cost.usedMicroUSD + costMicroUSD
+        const tokensExhausted = current.tokens.budget !== undefined && newTokensUsed >= current.tokens.budget
+        const timeExhausted = current.time.budgetSeconds !== undefined && newTimeUsed >= current.time.budgetSeconds
+        const costExhausted = current.cost.budgetMicroUSD !== undefined && newCostUsed >= current.cost.budgetMicroUSD
+        const exhausted = tokensExhausted || timeExhausted || costExhausted
+        const status: Status = exhausted ? "budget_limited" : current.status
         if (status === "budget_limited") {
           if (input.seconds > 0) budgetAccounting.delete(input.sessionID)
           else budgetAccounting.set(input.sessionID, { messageID: input.messageID, time: false })
@@ -327,12 +406,16 @@ export namespace SessionGoal {
           status,
           tokens: {
             ...current.tokens,
-            used,
+            used: newTokensUsed,
           },
           time: {
             ...current.time,
-            used: current.time.used + input.seconds,
+            used: newTimeUsed,
             updated: Date.now(),
+          },
+          cost: {
+            ...current.cost,
+            usedMicroUSD: newCostUsed,
           },
         })
       })
@@ -347,6 +430,7 @@ export namespace SessionGoal {
             messageID: input.messageID,
             tokens: false,
             time: false,
+            cost: false,
           })
         }
         return goal
