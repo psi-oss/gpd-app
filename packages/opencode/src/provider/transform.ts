@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai"
+import type { ModelMessage, ToolResultPart } from "ai"
 import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type { JSONSchema } from "zod/v4/core"
@@ -21,6 +21,10 @@ function mimeToModality(mime: string): Modality | undefined {
 
 export namespace ProviderTransform {
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
+
+  export function sanitizeSurrogates(content: string) {
+    return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
+  }
 
   // Maps npm package to the key the AI SDK expects for providerOptions
   function sdkKey(npm: string): string | undefined {
@@ -53,6 +57,68 @@ export namespace ProviderTransform {
     model: Provider.Model,
     options: Record<string, unknown>,
   ): ModelMessage[] {
+    const sanitizeToolResultOutput = (content: ToolResultPart) => {
+      if (content.output.type === "text" || content.output.type === "error-text") {
+        content.output.value = sanitizeSurrogates(content.output.value)
+      }
+      if (content.output.type === "content") {
+        content.output.value = content.output.value.map((item) => {
+          if (item.type === "text") {
+            item.text = sanitizeSurrogates(item.text)
+          }
+          return item
+        })
+      }
+      return content
+    }
+
+    msgs = msgs.map((msg) => {
+      switch (msg.role) {
+        case "tool":
+          if (!Array.isArray(msg.content)) return msg
+          msg.content = msg.content.map((content) => {
+            if (content.type === "tool-result") {
+              return sanitizeToolResultOutput(content)
+            }
+            return content
+          })
+          return msg
+
+        case "system":
+          msg.content = sanitizeSurrogates(msg.content)
+          return msg
+
+        case "user":
+          if (typeof msg.content === "string") {
+            msg.content = sanitizeSurrogates(msg.content)
+          } else {
+            msg.content = msg.content.map((content) => {
+              if (content.type === "text") {
+                content.text = sanitizeSurrogates(content.text)
+              }
+              return content
+            })
+          }
+          return msg
+
+        case "assistant":
+          if (typeof msg.content === "string") {
+            msg.content = sanitizeSurrogates(msg.content)
+          } else {
+            msg.content = msg.content.map((content) => {
+              if (content.type === "text" || content.type === "reasoning") {
+                content.text = sanitizeSurrogates(content.text)
+              }
+              if (content.type === "tool-result") {
+                return sanitizeToolResultOutput(content)
+              }
+              return content
+            })
+          }
+          return msg
+      }
+    })
+
     // Anthropic rejects messages with empty content - filter out empty string messages
     // and remove empty text/reasoning parts from array content
     if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/amazon-bedrock") {
@@ -1144,17 +1210,47 @@ export namespace ProviderTransform {
         ].some((key) => key in node)
       }
 
-      const sanitizeGemini = (obj: any): any => {
+      const rootDefinitions = [schema].flatMap((node) => {
+        if (!isPlainObject(node)) return []
+        return [(node as any).$defs, (node as any).definitions].filter(isPlainObject)
+      })
+
+      const resolveLocalReference = (ref: string): unknown => {
+        const name = ref.match(/^#\/\$defs\/(.+)$/)?.[1] ?? ref.match(/^#\/definitions\/(.+)$/)?.[1]
+        if (!name) return undefined
+        for (const definitions of rootDefinitions) {
+          const target = (definitions as any)[name]
+          if (target !== undefined) return target
+        }
+        return undefined
+      }
+
+      const sanitizeGemini = (obj: any, seenRefs: Set<string> = new Set<string>()): any => {
         if (obj === null || typeof obj !== "object") {
           return obj
         }
 
         if (Array.isArray(obj)) {
-          return obj.map(sanitizeGemini)
+          return obj.map((item) => sanitizeGemini(item, seenRefs))
+        }
+
+        if (typeof obj.$ref === "string") {
+          const target = resolveLocalReference(obj.$ref)
+          if (isPlainObject(target) && !seenRefs.has(obj.$ref)) {
+            const { $ref: _ref, ...siblings } = obj
+            const merged = { ...target, ...siblings }
+            return sanitizeGemini(merged, new Set(seenRefs).add(obj.$ref))
+          }
+
+          const result: any = { $ref: obj.$ref }
+          if (typeof obj.description === "string") result.description = obj.description
+          if ("default" in obj) result.default = sanitizeGemini(obj.default, seenRefs)
+          return result
         }
 
         const result: any = {}
         for (const [key, value] of Object.entries(obj)) {
+          if (key === "$schema" || key === "$defs" || key === "definitions") continue
           if (key === "enum" && Array.isArray(value)) {
             // Convert all enum values to strings
             result[key] = value.map((v) => String(v))
@@ -1163,7 +1259,7 @@ export namespace ProviderTransform {
               result.type = "string"
             }
           } else if (typeof value === "object" && value !== null) {
-            result[key] = sanitizeGemini(value)
+            result[key] = sanitizeGemini(value, seenRefs)
           } else {
             result[key] = value
           }

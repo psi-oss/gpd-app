@@ -27,6 +27,8 @@ export interface Settings {
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
     experimentalFileEditor: boolean
+    persistModelPerAgent: boolean
+    persistModelAcrossSessions: boolean
   }
   updates: {
     startup: boolean
@@ -94,6 +96,8 @@ const defaultSettings: Settings = {
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
     experimentalFileEditor: true,
+    persistModelPerAgent: false,
+    persistModelAcrossSessions: true,
   },
   updates: {
     startup: true,
@@ -191,6 +195,20 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ),
         setExperimentalFileEditor(value: boolean) {
           setStore("general", "experimentalFileEditor", value)
+        },
+        persistModelPerAgent: withFallback(
+          () => store.general?.persistModelPerAgent,
+          defaultSettings.general.persistModelPerAgent,
+        ),
+        setPersistModelPerAgent(value: boolean) {
+          setStore("general", "persistModelPerAgent", value)
+        },
+        persistModelAcrossSessions: withFallback(
+          () => store.general?.persistModelAcrossSessions,
+          defaultSettings.general.persistModelAcrossSessions,
+        ),
+        setPersistModelAcrossSessions(value: boolean) {
+          setStore("general", "persistModelAcrossSessions", value)
         },
       },
       updates: {

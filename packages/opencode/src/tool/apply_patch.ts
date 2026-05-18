@@ -172,7 +172,13 @@ export const ApplyPatchTool = Tool.define(
             const contentToDelete = yield* afs
               .readFileString(filePath)
               .pipe(Effect.catch((error) => Effect.fail(new Error(`apply_patch verification failed: ${error}`))))
-            const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
+            // Skip diff for large/binary files to prevent storing hundreds of MB in SQLite.
+            // V8 string limit is ~512MB; a 142MB binary file produces a 380MB+ diff.
+            const DIFF_SIZE_LIMIT = 512 * 1024 // 512 KB
+            const deleteDiff =
+              contentToDelete.length > DIFF_SIZE_LIMIT
+                ? ""
+                : trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
 
             const deletions = contentToDelete.split("\n").length
 

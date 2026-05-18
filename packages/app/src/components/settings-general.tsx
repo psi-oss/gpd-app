@@ -306,6 +306,30 @@ export const SettingsGeneral: Component = () => {
             />
           </div>
         </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.persistModelPerAgent.title")}
+          description={language.t("settings.general.row.persistModelPerAgent.description")}
+        >
+          <div data-action="settings-persist-model-per-agent">
+            <Switch
+              checked={settings.general.persistModelPerAgent()}
+              onChange={(checked) => settings.general.setPersistModelPerAgent(checked)}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.persistModelAcrossSessions.title")}
+          description={language.t("settings.general.row.persistModelAcrossSessions.description")}
+        >
+          <div data-action="settings-persist-model-across-sessions">
+            <Switch
+              checked={settings.general.persistModelAcrossSessions()}
+              onChange={(checked) => settings.general.setPersistModelAcrossSessions(checked)}
+            />
+          </div>
+        </SettingsRow>
       </SettingsList>
     </div>
   )
