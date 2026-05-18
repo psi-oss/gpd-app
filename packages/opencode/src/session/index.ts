@@ -8,10 +8,10 @@ import { type ProviderMetadata, type LanguageModelUsage } from "ai"
 import { Flag } from "../flag/flag"
 import { Installation } from "../installation"
 
-import { Database, NotFoundError, eq, and, gte, isNull, desc, like, inArray, lt } from "../storage/db"
+import { Database, NotFoundError, eq, and, gte, isNull, desc, like, inArray, lt, sql } from "../storage/db"
 import { SyncEvent } from "../sync"
 import type { SQL } from "../storage/db"
-import { PartTable, SessionTable } from "./session.sql"
+import { MessageTable, PartTable, SessionTable } from "./session.sql"
 import { ProjectTable } from "../project/project.sql"
 import { Storage } from "@/storage/storage"
 import { Log } from "../util/log"
@@ -401,6 +401,65 @@ export namespace Session {
     Effect.gen(function* () {
       const bus = yield* Bus.Service
       const storage = yield* Storage.Service
+
+      // Finalize assistant messages that were mid-stream when the previous
+      // sidecar exited. Each such row has `time.created` set but no
+      // `time.completed`, no `finish`, and no `error` — the runner's
+      // onIdle hook didn't get to fire (process killed before the fiber
+      // exited, dev HMR, OS SIGKILL, etc.).
+      //
+      // Without this pass, the UI keeps a stuck "working" spinner forever:
+      // `pending()` in message-timeline.tsx finds the orphan via
+      // `time.completed !== "number"`, which keeps `working()` true
+      // regardless of the in-memory session_status (which the new sidecar
+      // initializes empty/idle). Confirmed against a stuck spinner where
+      // /session/status returned {} but the latest assistant message JSON
+      // had created-no-completed.
+      //
+      // Runs once at Layer construction, before any session is accepted,
+      // so it cannot race with a live stream on this sidecar. Cross-
+      // sidecar races are out of scope — opencode is single-server per
+      // project.
+      yield* Effect.sync(() => {
+        const rows = Database.use((d) =>
+          d
+            .select()
+            .from(MessageTable)
+            .where(
+              and(
+                sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+                sql`json_extract(${MessageTable.data}, '$.time.completed') IS NULL`,
+              ),
+            )
+            .all(),
+        )
+        if (rows.length === 0) return
+        const now = Date.now()
+        for (const row of rows) {
+          const data = row.data as MessageV2.Assistant
+          const finalized: MessageV2.Assistant = {
+            ...data,
+            id: row.id,
+            sessionID: row.session_id,
+            error:
+              data.error ??
+              new MessageV2.APIError({
+                message: "Stream interrupted by server restart",
+                isRetryable: true,
+              }).toObject(),
+            time: { ...data.time, completed: now },
+          }
+          SyncEvent.run(MessageV2.Event.Updated, {
+            sessionID: finalized.sessionID,
+            info: finalized,
+          })
+        }
+        log.info("finalized orphaned assistant messages", { count: rows.length })
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => log.error("orphan recovery failed", { cause: String(cause) })),
+        ),
+      )
 
       const createNext = Effect.fn("Session.createNext")(function* (input: {
         id?: SessionID
