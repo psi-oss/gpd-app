@@ -973,6 +973,13 @@ export const dict = {
   "settings.general.row.experimentalFileEditor.description":
     "Use the full-file editor for text files. Turn this off to use the read-only file viewer.",
 
+  "settings.general.row.persistModelPerAgent.title": "Persist model per agent",
+  "settings.general.row.persistModelPerAgent.description":
+    "Remember the selected model for each agent when switching between them",
+  "settings.general.row.persistModelAcrossSessions.title": "Persist model across sessions",
+  "settings.general.row.persistModelAcrossSessions.description":
+    "Keep the selected model when moving between sessions",
+
   "settings.general.row.wayland.title": "Use native Wayland",
   "settings.general.row.wayland.description": "Disable X11 fallback on Wayland. Requires restart.",
   "settings.general.row.wayland.tooltip":

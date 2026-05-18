@@ -8,6 +8,7 @@ import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
 import { useSDK } from "./sdk"
+import { useSettings } from "./settings"
 import { useSync } from "./sync"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
@@ -21,6 +22,7 @@ type State = {
 type Saved = {
   project?: State
   session: Record<string, State | undefined>
+  agent: Record<string, State | undefined>
 }
 
 const WORKSPACE_KEY = "__workspace__"
@@ -37,11 +39,12 @@ const stateFrom = (value: unknown): State | undefined => {
 }
 
 export const migrateModelSelection = (value: unknown): Saved => {
-  if (!value || typeof value !== "object") return { session: {} }
+  if (!value || typeof value !== "object") return { session: {}, agent: {} }
 
   const item = value as {
     project?: State
     session?: Record<string, State | undefined>
+    agent?: Record<string, State | undefined>
     pick?: Record<string, State | undefined>
   }
 
@@ -49,13 +52,15 @@ export const migrateModelSelection = (value: unknown): Saved => {
     return {
       project: stateFrom(item.project),
       session: item.session,
+      agent: item.agent && typeof item.agent === "object" ? item.agent : {},
     }
   }
-  if (!item.pick || typeof item.pick !== "object") return { session: {} }
+  if (!item.pick || typeof item.pick !== "object") return { session: {}, agent: {} }
 
   return {
     project: stateFrom(item.pick[WORKSPACE_KEY]),
     session: Object.fromEntries(Object.entries(item.pick).filter(([key]) => key !== WORKSPACE_KEY)),
+    agent: {},
   }
 }
 
@@ -89,6 +94,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const sync = useSync()
     const providers = useProviders()
     const models = useModels()
+    const settings = useSettings()
 
     const id = createMemo(() => params.id || undefined)
     const list = createMemo(() => sync.data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
@@ -102,6 +108,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       createStore<Saved>({
         project: undefined,
         session: {},
+        agent: {},
       }),
     )
 
@@ -223,14 +230,22 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             variant: item.variant ?? null,
           })
           const prev = scope()
+          if (settings.general.persistModelPerAgent() && prev?.agent) {
+            setSaved("agent", prev.agent, clone(prev))
+          }
+          const perAgent = settings.general.persistModelPerAgent() ? saved.agent[item.name] : undefined
           const next = {
             agent: item.name,
-            model: item.model ?? prev?.model,
-            variant: item.variant ?? prev?.variant,
+            model: item.model ?? perAgent?.model ?? prev?.model,
+            variant: item.variant ?? perAgent?.variant ?? prev?.variant,
           } satisfies State
           const session = id()
           if (session) {
-            setSaved("session", session, next)
+            if (settings.general.persistModelAcrossSessions()) {
+              setSaved("session", session, next)
+            } else {
+              setStore("draft", next)
+            }
             return
           }
           setStore("draft", next)
@@ -253,10 +268,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const current = () => {
+      const a = agent.current()
       const item = firstModel(
+        () => (settings.general.persistModelPerAgent() && a ? saved.agent[a.name]?.model : undefined),
         () => scope()?.model,
         () => saved.project?.model,
-        () => agent.current()?.model,
+        () => a?.model,
         fallback,
       )
       if (!item) return undefined
@@ -273,7 +290,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     }
 
-    const selected = () => scope()?.variant ?? saved.project?.variant
+    const selected = () => {
+      if (settings.general.persistModelPerAgent()) {
+        const a = agent.current()
+        if (a?.name && saved.agent[a.name]) {
+          return saved.agent[a.name]!.variant
+        }
+      }
+      return scope()?.variant ?? saved.project?.variant
+    }
 
     const snapshot = () => {
       const model = current()
@@ -332,8 +357,19 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       // fresh draft only "stick" after a full app reload.
       batch(() => {
         setProjectSelection(next, state)
+        if (settings.general.persistModelPerAgent() && state.agent) {
+          setSaved("agent", state.agent, {
+            agent: state.agent,
+            model: state.model,
+            variant: state.variant ?? null,
+          })
+        }
         if (session) {
-          setSaved("session", session, state)
+          if (settings.general.persistModelAcrossSessions()) {
+            setSaved("session", session, state)
+          } else {
+            setStore("draft", state)
+          }
           return
         }
         setStore("draft", state)
@@ -437,6 +473,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const next = clone(snapshot())
           if (!next) return
 
+          if (settings.general.persistModelPerAgent() && next.agent) {
+            setSaved("agent", next.agent, next)
+          }
+
           if (dir === sdk.directory) {
             setSaved("session", session, next)
             setStore("draft", undefined)
@@ -453,11 +493,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (saved.session[session] !== undefined) return
           if (handoff.has(handoffKey(sdk.directory, session))) return
 
-          setSaved("session", session, {
+          const state = {
             agent: msg.agent,
             model: msg.model,
             variant: msg.model.variant ?? null,
-          })
+          }
+          if (settings.general.persistModelPerAgent() && msg.agent) {
+            setSaved("agent", msg.agent, state)
+          }
+          setSaved("session", session, state)
         },
       },
     }
