@@ -198,6 +198,36 @@ describe("tool.edit", () => {
       })
     })
 
+    test("throws when oldString is empty on existing files", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "existing.txt")
+      await fs.writeFile(filepath, "original content", "utf-8")
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await readFileTime(ctx.sessionID, filepath)
+
+          const edit = await resolve()
+          await expect(
+            Effect.runPromise(
+              edit.execute(
+                {
+                  filePath: filepath,
+                  oldString: "",
+                  newString: "replacement content",
+                },
+                ctx,
+              ),
+            ),
+          ).rejects.toThrow("oldString cannot be empty for existing files")
+
+          const content = await fs.readFile(filepath, "utf-8")
+          expect(content).toBe("original content")
+        },
+      })
+    })
+
     test("throws error when file does not exist", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "nonexistent.txt")
