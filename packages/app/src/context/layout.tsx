@@ -468,7 +468,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         local?.name !== undefined ||
         local?.commands?.start !== undefined ||
         local?.icon?.override !== undefined ||
-        local?.icon?.color !== undefined
+        local?.icon?.color !== undefined ||
+        local?.icon?.character !== undefined
 
       const base = {
         ...(metadata ?? {}),
@@ -477,6 +478,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           url: metadata?.icon?.url,
           override: metadata?.icon?.override ?? childStore.icon,
           color: metadata?.icon?.color,
+          character: metadata?.icon?.character,
         },
       }
 
@@ -492,6 +494,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           url: base.icon?.url,
           override: local?.icon?.override,
           color: local?.icon?.color,
+          character: local?.icon?.character,
         },
       }
     }

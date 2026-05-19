@@ -5,7 +5,7 @@ import { TextField } from "@opencode-ai/ui/text-field"
 import { useMutation } from "@tanstack/solid-query"
 import { Icon } from "@opencode-ai/ui/icon"
 import { createMemo, For, Show } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
 import { type LocalProject, getAvatarColors } from "@/context/layout"
@@ -94,6 +94,34 @@ export function DialogEditProject(props: { project: LocalProject }) {
           commands: { start },
         })
         globalSync.project.icon(props.project.worktree, store.iconUrl || undefined)
+        // The SDK call persists icon.character + color server-side, but the
+        // local project list cache (driving the sidebar avatar) only refreshes
+        // on bootstrap or via this optimistic patch. Without this the sidebar
+        // tile keeps showing the previous glyph until the next reload.
+        const projectId = props.project.id
+        globalSync.set(
+          "project",
+          produce((draft) => {
+            const idx = draft.findIndex((p) => p.id === projectId)
+            if (idx < 0) return
+            const existing = draft[idx]
+            if (!existing) return
+            draft[idx] = {
+              ...existing,
+              name: name || existing.name,
+              icon: {
+                ...(existing.icon ?? {}),
+                color: store.color,
+                override: store.iconUrl || undefined,
+                character: character || undefined,
+              },
+              commands: {
+                ...(existing.commands ?? {}),
+                start: start || undefined,
+              },
+            }
+          }),
+        )
         dialog.close()
         return
       }
