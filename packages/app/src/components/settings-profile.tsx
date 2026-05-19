@@ -1,4 +1,4 @@
-import { Component, createEffect, createSignal, For, Show } from "solid-js"
+import { Component, createEffect, createSignal, Index, Show } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { showToast } from "@opencode-ai/ui/toast"
@@ -210,35 +210,35 @@ export const SettingsProfile: Component = () => {
       </div>
 
       <Show when={loaded()} fallback={<div class="text-13-regular text-text-weak">…</div>}>
-        <For each={profile().authors}>
+        <Index each={profile().authors}>
           {(author, idx) => (
             <div class="flex flex-col gap-3 rounded-md border border-border-base bg-surface-base p-4">
               <div class="flex items-center justify-between">
                 <span class="text-13-medium text-text-base">
-                  {language.t("settings.profile.author.label", { index: idx() + 1 })}
+                  {language.t("settings.profile.author.label", { index: idx + 1 })}
                 </span>
-                <Show when={profile().authors.length > 1 || author.name.length > 0}>
+                <Show when={profile().authors.length > 1 || author().name.length > 0}>
                   <IconButton
                     icon="close-small"
                     variant="ghost"
                     size="small"
-                    onClick={() => removeAuthor(idx())}
+                    onClick={() => removeAuthor(idx)}
                     aria-label={language.t("settings.profile.author.remove")}
                   />
                 </Show>
               </div>
 
               <div class="flex flex-col gap-2">
-                <label class="text-12-medium text-text-weak" for={`profile-name-${idx()}`}>
+                <label class="text-12-medium text-text-weak" for={`profile-name-${idx}`}>
                   {language.t("settings.profile.name")}
                 </label>
                 <input
-                  id={`profile-name-${idx()}`}
+                  id={`profile-name-${idx}`}
                   type="text"
                   class="w-full rounded-md border border-border-base bg-background-base p-2 text-14-regular text-text-base outline-none focus:border-border-strong"
                   placeholder={language.t("settings.profile.name.placeholder")}
-                  value={author.name}
-                  onInput={(e) => setAuthorField(idx(), "name", e.currentTarget.value)}
+                  value={author().name}
+                  onInput={(e) => setAuthorField(idx, "name", e.currentTarget.value)}
                   disabled={saving()}
                 />
               </div>
@@ -247,33 +247,33 @@ export const SettingsProfile: Component = () => {
                 <label class="text-12-medium text-text-weak">
                   {language.t("settings.profile.affiliations.label")}
                 </label>
-                <For each={author.affiliations}>
+                <Index each={author().affiliations}>
                   {(aff, affIdx) => (
                     <div class="flex items-center gap-2">
                       <input
                         type="text"
                         class="w-full rounded-md border border-border-base bg-background-base p-2 text-14-regular text-text-base outline-none focus:border-border-strong"
                         placeholder={language.t("settings.profile.affiliations.placeholder")}
-                        value={aff}
-                        onInput={(e) => setAffiliation(idx(), affIdx(), e.currentTarget.value)}
+                        value={aff()}
+                        onInput={(e) => setAffiliation(idx, affIdx, e.currentTarget.value)}
                         disabled={saving()}
                       />
-                      <Show when={author.affiliations.length > 1 || aff.length > 0}>
+                      <Show when={author().affiliations.length > 1 || aff().length > 0}>
                         <IconButton
                           icon="close-small"
                           variant="ghost"
                           size="small"
-                          onClick={() => removeAffiliation(idx(), affIdx())}
+                          onClick={() => removeAffiliation(idx, affIdx)}
                           aria-label={language.t("settings.profile.affiliations.remove")}
                         />
                       </Show>
                     </div>
                   )}
-                </For>
+                </Index>
                 <Button
                   variant="ghost"
                   size="small"
-                  onClick={() => addAffiliation(idx())}
+                  onClick={() => addAffiliation(idx)}
                   disabled={saving()}
                 >
                   {language.t("settings.profile.affiliations.add")}
@@ -281,37 +281,37 @@ export const SettingsProfile: Component = () => {
               </div>
 
               <div class="flex flex-col gap-2">
-                <label class="text-12-medium text-text-weak" for={`profile-email-${idx()}`}>
+                <label class="text-12-medium text-text-weak" for={`profile-email-${idx}`}>
                   {language.t("settings.profile.email")}
                 </label>
                 <input
-                  id={`profile-email-${idx()}`}
+                  id={`profile-email-${idx}`}
                   type="email"
                   class="w-full rounded-md border border-border-base bg-background-base p-2 text-14-regular text-text-base outline-none focus:border-border-strong"
                   placeholder={language.t("settings.profile.email.placeholder")}
-                  value={author.email}
-                  onInput={(e) => setAuthorField(idx(), "email", e.currentTarget.value)}
+                  value={author().email}
+                  onInput={(e) => setAuthorField(idx, "email", e.currentTarget.value)}
                   disabled={saving()}
                 />
               </div>
 
               <div class="flex flex-col gap-2">
-                <label class="text-12-medium text-text-weak" for={`profile-orcid-${idx()}`}>
+                <label class="text-12-medium text-text-weak" for={`profile-orcid-${idx}`}>
                   {language.t("settings.profile.orcid")}
                 </label>
                 <input
-                  id={`profile-orcid-${idx()}`}
+                  id={`profile-orcid-${idx}`}
                   type="text"
                   class="w-full rounded-md border border-border-base bg-background-base p-2 text-14-regular text-text-base outline-none focus:border-border-strong"
                   placeholder={language.t("settings.profile.orcid.placeholder")}
-                  value={author.orcid}
-                  onInput={(e) => setAuthorField(idx(), "orcid", e.currentTarget.value)}
+                  value={author().orcid}
+                  onInput={(e) => setAuthorField(idx, "orcid", e.currentTarget.value)}
                   disabled={saving()}
                 />
               </div>
             </div>
           )}
-        </For>
+        </Index>
 
         <div class="flex items-center justify-between">
           <Button variant="ghost" size="small" onClick={addAuthor} disabled={saving()}>
