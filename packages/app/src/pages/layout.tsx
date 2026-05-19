@@ -156,8 +156,6 @@ export default function Layout(props: ParentProps) {
     nav: undefined as HTMLElement | undefined,
     sortNow: Date.now(),
     sizing: false,
-    peek: undefined as string | undefined,
-    peeked: false,
   })
 
   const editor = createInlineEditorController()
@@ -203,7 +201,6 @@ export default function Layout(props: ParentProps) {
     clearTimeout(sortNowTimeout)
     if (sortNowInterval) clearInterval(sortNowInterval)
     if (sizet !== undefined) clearTimeout(sizet)
-    if (peekt !== undefined) clearTimeout(peekt)
     aim.reset()
   })
 
@@ -251,46 +248,10 @@ export default function Layout(props: ParentProps) {
     }, 300)
   }
 
-  let peekt: number | undefined
-
   const hoverProjectData = createMemo(() => {
     const id = state.hoverProject
     if (!id) return
     return layout.projects.list().find((project) => project.worktree === id)
-  })
-
-  const peekProject = createMemo(() => {
-    const id = state.peek
-    if (!id) return
-    return layout.projects.list().find((project) => project.worktree === id)
-  })
-
-  createEffect(() => {
-    const p = hoverProjectData()
-    // The peek panel exists to let users see a project's sessions when
-    // the rail is narrow (icons-only) without committing to a full
-    // panel open. When the rail is already in wide mode the project's
-    // name is visible inline, AND the absolutely-positioned peek panel
-    // overflows the nav's right edge and paints over the chat area
-    // (rail=240 + peek=280 = 520px, but nav is only 240px when sidebar
-    // is closed). Skip peek activation entirely in wide-rail mode.
-    if (p && !layout.projectRail.opened()) {
-      if (peekt !== undefined) {
-        clearTimeout(peekt)
-        peekt = undefined
-      }
-      setState("peek", p.worktree)
-      setState("peeked", true)
-      return
-    }
-
-    setState("peeked", false)
-    if (state.peek === undefined) return
-    if (peekt !== undefined) clearTimeout(peekt)
-    peekt = window.setTimeout(() => {
-      peekt = undefined
-      setState("peek", undefined)
-    }, 180)
   })
 
   createEffect(() => {
@@ -2056,7 +2017,7 @@ export default function Layout(props: ParentProps) {
   // rail-width + a usable panel. When it's closed only the rail is
   // visible, so nav-width collapses to railWidth. `panel()` is the
   // remaining horizontal space inside the nav once the rail consumes
-  // its width — used by overlay/peek positioning.
+  // its width.
   const side = createMemo(() =>
     layout.sidebar.opened()
       ? Math.max(layout.sidebar.width(), layout.projectRail.width() + 200)
@@ -2759,44 +2720,6 @@ export default function Layout(props: ParentProps) {
               </main>
             </div>
 
-            <div
-              classList={{
-                "hidden xl:flex absolute inset-y-0 z-30": true,
-                "opacity-100 translate-x-0 pointer-events-auto": state.peeked && !layout.sidebar.opened(),
-                "opacity-0 -translate-x-2 pointer-events-none": !state.peeked || layout.sidebar.opened(),
-                "transition-[opacity,transform] motion-reduce:transition-none": true,
-                "duration-180 ease-out": state.peeked && !layout.sidebar.opened(),
-                "duration-120 ease-in": !state.peeked || layout.sidebar.opened(),
-              }}
-              style={{ left: `${layout.projectRail.width()}px` }}
-              onMouseMove={disarm}
-              onMouseEnter={() => {
-                disarm()
-                aim.reset()
-              }}
-              onPointerDown={disarm}
-              onMouseLeave={() => {
-                arm()
-              }}
-            >
-              <Show when={peekProject()}>
-                <SidebarPanel project={peekProject} merged={false} />
-              </Show>
-            </div>
-
-            <div
-              classList={{
-                "hidden xl:block pointer-events-none absolute inset-y-0 right-0 z-25 overflow-hidden": true,
-                "opacity-100 translate-x-0": state.peeked && !layout.sidebar.opened(),
-                "opacity-0 -translate-x-2": !state.peeked || layout.sidebar.opened(),
-                "transition-[opacity,transform] motion-reduce:transition-none": true,
-                "duration-180 ease-out": state.peeked && !layout.sidebar.opened(),
-                "duration-120 ease-in": !state.peeked || layout.sidebar.opened(),
-              }}
-              style={{ left: `${layout.projectRail.width() + panel()}px` }}
-            >
-              <div class="h-full w-px" style={{ "box-shadow": "var(--shadow-sidebar-overlay)" }} />
-            </div>
           </div>
         </div>
         {import.meta.env.DEV && localStorage.getItem("gpd.debugBar") === "1" && <DebugBar />}
