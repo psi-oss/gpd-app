@@ -1,0 +1,7 @@
+Read the local researcher profile stored at ~/.gpd/profile.json.
+
+The profile is set by the user in Settings → Profile and contains their preferred byline (name, affiliations, email, ORCID) for paper drafts. Use this tool whenever the user asks about their identity ("who am I", "what's my email", "what's my affiliation", "what's my profile") or when you need to populate author metadata for a new paper draft and the PAPER-CONFIG.json doesn't already have authors filled in.
+
+Returns the raw JSON. If no profile has been saved yet, returns an empty authors array (schema_version=1, authors=[]). Never errors on a missing file — a missing or unreadable profile is a normal state, not a failure.
+
+The file lives only on the user's local machine. Nothing is sent off-machine by reading it here.

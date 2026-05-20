@@ -97,16 +97,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
   const goalCommandDescription = () => {
     const current = goal()
-    if (!current) return "<objective> [--budget=$X] [--time=Yh] [--tokens=N]"
+    if (!current) return "<objective> [--budget=$X] [--time=Yh]"
     const parts: string[] = [`${current.status}: ${current.objective}`]
     if (current.cost.budgetMicroUSD !== undefined) {
       parts.push(`--budget=$${(current.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`)
     }
     if (current.time.budgetSeconds !== undefined) {
       parts.push(`--time=${formatGoalDuration(current.time.budgetSeconds)}`)
-    }
-    if (current.tokens.budget !== undefined) {
-      parts.push(`--tokens=${current.tokens.budget}`)
     }
     return parts.join(" · ")
   }
