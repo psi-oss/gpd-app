@@ -34,6 +34,13 @@ import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
   const DEFAULT_TIMEOUT = 30_000
+  // Floor for per-tool-call timeouts when neither `cfg.experimental.mcp_timeout`
+  // nor a per-server `timeout` is set. The MCP SDK's own default is 60s, which
+  // is too short for network-bound tools that hit rate-limited public APIs
+  // (e.g. arxiv) — the SDK fires -32001 RequestTimeout before the upstream
+  // can respond. `resetTimeoutOnProgress: true` is wired but only helps when
+  // the server actually emits progress notifications; many servers don't.
+  const DEFAULT_TOOL_TIMEOUT = 120_000
 
   export const Resource = z
     .object({
@@ -754,7 +761,7 @@ export namespace MCP {
 
         const cfg = yield* cfgSvc.get()
         const config = cfg.mcp ?? {}
-        const defaultTimeout = cfg.experimental?.mcp_timeout
+        const defaultTimeout = cfg.experimental?.mcp_timeout ?? DEFAULT_TOOL_TIMEOUT
 
         const connectedClients = Object.entries(s.clients).filter(
           ([clientName]) => s.status[clientName]?.status === "connected",

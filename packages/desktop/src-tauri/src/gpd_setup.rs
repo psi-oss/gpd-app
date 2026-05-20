@@ -75,7 +75,7 @@ pub fn build_config_json() -> String {
         "gpd-skills": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.skills_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
         "gpd-state": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.state_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
         "gpd-verification": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.verification_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
-        "gpd-arxiv": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true}}
+        "gpd-arxiv": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true,"timeout":180000}}
     }}"#);
 
     let m = r#""modalities":{"input":["text","image","pdf"],"output":["text"]}"#;
@@ -684,7 +684,7 @@ fn inject_provider_config(config: &Path) -> Result<(), String> {
             "gpd-skills": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.skills_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
             "gpd-state": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.state_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
             "gpd-verification": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.verification_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
-            "gpd-arxiv": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true}
+            "gpd-arxiv": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true,"timeout":180000}
         });
         obj.insert("mcp".to_string(), mcp_json);
     }
