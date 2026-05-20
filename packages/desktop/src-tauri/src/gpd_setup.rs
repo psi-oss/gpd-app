@@ -237,6 +237,19 @@ pub async fn run_first_setup(app: AppHandle) -> Result<(), String> {
 struct ManifestPackage {
     spec: String,
     import_check: String,
+    /// PyPI distribution name (e.g. `get-physics-done` for `get-physics-done[arxiv]`).
+    /// When set together with `min_version`, the reconciler also verifies the
+    /// installed version is at least this floor — `import gpd` succeeding is
+    /// not enough, because a buggy old version of an importable package is
+    /// worse than no package (see e.g. the gpd 1.1.0 arxiv bridge that had a
+    /// 60s sleep+retry which tripped opencode's MCP request timeout).
+    #[serde(default)]
+    distribution: Option<String>,
+    /// Minimum installed version required for this manifest entry to be
+    /// considered satisfied. If the installed version is below this, the
+    /// reconciler runs `uv pip install --upgrade <spec>`.
+    #[serde(default)]
+    min_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,8 +300,12 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     let mut all_ok = true;
 
     for pkg in &manifest.packages {
-        let ok = probe_import(&python, &pkg.import_check).await;
-        if ok {
+        let import_ok = probe_import(&python, &pkg.import_check).await;
+        let version_ok = match (&pkg.distribution, &pkg.min_version) {
+            (Some(dist), Some(min)) => probe_version_at_least(&python, dist, min).await,
+            _ => true,
+        };
+        if import_ok && version_ok {
             tracing::debug!(import = %pkg.import_check, "manifest probe ok; skipping pip");
             continue;
         }
@@ -351,6 +368,35 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
 
 async fn probe_import(python: &Path, module: &str) -> bool {
     let cmd = format!("import {module}");
+    let result = timeout(
+        Duration::from_secs(5),
+        Command::new(python)
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await;
+
+    matches!(result, Ok(Ok(output)) if output.status.success())
+}
+
+/// Returns true when the installed distribution's version is >= `min_version`
+/// according to PEP 440 ordering (delegated to `packaging.version.Version`,
+/// which is part of the `packaging` library that ships with `uv` and is also
+/// pulled in transitively by most of our deps). Returns false if the package
+/// is not installed, if the version cannot be read, or if it is below the
+/// floor — all of which should trigger `uv pip install --upgrade`.
+async fn probe_version_at_least(python: &Path, distribution: &str, min_version: &str) -> bool {
+    let cmd = format!(
+        "from importlib.metadata import version, PackageNotFoundError\n\
+         from packaging.version import Version\n\
+         try:\n    v = version({dist:?})\nexcept PackageNotFoundError:\n    raise SystemExit(2)\n\
+         raise SystemExit(0 if Version(v) >= Version({min:?}) else 1)\n",
+        dist = distribution,
+        min = min_version,
+    );
     let result = timeout(
         Duration::from_secs(5),
         Command::new(python)

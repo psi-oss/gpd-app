@@ -3,11 +3,15 @@
   "packages": [
     {
       "spec": "get-physics-done[arxiv]",
-      "import_check": "gpd"
+      "import_check": "gpd",
+      "distribution": "get-physics-done",
+      "min_version": "1.2.2"
     },
     {
       "spec": "arxiv-mcp-server[pdf]>=0.4.11",
-      "import_check": "pymupdf4llm"
+      "import_check": "pymupdf4llm",
+      "distribution": "arxiv-mcp-server",
+      "min_version": "0.4.11"
     }
   ]
 }
