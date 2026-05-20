@@ -58,9 +58,12 @@ function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
   // (e.g. `/goal --budget=$1.00 reproduce X` used to leave `--budget=$1.00`
   // glued to the objective and the cost budget unparsed).
   const flagPattern = /(?:^|\s+)--(budget|time)=(\S+)/g
-  let cleanArg = arg
+  // Extract values first by iterating matches on the ORIGINAL arg. The
+  // strip step runs as a single independent pass below so partial
+  // whitespace-normalization between iterations can't leave a later flag
+  // unstripped (the previous loop edited cleanArg incrementally and the
+  // \s+ prefix from match[0] disappeared after the first replace).
   for (const match of arg.matchAll(flagPattern)) {
-    cleanArg = cleanArg.replace(match[0], " ").replace(/\s+/g, " ").trim()
     const [, key, raw] = match
     if (key === "budget") {
       const usd = parseFloat(raw.replace(/^\$/, ""))
@@ -76,6 +79,10 @@ function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
       flags.timeBudgetSeconds = seconds
     }
   }
+  const cleanArg = arg
+    .replace(/(?:^|\s+)--(?:budget|time)=\S+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
   return { cleanArg, flags }
 }
 
