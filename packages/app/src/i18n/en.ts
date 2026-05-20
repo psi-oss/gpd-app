@@ -1331,6 +1331,9 @@ export const dict = {
   "tex.pdf.next": "Next page",
   "tex.pdf.jumpToSource": "Jump to source",
   "tex.pdf.jumpToSource.hint": "Show the source line for this page in the editor",
+  "tex.pdf.zoomIn": "Zoom in",
+  "tex.pdf.zoomOut": "Zoom out",
+  "tex.pdf.zoomReset": "Reset zoom to 100%",
 
   "file.editor.mode.source": "Source",
   "file.editor.mode.preview": "Preview",
