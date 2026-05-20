@@ -351,5 +351,51 @@ export const FileRoutes = lazy(() =>
         await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "unlink" }).catch(() => {})
         return c.json(result, 200)
       },
+    )
+    .post(
+      "/file/create",
+      describeRoute({
+        summary: "Create file or directory",
+        description:
+          "Create a new empty file or directory under the project directory. Returns 409 if the target path already " +
+          "exists. Directory creation is recursive (missing parents inside the project root are created).",
+        operationId: "file.create",
+        responses: {
+          200: {
+            description: "Created",
+            content: {
+              "application/json": {
+                schema: resolver(File.CreateResult),
+              },
+            },
+          },
+          409: {
+            description: "Conflict: path already exists",
+            content: {
+              "application/json": {
+                schema: resolver(File.CreateConflict),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "json",
+        z.object({
+          path: z.string(),
+          type: z.enum(["file", "directory"]),
+        }),
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const result = await AppRuntime.runPromise(File.Service.use((svc) => svc.create(body)))
+        if (!result.ok) {
+          return c.json(result, 409)
+        }
+        const full = path.resolve(Instance.directory, body.path)
+        await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "add" }).catch(() => {})
+        return c.json(result, 200)
+      },
     ),
 )

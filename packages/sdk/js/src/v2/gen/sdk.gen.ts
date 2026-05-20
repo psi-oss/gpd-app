@@ -36,6 +36,8 @@ import type {
   ExperimentalWorkspaceRemoveErrors,
   ExperimentalWorkspaceRemoveResponses,
   ExperimentalWorkspaceStatusResponses,
+  FileCreateErrors,
+  FileCreateResponses,
   FileDeleteErrors,
   FileDeleteResponses,
   FileEditLineErrors,
@@ -3549,6 +3551,45 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<FileDeleteResponses, FileDeleteErrors, ThrowOnError>({
       url: "/file/delete",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create file or directory
+   *
+   * Create a new empty file or directory under the project directory. Returns 409 if the target path already exists. Directory creation is recursive (missing parents inside the project root are created).
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      type?: "file" | "directory"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileCreateResponses, FileCreateErrors, ThrowOnError>({
+      url: "/file/create",
       ...options,
       ...params,
       headers: {

@@ -2318,6 +2318,17 @@ export type FileDeleteConflict = {
   currentHash: string
 }
 
+export type FileCreateResult = {
+  ok: true
+  path: string
+  type: "file" | "directory"
+}
+
+export type FileCreateConflict = {
+  ok: false
+  reason: "exists"
+}
+
 export type Event =
   | EventProjectUpdated
   | EventProjectDeleted
@@ -5233,6 +5244,41 @@ export type FileDeleteResponses = {
 }
 
 export type FileDeleteResponse = FileDeleteResponses[keyof FileDeleteResponses]
+
+export type FileCreateData = {
+  body?: {
+    path: string
+    type: "file" | "directory"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/file/create"
+}
+
+export type FileCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict: path already exists
+   */
+  409: FileCreateConflict
+}
+
+export type FileCreateError = FileCreateErrors[keyof FileCreateErrors]
+
+export type FileCreateResponses = {
+  /**
+   * Created
+   */
+  200: FileCreateResult
+}
+
+export type FileCreateResponse = FileCreateResponses[keyof FileCreateResponses]
 
 export type EventSubscribeData = {
   body?: never
