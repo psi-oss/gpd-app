@@ -484,6 +484,14 @@ export default function FileTree(props: {
 
   return (
     <div data-component="filetree" class={`flex flex-col gap-0.5 ${props.class ?? ""}`}>
+      <Show when={props.pending && props.pending.parent === props.path}>
+        <CreateRow
+          level={level}
+          type={props.pending!.type}
+          onSubmit={(name) => props.onCreateSubmit?.(props.path, props.pending!.type, name)}
+          onCancel={() => props.onCreateCancel?.()}
+        />
+      </Show>
       <For each={nodes()}>
         {(node) => {
           const expanded = () => file.tree.state(node.path)?.expanded ?? false
@@ -549,14 +557,6 @@ export default function FileTree(props: {
                       }}
                       style={`left: ${Math.max(0, 8 + level * 12 - 4) + 8}px`}
                     />
-                    <Show when={props.pending && props.pending.parent === node.path}>
-                      <CreateRow
-                        level={level + 1}
-                        type={props.pending!.type}
-                        onSubmit={(name) => props.onCreateSubmit?.(node.path, props.pending!.type, name)}
-                        onCancel={() => props.onCreateCancel?.()}
-                      />
-                    </Show>
                     <Show
                       when={level < MAX_DEPTH && !chain.includes(key(node.path))}
                       fallback={<div class="px-2 py-1 text-12-regular text-text-weak">...</div>}

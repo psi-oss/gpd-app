@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
+import { ContextMenu } from "@opencode-ai/ui/context-menu"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
@@ -486,22 +487,36 @@ export function SessionSidePanel(props: {
                   </Switch>
                 </Tabs.Content>
                 <Tabs.Content value="all" class="bg-background-stronger px-3 py-0">
-                  <Switch>
-                    <Match when={nofiles() && !pending()}>{empty(language.t("session.files.empty"))}</Match>
-                    <Match when={true}>
-                      <FileTree
-                        path=""
-                        class="pt-3"
-                        modified={diffFiles()}
-                        kinds={kinds()}
-                        onFileClick={(node) => openTab(file.tab(node.path))}
-                        onFileContextAction={handleFileContextAction}
-                        pending={pending()}
-                        onCreateSubmit={submitInlineCreate}
-                        onCreateCancel={() => setPending(undefined)}
-                      />
-                    </Match>
-                  </Switch>
+                  <ContextMenu>
+                    <ContextMenu.Trigger as="div" class="h-full">
+                      <Switch>
+                        <Match when={nofiles() && !pending()}>{empty(language.t("session.files.empty"))}</Match>
+                        <Match when={true}>
+                          <FileTree
+                            path=""
+                            class="pt-3"
+                            modified={diffFiles()}
+                            kinds={kinds()}
+                            onFileClick={(node) => openTab(file.tab(node.path))}
+                            onFileContextAction={handleFileContextAction}
+                            pending={pending()}
+                            onCreateSubmit={submitInlineCreate}
+                            onCreateCancel={() => setPending(undefined)}
+                          />
+                        </Match>
+                      </Switch>
+                    </ContextMenu.Trigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onSelect={() => startInlineCreate("", "file")}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFile")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                        <ContextMenu.Item onSelect={() => startInlineCreate("", "directory")}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFolder")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                      </ContextMenu.Content>
+                    </ContextMenu.Portal>
+                  </ContextMenu>
                 </Tabs.Content>
               </Tabs>
             </div>
