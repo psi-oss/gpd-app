@@ -370,7 +370,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: "Goal",
       description: goal() ? `${goal()!.status}: ${goal()!.objective}` : "Show or set the session goal",
       slash: "goal",
-      disabled: !params.id,
       onSelect: () =>
         showToast({
           title: goal() ? `Goal ${goal()!.status}` : "No goal set",

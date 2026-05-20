@@ -169,7 +169,12 @@ export namespace SessionPrompt {
         message.parts.some((part) => {
           if (part.type === "patch" || part.type === "subtask") return true
           if (part.type !== "tool") return false
-          if (part.tool === "get_goal") return false
+          // Inspecting goal state via get_goal IS legitimate progress —
+          // the model is loading context before deciding the next step.
+          // The previous policy of treating get_goal as "no progress"
+          // auto-paused after a single state-check turn, which felt
+          // overly aggressive to users running open-ended goals where
+          // the first move is "look around, ask a clarifying question."
           return part.state.status === "completed" || part.state.status === "running" || part.state.status === "pending"
         })
 

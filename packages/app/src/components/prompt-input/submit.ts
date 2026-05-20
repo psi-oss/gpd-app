@@ -48,14 +48,19 @@ function parseDuration(raw: string): number | undefined {
 
 type GoalFlags = { timeBudgetSeconds?: number; costBudgetUSD?: number }
 
-// Extract trailing --budget=$X --time=Yh flags from objective text.
-// Returns the cleaned text + parsed flags. Throws on malformed flag values.
+// Extract --budget=$X / --time=Yh flags from anywhere in the objective text
+// (leading, trailing, or interior). Returns the cleaned objective + parsed
+// flags. Throws on malformed flag values.
 function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
   const flags: GoalFlags = {}
-  const flagPattern = /\s+--(budget|time)=(\S+)/g
+  // Anchor on either start-of-string or whitespace so a flag that's the
+  // first argument right after `/goal ` parses, not just one buried later
+  // (e.g. `/goal --budget=$1.00 reproduce X` used to leave `--budget=$1.00`
+  // glued to the objective and the cost budget unparsed).
+  const flagPattern = /(?:^|\s+)--(budget|time)=(\S+)/g
   let cleanArg = arg
   for (const match of arg.matchAll(flagPattern)) {
-    cleanArg = cleanArg.replace(match[0], "").trim()
+    cleanArg = cleanArg.replace(match[0], " ").replace(/\s+/g, " ").trim()
     const [, key, raw] = match
     if (key === "budget") {
       const usd = parseFloat(raw.replace(/^\$/, ""))

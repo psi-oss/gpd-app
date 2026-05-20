@@ -302,9 +302,22 @@ export namespace SessionGoal {
               ? undefined
               : usdToMicro(input.costBudgetUSD)
         const nextStatus = input.status ?? current.status
-        const tokensExhausted = nextTokenBudget !== undefined && current.tokens.used >= nextTokenBudget
-        const timeExhausted = nextTimeBudget !== undefined && current.time.used >= nextTimeBudget
-        const costExhausted = nextCostBudgetMicro !== undefined && current.cost.usedMicroUSD >= nextCostBudgetMicro
+        // A goal restart is either an objective rewrite OR a deliberate
+        // complete -> active transition. Both cases mean "start over" — the
+        // user's existing usage counters belong to the previous task and
+        // should not gate the new one. Without this, /goal --budget=$X
+        // <new objective> against a completed goal whose prior cost
+        // already exceeded $X would immediately flip the new goal to
+        // budget_limited and the route would skip kicking off continueGoal.
+        const objectiveChanged = input.objective !== undefined && input.objective !== current.objective
+        const restarting =
+          objectiveChanged || (current.status === "complete" && (nextStatus === "active" || nextStatus === "budget_limited"))
+        const baseTokensUsed = restarting ? 0 : current.tokens.used
+        const baseTimeUsed = restarting ? 0 : current.time.used
+        const baseCostUsedMicro = restarting ? 0 : current.cost.usedMicroUSD
+        const tokensExhausted = nextTokenBudget !== undefined && baseTokensUsed >= nextTokenBudget
+        const timeExhausted = nextTimeBudget !== undefined && baseTimeUsed >= nextTimeBudget
+        const costExhausted = nextCostBudgetMicro !== undefined && baseCostUsedMicro >= nextCostBudgetMicro
         const exhausted = tokensExhausted || timeExhausted || costExhausted
         const status: Status =
           nextStatus === "active" || nextStatus === "budget_limited"
@@ -317,16 +330,17 @@ export namespace SessionGoal {
           objective: text,
           status,
           tokens: {
-            ...current.tokens,
+            used: baseTokensUsed,
             budget: nextTokenBudget,
           },
           time: {
             ...current.time,
+            used: baseTimeUsed,
             budgetSeconds: nextTimeBudget,
             updated: Date.now(),
           },
           cost: {
-            ...current.cost,
+            usedMicroUSD: baseCostUsedMicro,
             budgetMicroUSD: nextCostBudgetMicro,
           },
         }
