@@ -81,6 +81,35 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       `Time: ${current.time.used}s`,
     ].join("\n")
   }
+  // Compact one-line description shown in the slash popover. When no goal
+  // is set we surface the available flags so /goal works like /help — a
+  // self-documenting hint. When a goal IS set we surface its budgets so
+  // the user can see the current --budget / --time / --tokens at a glance.
+  const formatGoalDuration = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const secs = seconds % 60
+    const parts: string[] = []
+    if (hours) parts.push(`${hours}h`)
+    if (minutes) parts.push(`${minutes}m`)
+    if (secs || parts.length === 0) parts.push(`${secs}s`)
+    return parts.join("")
+  }
+  const goalCommandDescription = () => {
+    const current = goal()
+    if (!current) return "<objective> [--budget=$X] [--time=Yh] [--tokens=N]"
+    const parts: string[] = [`${current.status}: ${current.objective}`]
+    if (current.cost.budgetMicroUSD !== undefined) {
+      parts.push(`--budget=$${(current.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`)
+    }
+    if (current.time.budgetSeconds !== undefined) {
+      parts.push(`--time=${formatGoalDuration(current.time.budgetSeconds)}`)
+    }
+    if (current.tokens.budget !== undefined) {
+      parts.push(`--tokens=${current.tokens.budget}`)
+    }
+    return parts.join(" · ")
+  }
   const messages = () => {
     const id = params.id
     if (!id) return []
@@ -367,8 +396,12 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const sessionCmds = () => [
     sessionCommand({
       id: "session.goal",
-      title: "Goal",
-      description: goal() ? `${goal()!.status}: ${goal()!.objective}` : "Show or set the session goal",
+      // Match the trigger slug so the popover collapses to a single
+      // "goal" chip (slash-popover.tsx suppresses the /trigger suffix
+      // when title === trigger) — keeping /goal visually in line with
+      // the custom gpd-* commands.
+      title: "goal",
+      description: goalCommandDescription(),
       slash: "goal",
       onSelect: () =>
         showToast({
