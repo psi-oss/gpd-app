@@ -8,10 +8,18 @@ name: GPD Sync Installer Scripts to Pages
 #   /install              ← install-gpd/install                          (mac + linux installer, unified)
 #   /install.ps1          ← install-gpd/windows_11/install.ps1           (windows bootstrap, ASCII-only)
 #   /install_main.ps1     ← install-gpd/windows_11/install_main.ps1      (windows full installer)
+#   /install-draft        ← scripts/dev/install-from-draft.sh            (INTERNAL: draft-binary + main-branch get-physics-done)
 #   /uninstall            ← install-gpd/uninstall                        (mac + linux uninstaller, unified)
 #   /uninstall.sh         ← install-gpd/uninstall                        (alias of /uninstall for backwards-compat)
 #   /uninstall.ps1        ← install-gpd/windows_11/uninstall.ps1         (windows bootstrap, ASCII-only)
 #   /uninstall_main.ps1   ← install-gpd/windows_11/uninstall_main.ps1    (windows full uninstaller)
+#
+# /install-draft is intentionally an unadvertised URL. It's gated at
+# runtime by `gh auth status` (the script aborts without an authenticated
+# token that can read drafts on the private psi-oss/gpd-app repo), and
+# prints a prominent stderr banner before any side effect. Hosting it on
+# the same domain trades a small reduction in "this domain only serves
+# audited paths" for the convenience of `curl | bash` for internal QA.
 #
 # Windows two-file pattern:
 #   The /install.ps1 + /uninstall.ps1 endpoints serve a tiny ASCII-only
@@ -57,6 +65,7 @@ on:
       - "install-gpd/windows_11/install_main.ps1"
       - "install-gpd/windows_11/uninstall.ps1"
       - "install-gpd/windows_11/uninstall_main.ps1"
+      - "scripts/dev/install-from-draft.sh"
       - ".github/workflows/gpd-sync-installer-to-pages.yml"
   workflow_dispatch:
 
@@ -114,6 +123,7 @@ jobs:
           install -m 0755 ../src/install-gpd/install                     ./install
           install -m 0644 ../src/install-gpd/windows_11/install.ps1      ./install.ps1
           install -m 0644 ../src/install-gpd/windows_11/install_main.ps1 ./install_main.ps1
+          install -m 0755 ../src/scripts/dev/install-from-draft.sh       ./install-draft
           install -m 0755 ../src/install-gpd/uninstall                   ./uninstall
           install -m 0755 ../src/install-gpd/uninstall                   ./uninstall.sh
           install -m 0644 ../src/install-gpd/windows_11/uninstall.ps1    ./uninstall.ps1
@@ -127,6 +137,7 @@ jobs:
             sha256sum install
             sha256sum install.ps1
             sha256sum install_main.ps1
+            sha256sum install-draft
             sha256sum uninstall
             sha256sum uninstall.sh
             sha256sum uninstall.ps1

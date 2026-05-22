@@ -39,6 +39,24 @@
 
 set -euo pipefail
 
+# ── Internal-use banner ────────────────────────────────────────────────────
+# Print this BEFORE any other side effect so a curl-piped run can never
+# accidentally do work without the user seeing the warning. stderr so a
+# stdout-redirected pipeline (`script.sh > log`) still surfaces it.
+cat >&2 <<'BANNER'
+────────────────────────────────────────────────────────────────────────
+  INTERNAL GPD DEV INSTALLER — NOT FOR END USERS
+
+  This installs an UNPUBLISHED DRAFT desktop build and replaces the
+  PyPI sidecar with the current main branch of get-physics-done. The
+  draft has NOT been through the placeholder-TOS gate, the code-sign
+  flip, or the download-page resync. Do NOT redistribute this URL to
+  external users.
+
+  End users should use:  curl -fsSL https://download.gpd.psi.inc/install | bash
+────────────────────────────────────────────────────────────────────────
+BANNER
+
 # ── Configuration ──────────────────────────────────────────────────────────
 
 DESKTOP_REPO="${DESKTOP_REPO:-psi-oss/gpd-app}"
