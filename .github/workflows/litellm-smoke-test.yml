@@ -32,6 +32,55 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Pre-flight: bring the canary up to the current TOS floor.
+      # /gpd/log is consent-gated, so the very first call from a freshly-
+      # rotated canary returns 403 (`tos_version_outdated`) until a /gpd/
+      # tos-accept lands. Running tos-accept FIRST means the smoke job
+      # self-bootstraps after a key rotation — no manual curl required.
+      # We use the live TOS major (1) so the proxy's GPD_MIN_TOS_VERSION
+      # gate is satisfied; the SHAs are throwaway (the smoke doesn't
+      # verify them, it just proves the endpoint accepts + stores).
+      - name: POST /gpd/tos-accept (pre-flight, satisfies consent gate)
+        env:
+          GPD_LOG_URL: ${{ secrets.GPD_LOG_URL }}
+          CANARY_KEY: ${{ secrets.LITELLM_SMOKE_CANARY_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${GPD_LOG_URL%/gpd/log}"
+
+          SHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+          PSHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+
+          HTTP=$(curl -sS -o /tmp/tos.json -w '%{http_code}' \
+            -X POST "$BASE/gpd/tos-accept?tos_version=1.0&tos_text_sha256=$SHA&privacy_text_sha256=$PSHA&app_version=smoke-ci&viewed_in_full=1" \
+            -H "Authorization: Bearer $CANARY_KEY" \
+            -H "User-Agent: gh-actions-smoke/1.0")
+
+          echo "HTTP $HTTP"
+          cat /tmp/tos.json
+          echo
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::smoke test failed: non-200 from /gpd/tos-accept"
+            exit 1
+          fi
+          if ! jq -e '.ok == true' /tmp/tos.json >/dev/null; then
+            echo "::error::smoke test failed: /gpd/tos-accept response shape unexpected"
+            exit 1
+          fi
+          echo "/gpd/tos-accept smoke OK"
+
+          # Negative case: missing tos_version → 400
+          NEG_HTTP=$(curl -sS -o /tmp/neg.json -w '%{http_code}' \
+            -X POST "$BASE/gpd/tos-accept?tos_text_sha256=$SHA&privacy_text_sha256=$PSHA" \
+            -H "Authorization: Bearer $CANARY_KEY")
+          if [ "$NEG_HTTP" != "400" ]; then
+            echo "::error::expected 400 on missing tos_version, got $NEG_HTTP"
+            cat /tmp/neg.json
+            exit 1
+          fi
+          echo "/gpd/tos-accept negative case OK"
+
       - name: POST /gpd/log
         env:
           GPD_LOG_URL: ${{ secrets.GPD_LOG_URL }}
@@ -69,46 +118,3 @@ jobs:
           fi
 
           echo "/gpd/log smoke OK — path: $(jq -r .path /tmp/resp.json)"
-
-      - name: POST /gpd/tos-accept
-        env:
-          GPD_LOG_URL: ${{ secrets.GPD_LOG_URL }}
-          CANARY_KEY: ${{ secrets.LITELLM_SMOKE_CANARY_KEY }}
-        run: |
-          set -euo pipefail
-          BASE="${GPD_LOG_URL%/gpd/log}"
-
-          # Any valid 64-hex; we don't verify the text hash matches
-          # anything — this smoke just proves the endpoint accepts + stores.
-          SHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-          PSHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-
-          HTTP=$(curl -sS -o /tmp/tos.json -w '%{http_code}' \
-            -X POST "$BASE/gpd/tos-accept?tos_version=smoke-ci&tos_text_sha256=$SHA&privacy_text_sha256=$PSHA&app_version=smoke-ci&viewed_in_full=1" \
-            -H "Authorization: Bearer $CANARY_KEY" \
-            -H "User-Agent: gh-actions-smoke/1.0")
-
-          echo "HTTP $HTTP"
-          cat /tmp/tos.json
-          echo
-
-          if [ "$HTTP" != "200" ]; then
-            echo "::error::smoke test failed: non-200 from /gpd/tos-accept"
-            exit 1
-          fi
-          if ! jq -e '.ok == true' /tmp/tos.json >/dev/null; then
-            echo "::error::smoke test failed: /gpd/tos-accept response shape unexpected"
-            exit 1
-          fi
-          echo "/gpd/tos-accept smoke OK"
-
-          # Negative case: missing tos_version → 400
-          NEG_HTTP=$(curl -sS -o /tmp/neg.json -w '%{http_code}' \
-            -X POST "$BASE/gpd/tos-accept?tos_text_sha256=$SHA&privacy_text_sha256=$PSHA" \
-            -H "Authorization: Bearer $CANARY_KEY")
-          if [ "$NEG_HTTP" != "400" ]; then
-            echo "::error::expected 400 on missing tos_version, got $NEG_HTTP"
-            cat /tmp/neg.json
-            exit 1
-          fi
-          echo "/gpd/tos-accept negative case OK"
