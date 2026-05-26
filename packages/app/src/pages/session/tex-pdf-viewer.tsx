@@ -16,12 +16,20 @@ import { usePlatform } from "@/context/platform"
  * element and forces the viewer to forget its scroll position. This is
  * the right default: a new compile usually invalidates the previous view.
  */
-const ZOOM_MIN = 0.5
-const ZOOM_MAX = 3
-const ZOOM_STEP = 0.25
-const ZOOM_DEFAULT = 1
+export const PDF_ZOOM_MIN = 0.5
+export const PDF_ZOOM_MAX = 3
+export const PDF_ZOOM_STEP = 0.25
+export const PDF_ZOOM_DEFAULT = 1
 
-const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))
+// Internal aliases kept to minimise the diff against the original
+// inline-zoom implementation (commit b05df86b95).
+const ZOOM_MIN = PDF_ZOOM_MIN
+const ZOOM_MAX = PDF_ZOOM_MAX
+const ZOOM_STEP = PDF_ZOOM_STEP
+const ZOOM_DEFAULT = PDF_ZOOM_DEFAULT
+
+export const clampZoom = (z: number) =>
+  Math.min(PDF_ZOOM_MAX, Math.max(PDF_ZOOM_MIN, z))
 
 export function TexPdfViewer(props: {
   pdfPath: string
@@ -32,6 +40,23 @@ export function TexPdfViewer(props: {
    */
   onJumpToSource?: (input: { page: number; x: number; y: number }) => void
   class?: string
+  /**
+   * Controlled zoom value (1 = 100%). When provided, the viewer uses
+   * this value and does NOT render its own zoom strip — the parent owns
+   * the controls. When omitted, the viewer falls back to an internal
+   * zoom signal and renders the −/N%/+ toolbar inline (standalone
+   * artifact-viewer usage).
+   *
+   * Added for the TeX build-preview pane (RES-1132), which lifts the
+   * zoom controls into its own toolbar next to Re-render / Show log.
+   */
+  zoom?: number
+  /**
+   * Force-hide the internal zoom strip even if `zoom` is uncontrolled.
+   * Lets a parent suppress the redundant inline UI without taking over
+   * state ownership.
+   */
+  hideZoomControls?: boolean
 }) {
   const platform = usePlatform()
   const language = useLanguage()
@@ -53,10 +78,12 @@ export function TexPdfViewer(props: {
   // would render-only and the overflow container wouldn't see the
   // visual size; resizing the iframe itself makes layout honor the
   // zoom and the scrollbars work.
-  const [zoom, setZoom] = createSignal(ZOOM_DEFAULT)
-  const zoomIn = () => setZoom((z) => clampZoom(z + ZOOM_STEP))
-  const zoomOut = () => setZoom((z) => clampZoom(z - ZOOM_STEP))
-  const zoomReset = () => setZoom(ZOOM_DEFAULT)
+  const [internalZoom, setInternalZoom] = createSignal(ZOOM_DEFAULT)
+  const zoom = () => clampZoom(props.zoom ?? internalZoom())
+  const zoomIn = () => setInternalZoom((z) => clampZoom(z + ZOOM_STEP))
+  const zoomOut = () => setInternalZoom((z) => clampZoom(z - ZOOM_STEP))
+  const zoomReset = () => setInternalZoom(ZOOM_DEFAULT)
+  const showZoomStrip = () => props.zoom === undefined && !props.hideZoomControls
 
   // Re-fetch whenever the path changes (e.g. recompile produced a new build).
   createEffect(
@@ -158,37 +185,39 @@ export function TexPdfViewer(props: {
           </button>
         </div>
         <div class="flex items-center gap-2">
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
-              onClick={zoomOut}
-              disabled={zoom() <= ZOOM_MIN + 1e-6}
-              aria-label={language.t("tex.pdf.zoomOut")}
-              title={language.t("tex.pdf.zoomOut")}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              class="px-2 py-0.5 rounded hover:bg-background-weaker-base text-12-regular tabular-nums min-w-[3.5em] text-center"
-              onClick={zoomReset}
-              aria-label={language.t("tex.pdf.zoomReset")}
-              title={language.t("tex.pdf.zoomReset")}
-            >
-              {Math.round(zoom() * 100)}%
-            </button>
-            <button
-              type="button"
-              class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
-              onClick={zoomIn}
-              disabled={zoom() >= ZOOM_MAX - 1e-6}
-              aria-label={language.t("tex.pdf.zoomIn")}
-              title={language.t("tex.pdf.zoomIn")}
-            >
-              +
-            </button>
-          </div>
+          <Show when={showZoomStrip()}>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={zoomOut}
+                disabled={zoom() <= ZOOM_MIN + 1e-6}
+                aria-label={language.t("tex.pdf.zoomOut")}
+                title={language.t("tex.pdf.zoomOut")}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base text-12-regular tabular-nums min-w-[3.5em] text-center"
+                onClick={zoomReset}
+                aria-label={language.t("tex.pdf.zoomReset")}
+                title={language.t("tex.pdf.zoomReset")}
+              >
+                {Math.round(zoom() * 100)}%
+              </button>
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={zoomIn}
+                disabled={zoom() >= ZOOM_MAX - 1e-6}
+                aria-label={language.t("tex.pdf.zoomIn")}
+                title={language.t("tex.pdf.zoomIn")}
+              >
+                +
+              </button>
+            </div>
+          </Show>
           <Show when={props.onJumpToSource}>
             {(handler) => (
               <button
