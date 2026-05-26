@@ -2295,29 +2295,12 @@ export default function Layout(props: ParentProps) {
           width: panelProps.mobile ? undefined : `${panel()}px`,
         }}
       >
-        <Show
-          when={project()}
-          fallback={
-            <Show when={empty()}>
-              <div class="flex-1 min-h-0 -mt-4 flex items-center justify-center px-6 pb-64 text-center">
-                <div class="mt-8 flex max-w-60 flex-col items-center gap-6 text-center">
-                  <div class="flex flex-col gap-3">
-                    <div class="text-14-medium text-text-strong">{language.t("sidebar.empty.title")}</div>
-                    <div class="text-14-regular text-text-base" style={{ "line-height": "var(--line-height-normal)" }}>
-                      {language.t("sidebar.empty.description")}
-                    </div>
-                  </div>
-                  <Button size="large" icon="plus" onClick={createNewProject}>
-                    {language.t("sidebar.newProject")}
-                  </Button>
-                  <Button size="large" icon="folder-add-left" variant="ghost" onClick={chooseProject}>
-                    {language.t("command.project.open")}
-                  </Button>
-                </div>
-              </div>
-            </Show>
-          }
-        >
+        <Show when={project()}>
+          {/* No fallback: when no project is selected, the panel renders */}
+          {/* nothing. The "New Project" / "Open project" affordances live */}
+          {/* on the left rail (sidebar.openProject) and the home page's   */}
+          {/* "Recent projects" / "Open Project" panel — duplicating them  */}
+          {/* in this middle column is just visual noise.                  */}
           <>
             <div class="shrink-0 pl-1 py-1">
               <div class="group/project flex items-start justify-between gap-2 py-2 pl-2 pr-0">
