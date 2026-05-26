@@ -1,5 +1,6 @@
 import path from "path"
 import os from "os"
+import { stat } from "fs/promises"
 import z from "zod"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
@@ -289,7 +290,8 @@ export namespace SessionPrompt {
                   `Goal objective: ${JSON.stringify(goal.objective)}`,
                   `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
                   "Before doing substantive work, inspect current state and decide the next requirement-level step.",
-                  "If the objective is complete, verify it requirement by requirement and call update_goal with status complete.",
+                  "Do NOT call update_goal=complete to end the session. That tool is for cases where every requirement is satisfied by an on-disk deliverable you can point to. Writing planning files, draft outlines, or partial proofs is not completion. If you are stuck or unsure, keep working or stop and explain what is blocking — calling complete prematurely is a worse failure than not finishing.",
+                  "When you do call update_goal=complete, you must list every deliverable path + description and provide an evidence paragraph mapping each goal requirement to its deliverable. The runtime verifies each file exists and has ≥ 500 bytes of substantive content; missing or stub-sized deliverables reject the completion and the goal stays active.",
                   "</system-reminder>",
                 ].join("\n"),
               },
@@ -649,26 +651,155 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         tools["update_goal"] = tool({
-          description: "Mark the current session goal complete only after the objective is fully achieved and verified.",
+          description: [
+            "Mark the current session goal complete. Use this RARELY — only when every requirement",
+            "in the goal objective has been satisfied with a real, on-disk deliverable that the user",
+            "could open and verify. Writing planning notes, draft outlines, or partial proofs does",
+            "NOT make a goal complete. If you cannot finish, keep working or stop and explain what",
+            "is blocking you — do NOT call this tool just to end the session.",
+            "",
+            "You must list every deliverable file as a path relative to the project root and a one-",
+            "line description of what it contains. The runtime VERIFIES each path exists and has",
+            "substantive content (≥ 500 bytes) before accepting the completion. If any deliverable",
+            "is missing or stub-sized, the call is rejected and the goal stays active.",
+            "",
+            "The `evidence` field is a paragraph (≥ 200 chars) tracing each goal requirement to the",
+            "deliverable(s) that satisfy it and the verification you ran (dimensional check,",
+            "limiting case, numerical benchmark, peer review, etc.). Vague summaries fail.",
+            "",
+            "If a `gpd-verifier` agent (or `/gpd-verify-work` run) was completed, include its",
+            "task_id in `verifier_task_id` — a passed verification result is the strongest signal.",
+          ].join(" "),
           inputSchema: jsonSchema({
             type: "object",
             additionalProperties: false,
-            required: ["status"],
+            required: ["status", "deliverables", "evidence"],
             properties: {
               status: { type: "string", enum: ["complete"] },
+              deliverables: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["path", "description"],
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: "Path relative to the project root. Must exist on disk.",
+                    },
+                    description: {
+                      type: "string",
+                      description: "One-line description of what this deliverable contains.",
+                    },
+                  },
+                },
+              },
+              evidence: {
+                type: "string",
+                minLength: 200,
+                description:
+                  "Paragraph mapping each goal requirement to its deliverable(s) and the verification ran.",
+              },
+              verifier_task_id: {
+                type: "string",
+                description:
+                  "Optional: task_id from a completed gpd-verifier (or /gpd-verify-work) subagent run.",
+              },
             },
           }),
           execute(args) {
             return run.promise(
               Effect.gen(function* () {
-                const payload = args as { status?: unknown }
+                const payload = args as {
+                  status?: unknown
+                  deliverables?: unknown
+                  evidence?: unknown
+                  verifier_task_id?: unknown
+                }
                 if (payload.status !== "complete") throw new Error("Models can only mark goals complete")
+
+                const deliverables = Array.isArray(payload.deliverables) ? payload.deliverables : []
+                if (deliverables.length === 0) {
+                  throw new Error(
+                    "update_goal=complete requires at least one deliverable. List every on-disk artifact that satisfies the goal. If there is nothing to point at, the goal is not complete.",
+                  )
+                }
+                const evidence = typeof payload.evidence === "string" ? payload.evidence.trim() : ""
+                if (evidence.length < 200) {
+                  throw new Error(
+                    `update_goal=complete requires an evidence paragraph of at least 200 characters (got ${evidence.length}). Trace each goal requirement to the deliverable(s) that satisfy it and name the verification you ran (dimensional check, limiting case, numerical benchmark, peer review, etc.).`,
+                  )
+                }
+
+                const ctx = yield* InstanceState.context
+                const root = ctx.directory
+                const failures: string[] = []
+                const verified: { path: string; bytes: number; description: string }[] = []
+
+                const MIN_BYTES = 500
+                for (const raw of deliverables) {
+                  if (!raw || typeof raw !== "object") {
+                    failures.push(`Malformed deliverable: ${JSON.stringify(raw)}`)
+                    continue
+                  }
+                  const item = raw as { path?: unknown; description?: unknown }
+                  const rel = typeof item.path === "string" ? item.path.trim() : ""
+                  const desc = typeof item.description === "string" ? item.description.trim() : ""
+                  if (!rel) {
+                    failures.push("Deliverable missing path")
+                    continue
+                  }
+                  if (!desc) {
+                    failures.push(`Deliverable ${rel} missing description`)
+                    continue
+                  }
+                  const abs = path.isAbsolute(rel) ? rel : path.resolve(root, rel)
+                  const insideRel = path.relative(root, abs)
+                  if (insideRel.startsWith("..") || path.isAbsolute(insideRel)) {
+                    failures.push(`Deliverable ${rel} resolves outside the project root`)
+                    continue
+                  }
+                  try {
+                    const st = yield* Effect.tryPromise({
+                      try: () => stat(abs),
+                      catch: (e) => e,
+                    })
+                    if (st.isDirectory()) {
+                      failures.push(`Deliverable ${rel} is a directory, not a file`)
+                      continue
+                    }
+                    if (st.size < MIN_BYTES) {
+                      failures.push(
+                        `Deliverable ${rel} is only ${st.size} bytes; need ≥ ${MIN_BYTES}. Either fill it out or remove it from the deliverables list.`,
+                      )
+                      continue
+                    }
+                    verified.push({ path: rel, bytes: st.size, description: desc })
+                  } catch (_e) {
+                    failures.push(`Deliverable ${rel} does not exist on disk under ${root}`)
+                  }
+                }
+
+                if (failures.length > 0) {
+                  throw new Error(
+                    `update_goal=complete rejected. The runtime verified ${verified.length}/${deliverables.length} deliverables; ${failures.length} failed:\n  - ${failures.join("\n  - ")}\n\nFix the failures (write the missing files, fill out the stubs, or remove the deliverable from the list) and retry. The goal remains active.`,
+                  )
+                }
+
                 const goal = yield* goals.modelUpdate({
                   sessionID: input.session.id,
                   messageID: input.processor.message.id,
                   status: "complete",
                 })
-                return goalToolResult("Goal complete", goal)
+                const verifierNote =
+                  typeof payload.verifier_task_id === "string" && payload.verifier_task_id.trim().length > 0
+                    ? `\n\nVerifier task_id: ${payload.verifier_task_id.trim()}`
+                    : "\n\nNote: no verifier_task_id provided. Consider running /gpd-verify-work for an independent check before relying on this completion downstream."
+                return goalToolResult(
+                  `Goal complete (${verified.length} deliverables verified, ${evidence.length} chars of evidence)${verifierNote}`,
+                  goal,
+                )
               }),
             )
           },
