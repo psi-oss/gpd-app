@@ -1537,8 +1537,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <span class="truncate text-13-medium text-text-strong">{language.t("prompt.mode.shell")}</span>
                 <div class="size-4 shrink-0" />
               </div>
-              <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                <div data-component="prompt-agent-control">
+              <div class="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+                <div data-component="prompt-agent-control" class="shrink-0">
                   <TooltipKeybind
                     placement="top"
                     gutter={4}
@@ -1578,7 +1578,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   </TooltipKeybind>
                 </div>
                 <Show when={store.mode !== "shell"}>
-                  <div data-component="prompt-model-control">
+                  <div data-component="prompt-model-control" class="shrink-0">
                     <Show
                       when={providers.paid().length > 0}
                       fallback={
@@ -1640,7 +1640,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </Show>
                   </div>
                   <Show when={variants().length > 0}>
-                    <div data-component="prompt-variant-control">
+                    <div data-component="prompt-variant-control" class="shrink-0">
                       <TooltipKeybind
                         placement="top"
                         gutter={4}
@@ -1665,7 +1665,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       </TooltipKeybind>
                     </div>
                   </Show>
-                  <div data-component="prompt-gpd-skills-control">
+                  <div data-component="prompt-gpd-skills-control" class="shrink-0">
                     <Tooltip placement="top" gutter={4} value={language.t("dock.gpdSkills")}>
                       <Button
                         data-action="prompt-gpd-skills"
@@ -1686,7 +1686,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       </Button>
                     </Tooltip>
                   </div>
-                  <div data-component="prompt-equation-control">
+                  <div data-component="prompt-equation-control" class="shrink-0">
                     <Tooltip placement="top" gutter={4} value={language.t("dock.equation")}>
                       <Button
                         data-action="prompt-equation"

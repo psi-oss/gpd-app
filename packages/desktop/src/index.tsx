@@ -64,6 +64,31 @@ const listenForDeepLinks = async () => {
   await onOpenUrl((urls) => emitDeepLinks(urls)).catch(() => undefined)
 }
 
+// RES-1158: bridge the Tauri Edit > "Find in Conversation" menu event
+// (declared in src-tauri/src/app_menu.rs) into a window CustomEvent that
+// session.tsx listens for. Same shape as the deep-link bridge above.
+// Native event name must match `FIND_IN_CONVERSATION_EVENT` in app_menu.rs.
+const listenForFindInConversation = async () => {
+  const { listen } = await import("@tauri-apps/api/event")
+  await listen("gpd://menu/find-in-conversation", () => {
+    window.dispatchEvent(new CustomEvent("gpd:menu:find-in-conversation"))
+  }).catch(() => undefined)
+}
+
+// Bridge the Rust pinch-gesture event into a window CustomEvent so the
+// platform-agnostic `@opencode-ai/app` PDF viewer can subscribe without
+// depending on `@tauri-apps/api`. Rust emitter lives in
+// `src-tauri/src/pinch_gesture.rs`; payload is `{phase, magnification, x, y}`.
+const listenForNativePinch = async () => {
+  const { listen } = await import("@tauri-apps/api/event")
+  await listen<{ phase: string; magnification: number; x: number; y: number }>(
+    "gpd:pinch",
+    (event) => {
+      window.dispatchEvent(new CustomEvent("gpd:pinch", { detail: event.payload }))
+    },
+  ).catch(() => undefined)
+}
+
 const createPlatform = (): Platform => {
   const os = (() => {
     const type = ostype()
@@ -426,6 +451,9 @@ const createPlatform = (): Platform => {
       synctexReverse: ({ synctexPath, sourceFile, line }) => commands.synctexReverse(synctexPath, sourceFile, line),
       parseLog: (logPath) => commands.parseTexLog(logPath),
       readArtifactBase64: (path) => commands.readTexArtifactBase64(path),
+      saveArtifactToPath: async ({ src, dest }) => {
+        await commands.saveTexArtifactToPath(src, dest)
+      },
       onProgress: async (cb) => {
         return events.texCompileProgress.listen((event) => {
           cb(event.payload)
@@ -468,6 +496,8 @@ createMenu((id) => {
   menuTrigger?.(id)
 })
 void listenForDeepLinks()
+void listenForFindInConversation()
+void listenForNativePinch()
 
 // DEV-ONLY: wire tauri-plugin-mcp guest-js IPC bridge. Rust-side plugin is
 // gated by `#[cfg(debug_assertions)]` in src-tauri/src/lib.rs, so the plugin

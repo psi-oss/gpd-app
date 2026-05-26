@@ -31,6 +31,7 @@ tauri-plugin-window-state = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-http = "2.5.6"
 tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 serde = { version = "1", features = ["derive"] }
@@ -72,6 +73,8 @@ webkit2gtk = "=2.0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-web-kit = "0.3"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
 
 
 [patch.crates-io]

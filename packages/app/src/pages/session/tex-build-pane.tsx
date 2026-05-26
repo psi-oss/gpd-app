@@ -7,7 +7,14 @@ import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import { useFile } from "@/context/file"
 import { usePlatform } from "@/context/platform"
-import { TexPdfViewer } from "./tex-pdf-viewer"
+import {
+  TexPdfViewer,
+  PDF_ZOOM_MIN,
+  PDF_ZOOM_MAX,
+  PDF_ZOOM_STEP,
+  PDF_ZOOM_DEFAULT,
+  clampZoom as clampPdfZoom,
+} from "./tex-pdf-viewer"
 import { TexErrorList } from "./tex-error-list"
 import { useTexCompiler, type TexCompilerHandle } from "./use-tex-compiler"
 import type { TexCompileResult, TexDiagnostic } from "@/context/platform"
@@ -144,6 +151,19 @@ export function TexBuildPane(props: {
   const recompileDisabled = () => running()
   const hasPdf = () => !!entry()?.result.pdfPath
 
+  // RES-1132: zoom controls live in the build-pane toolbar (next to
+  // Re-render / Show log) rather than inside the embedded PDF viewer's
+  // own header. The viewer is a controlled consumer — it accepts the
+  // zoom value via a prop and suppresses its inline −/N%/+ strip so we
+  // don't show two sets of zoom controls in the same pane. Standalone
+  // artifact-viewer usage (where TexPdfViewer is mounted on its own)
+  // is unaffected: it falls back to its internal zoom signal whenever
+  // the `zoom` prop is omitted.
+  const [pdfZoom, setPdfZoom] = createSignal(PDF_ZOOM_DEFAULT)
+  const zoomIn = () => setPdfZoom((z) => clampPdfZoom(z + PDF_ZOOM_STEP))
+  const zoomOut = () => setPdfZoom((z) => clampPdfZoom(z - PDF_ZOOM_STEP))
+  const zoomReset = () => setPdfZoom(PDF_ZOOM_DEFAULT)
+
   // Errors panel height (px) when a PDF is rendered above. Default sized so
   // the user sees a couple of error rows without dominating the pane; a
   // ResizeHandle at the top of the panel lets them drag it taller/shorter.
@@ -170,6 +190,39 @@ export function TexBuildPane(props: {
           </Show>
         </div>
         <div class="flex items-center gap-1.5">
+          <Show when={hasPdf()}>
+            <div class="flex items-center gap-1 mr-1 text-12-regular text-text-weak">
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={zoomOut}
+                disabled={pdfZoom() <= PDF_ZOOM_MIN + 1e-6}
+                aria-label={language.t("tex.pdf.zoomOut")}
+                title={language.t("tex.pdf.zoomOut")}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base tabular-nums min-w-[3.5em] text-center"
+                onClick={zoomReset}
+                aria-label={language.t("tex.pdf.zoomReset")}
+                title={language.t("tex.pdf.zoomReset")}
+              >
+                {Math.round(pdfZoom() * 100)}%
+              </button>
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+                onClick={zoomIn}
+                disabled={pdfZoom() >= PDF_ZOOM_MAX - 1e-6}
+                aria-label={language.t("tex.pdf.zoomIn")}
+                title={language.t("tex.pdf.zoomIn")}
+              >
+                +
+              </button>
+            </div>
+          </Show>
           <Show when={entry()}>
             <Button
               size="small"
@@ -239,7 +292,12 @@ export function TexBuildPane(props: {
               <div class="flex-1 min-h-0 flex flex-col">
                 <Show when={hasPdf()}>
                   <div class="flex-1 min-h-0">
-                    <TexPdfViewer pdfPath={e().result.pdfPath!} />
+                    <TexPdfViewer
+                      pdfPath={e().result.pdfPath!}
+                      reloadToken={e().completedAt}
+                      zoom={pdfZoom()}
+                      onZoomChange={(z) => setPdfZoom(clampPdfZoom(z))}
+                    />
                   </div>
                   <Show when={!errorsCollapsed()}>
                     <ResizeHandle

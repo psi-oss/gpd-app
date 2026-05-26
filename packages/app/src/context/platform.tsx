@@ -228,6 +228,12 @@ export type Platform = {
      */
     readArtifactBase64(path: string): Promise<string>
     /**
+     * Copy a build artifact from the GPD cache to a user-chosen destination
+     * path. The backend verifies the source lives under the tex-builds
+     * cache; the destination is trusted (must come from a save dialog).
+     */
+    saveArtifactToPath(input: { src: string; dest: string }): Promise<void>
+    /**
      * Subscribe to compile progress events. Returns an unsubscribe callback.
      */
     onProgress(cb: (payload: TexCompileProgress) => void): Promise<() => void>

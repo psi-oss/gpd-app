@@ -515,6 +515,20 @@
     }
 
     &[data-variant="settings"] {
+      /*
+       * Constrain the content pane to the row height so a tall sub-page
+       * (e.g. Licenses, which mounts a THIRD_PARTY_NOTICES.md block up to
+       * 60vh tall) doesn't push the dialog-content past the fixed
+       * dialog-container height, which would in turn stretch tabs-list
+       * and visibly grow the GPD-version footer downward when switching
+       * sub-pages. min-height:0 lets it shrink in the flex row so its own
+       * overflow:auto can scroll the inner content.
+       */
+      [data-slot="tabs-content"] {
+        height: 100%;
+        min-height: 0;
+      }
+
       [data-slot="tabs-list"] {
         width: 150px;
         min-width: 150px;

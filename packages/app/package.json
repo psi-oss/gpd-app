@@ -79,6 +79,7 @@
     "marked": "catalog:",
     "marked-shiki": "catalog:",
     "mathlive": "^0.109.0",
+    "pdfjs-dist": "5.4.624",
     "remeda": "catalog:",
     "shiki": "catalog:",
     "solid-js": "catalog:",
