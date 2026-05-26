@@ -81,11 +81,18 @@ c_green=$'\033[32m'
 c_dim=$'\033[2m'
 c_reset=$'\033[0m'
 
-log()     { printf '%s==>%s %s\n' "$c_blue" "$c_reset" "$*"; }
+log()     { printf '%s==>%s %s\n' "$c_blue" "$c_reset" "$*" >&2; }
 warn()    { printf '%swarn:%s %s\n' "$c_yellow" "$c_reset" "$*" >&2; }
 die()     { printf '%serror:%s %s\n' "$c_red" "$c_reset" "$*" >&2; exit 1; }
-success() { printf '%s✓%s %s\n' "$c_green" "$c_reset" "$*"; }
-dim()     { printf '%s%s%s\n' "$c_dim" "$*" "$c_reset"; }
+success() { printf '%s✓%s %s\n' "$c_green" "$c_reset" "$*" >&2; }
+dim()     { printf '%s%s%s\n' "$c_dim" "$*" "$c_reset" >&2; }
+# All informational output MUST go to stderr — `download_draft_asset`
+# and similar helpers print the resolved path to stdout, which is then
+# captured via `$(...)`. If log/success/dim leaked to stdout, the
+# captured path would be polluted with log lines and `hdiutil attach`
+# would fail with "couldn't determine DMG mount point" because the
+# path argument is multi-line junk. Caught after 1.0.4 install-draft
+# hit "can't find dmg mount point" reports.
 
 # ── Argument parsing ───────────────────────────────────────────────────────
 
