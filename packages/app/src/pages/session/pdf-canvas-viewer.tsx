@@ -183,21 +183,47 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
 
   // ─── Zoom state ──────────────────────────────────────────────────────
   // Authoritative state lives here. When a parent controls zoom via
-  // `props.zoom`, an effect mirrors prop changes into this signal — with
-  // an `isLocalDrive` guard so wheel/gesture updates don't loop forever.
+  // `props.zoom`, an effect mirrors prop changes into this signal. The
+  // wheel→emit→parent→prop loop is broken by the `clamped === displayZoom`
+  // short-circuit in that effect (see below).
   const initialZoom = clampZoom(props.zoom ?? props.defaultZoom ?? PDF_ZOOM_DEFAULT)
   const [displayZoom, setDisplayZoom] = createSignal(initialZoom)
 
-  let isLocalDrive = false
+  // Container width tracked reactively so symmetric padding (and
+  // anything else that depends on container size) updates on resize.
+  const [containerWidth, setContainerWidth] = createSignal(0)
+
+  // Horizontal padding that centers a single page when it's narrower
+  // than the scroll container, falling back to a small fixed inset once
+  // it overflows. Continuous in zoom so applyZoomAroundPoint's anchor
+  // math doesn't see a discontinuity.
+  const PAGE_PAD_MIN = 8
+  const pagePadding = createMemo(() => {
+    const pp = pages()
+    if (pp.length === 0) return PAGE_PAD_MIN
+    // Widest intrinsic page; in practice all pages of a paper are the same.
+    let widest = 0
+    for (const p of pp) if (p.width > widest) widest = p.width
+    const renderedW = widest * displayZoom()
+    const cw = containerWidth()
+    if (cw === 0) return PAGE_PAD_MIN
+    return Math.max(PAGE_PAD_MIN, Math.floor((cw - renderedW) / 2))
+  })
+
   let scrollRef: HTMLDivElement | undefined
 
+  // Sync external `props.zoom` into internal `displayZoom`. The
+  // `clamped === displayZoom` short-circuit breaks the
+  // wheel→emit→parent→prop loop: by the time the prop change echoes back
+  // in, `displayZoom` already equals it. No isLocalDrive flag needed —
+  // an earlier such flag silently dropped fast successive prop changes
+  // (e.g. rapid toolbar button clicks) because all hit the effect inside
+  // a single synchronous flush window.
   createEffect(
     on(
       () => props.zoom,
-      (next, prev) => {
-        if (next == null || prev == null) return
-        if (next === prev) return
-        if (isLocalDrive) return
+      (next) => {
+        if (next == null) return
         const clamped = clampZoom(next)
         if (clamped === untrack(displayZoom)) return
         // External zoom change (toolbar button). Anchor at viewport center.
@@ -228,7 +254,16 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
     } else {
       pageDom.set(idx, { wrapper, canvas, renderedScale: 0 })
     }
-    queueRenderIfVisible(idx)
+    // Solid runs ref callbacks BEFORE applying style/attribute props on the
+    // same element. At this moment the wrapper has not been sized/positioned,
+    // so getBoundingClientRect() returns 0×0 — `queueRenderIfVisible` would
+    // see visible=false and bail (and the IntersectionObserver fired with
+    // the zero-rect doesn't fire a second callback for the post-layout
+    // size on WebKit). Defer one rAF so layout has committed the styled
+    // width/height before the visibility test runs.
+    requestAnimationFrame(() => {
+      queueRenderIfVisible(idx)
+    })
   }
 
   const observer = createMemo<IntersectionObserver | null>((prev) => {
@@ -344,6 +379,36 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
   )
 
   // ─── Cursor-anchored zoom math ───────────────────────────────────────
+  // Pick the visible page whose rect contains the cursor (or the
+  // best-overlapping one) to use as the zoom anchor. We anchor in
+  // *content-relative* coordinates (fraction of page width/height under
+  // cursor) so the math is robust to layout changes that the scroll
+  // container doesn't see — e.g. the symmetric `pagePadding` shrinking
+  // as `displayZoom` grows. Anchoring via raw `scrollLeft + mx` (as the
+  // previous implementation did) assumes the wrapper's left position
+  // is a linear function of zoom; with continuous-but-not-linear
+  // padding it isn't, so cursor anchoring drifted across the
+  // narrow→wide transition and produced visible "snaps" on `+` clicks.
+  const pickAnchorWrapper = (clientX: number, clientY: number): HTMLDivElement | undefined => {
+    let best: { dom: HTMLDivElement; dist: number } | undefined
+    for (const dom of pageDom.values()) {
+      const r = dom.wrapper.getBoundingClientRect()
+      // Inside?
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+        return dom.wrapper
+      }
+      // Otherwise minimise distance to the wrapper's vertical span — most
+      // useful when the cursor sits in the gap between pages.
+      const dy =
+        clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0
+      const dx =
+        clientX < r.left ? r.left - clientX : clientX > r.right ? clientX - r.right : 0
+      const dist = dx + dy
+      if (!best || dist < best.dist) best = { dom: dom.wrapper, dist }
+    }
+    return best?.dom
+  }
+
   const applyZoomAroundPoint = (newZoom: number, clientX: number, clientY: number, emit: boolean) => {
     const container = scrollRef
     if (!container) {
@@ -351,36 +416,35 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
       if (emit) emitZoom(clampZoom(newZoom))
       return
     }
-    const oldZoom = untrack(displayZoom)
     const clamped = clampZoom(newZoom)
+    const oldZoom = untrack(displayZoom)
     if (clamped === oldZoom) return
-    const rect = container.getBoundingClientRect()
-    const mx = clientX - rect.left
-    const my = clientY - rect.top
-    const k = clamped / oldZoom
-    const worldX = container.scrollLeft + mx
-    const worldY = container.scrollTop + my
-    isLocalDrive = true
+    const anchor = pickAnchorWrapper(clientX, clientY)
+    if (!anchor) {
+      setDisplayZoom(clamped)
+      if (emit) emitZoom(clamped)
+      return
+    }
+    const oldRect = anchor.getBoundingClientRect()
+    const fx = oldRect.width > 0 ? (clientX - oldRect.left) / oldRect.width : 0.5
+    const fy = oldRect.height > 0 ? (clientY - oldRect.top) / oldRect.height : 0.5
     setDisplayZoom(clamped)
     if (emit) emitZoom(clamped)
     // Solid commits style.width/height synchronously on the page wrappers,
-    // but the browser doesn't flush layout (and the scroller's
-    // scrollWidth/scrollHeight) until after this microtask returns. One
-    // rAF lands BEFORE the post-layout repaint on WebKit/Chromium — the
-    // scrollLeft/scrollTop assignments below get clamped against the
-    // stale scroll extents, so cursor anchoring drifts toward 0,0 when
-    // zooming in. Wait two rAFs (rAF schedules a callback before the
-    // next paint; nested rAF lands after that paint, when layout is
-    // committed). Belt-and-suspenders: force a layout read first.
+    // but the browser doesn't flush layout until after this microtask
+    // returns. One rAF lands BEFORE the post-layout repaint on
+    // WebKit/Chromium, so the rect we'd read would still be stale.
+    // Wait two rAFs and read forcibly-up-to-date layout.
     requestAnimationFrame(() => {
-      // Trigger synchronous layout — guarantees the scroller's
-      // scrollWidth/scrollHeight reflect the new page-wrapper sizes
-      // before we clamp scrollLeft/scrollTop below.
+      // Force layout commit before measuring.
       void container.scrollHeight
       requestAnimationFrame(() => {
-        container.scrollLeft = k * worldX - mx
-        container.scrollTop = k * worldY - my
-        isLocalDrive = false
+        const newRect = anchor.getBoundingClientRect()
+        const cRect = container.getBoundingClientRect()
+        const newTargetX = newRect.left + fx * newRect.width
+        const newTargetY = newRect.top + fy * newRect.height
+        container.scrollLeft += newTargetX - clientX
+        container.scrollTop += newTargetY - clientY
       })
     })
   }
@@ -556,7 +620,7 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
   )
 
   return (
-    <div class={"relative h-full w-full flex flex-col bg-background-stronger " + (props.class ?? "")}>
+    <div class={"relative h-full w-full min-w-0 flex flex-col bg-background-stronger overflow-hidden " + (props.class ?? "")}>
       <Show when={!props.hideHeader}>
         <div class="flex items-center justify-between shrink-0 px-3 py-2 text-12-regular text-text-weak border-b border-border-weaker-base">
           <div class="flex items-center gap-2">
@@ -626,6 +690,10 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
         ref={(el) => {
           scrollRef = el
           attachZoomListeners(el)
+          setContainerWidth(el.clientWidth)
+          const ro = new ResizeObserver(() => setContainerWidth(el.clientWidth))
+          ro.observe(el)
+          onCleanup(() => ro.disconnect())
         }}
         data-component="pdf-canvas-viewer-scroll"
       >
@@ -639,7 +707,29 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
             </div>
           }
         >
-          <div class="flex flex-col items-center gap-2 py-2 px-2">
+          <div
+            class="flex flex-col gap-2 py-2 items-start"
+            style={{
+              // Visual centering when content is narrower than the
+              // scroll container, switching smoothly to flush-left when
+              // it overflows.
+              //
+              // `align-items: safe center` was tried first, but it flips
+              // discretely from `center` to `start` when content width
+              // crosses the container width. That made `+` zoom clicks
+              // appear to *snap* — applyZoomAroundPoint's world-coord
+              // math assumes the wrapper's left position scales linearly
+              // with displayZoom, but the alignment flip introduces a
+              // ~(container-page)/2 jump exactly at the crossover.
+              //
+              // Symmetric horizontal padding sized to `max(8, (container
+              // - page)/2)` is continuous (stays at the floor of 8 once
+              // page ≥ container) so the wrapper's left position is a
+              // smooth function of zoom and the cursor-anchor stays put.
+              "padding-left": `${pagePadding()}px`,
+              "padding-right": `${pagePadding()}px`,
+            }}
+          >
             <For each={pages()}>
               {(p) => {
                 // Register the page in `pageDom` from whichever ref callback

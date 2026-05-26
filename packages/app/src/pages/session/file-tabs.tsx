@@ -582,7 +582,7 @@ export function FileTabContent(props: { tab: string }) {
                 <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
               </Switch>
             </ScrollView>
-            <div class="min-h-0 border-t border-border-weaker-base">
+            <div class="min-h-0 min-w-0 border-t border-border-weaker-base">
               <TexBuildPane
                 texFile={absPath()}
                 onNavigateSource={scrollToLine}
