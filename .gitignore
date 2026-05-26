@@ -40,3 +40,7 @@ tsconfig.tsbuildinfo
 .playwright-mcp/
 console-debug.log
 *.console.log
+
+# python bytecode in infra/litellm hook modules
+infra/litellm/**/__pycache__/
+infra/litellm/**/*.pyc
