@@ -191,8 +191,12 @@ download_draft_asset() {
 install_macos_dmg() {
   local dmg="$1"
   log "Mounting $(basename "$dmg")..."
+  # NOTE: don't combine `-quiet` with `-plist`. `-quiet` wins and
+  # suppresses the plist output, leaving the parser with an empty
+  # string → "couldn't determine DMG mount point" even when the
+  # mount actually succeeded. Caught on 1.0.4 install-draft reports.
   local mount_info
-  mount_info=$(hdiutil attach "$dmg" -nobrowse -quiet -plist)
+  mount_info=$(hdiutil attach "$dmg" -nobrowse -plist)
   local mount_point
   mount_point=$(printf '%s' "$mount_info" | grep -A1 '<key>mount-point</key>' | tail -1 | sed -E 's/.*<string>(.*)<\/string>.*/\1/')
   if [[ -z "$mount_point" || ! -d "$mount_point" ]]; then

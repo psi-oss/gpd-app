@@ -114,8 +114,14 @@ jobs:
       - name: Install Railway CLI (only when reverting)
         if: steps.check.outputs.drift == 'true'
         run: |
-          curl -fsSL https://railway.com/install.sh | sh
-          railway --version
+          # Their install.sh has bash-ism / SHELL-unset issues under
+          # `set -e` on GH runners (`sh: 141: Bad substitution`), but it
+          # still drops the binary at ~/.railway/bin/railway BEFORE
+          # failing on the post-install rc-file step. Tolerate the
+          # post-install exit and just verify the binary works directly.
+          curl -fsSL https://railway.com/install.sh | sh || true
+          echo "$HOME/.railway/bin" >> "$GITHUB_PATH"
+          "$HOME/.railway/bin/railway" --version
 
       - name: Auto-revert via railway up
         if: steps.check.outputs.drift == 'true'
