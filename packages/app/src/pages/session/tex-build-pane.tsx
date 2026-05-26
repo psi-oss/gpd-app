@@ -178,10 +178,10 @@ export function TexBuildPane(props: {
   const ERRORS_HEADER_PX = 32
 
   return (
-    <div class="flex flex-col h-full overflow-hidden" data-component="tex-build-pane">
-      <div class="flex items-center justify-between shrink-0 px-3 py-2 border-b border-border-weaker-base">
-        <div class="flex items-center gap-2 text-12-regular">
-          <div class="text-text-weak">{language.t("tex.build.title")}</div>
+    <div class="flex flex-col h-full min-w-0 overflow-hidden" data-component="tex-build-pane">
+      <div class="flex items-center justify-between shrink-0 px-3 py-2 gap-2 border-b border-border-weaker-base">
+        <div class="flex items-center gap-2 min-w-0 text-12-regular">
+          <div class="text-text-weak truncate">{language.t("tex.build.title")}</div>
           <StatusIndicator statusKey={statusKey()} running={running()} />
           <Show when={running() ? progress() : null}>
             {(p) => (
@@ -189,7 +189,7 @@ export function TexBuildPane(props: {
             )}
           </Show>
         </div>
-        <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-1.5 shrink-0">
           <Show when={hasPdf()}>
             <div class="flex items-center gap-1 mr-1 text-12-regular text-text-weak">
               <button
@@ -289,9 +289,9 @@ export function TexBuildPane(props: {
               return parts.join(" · ")
             }
             return (
-              <div class="flex-1 min-h-0 flex flex-col">
+              <div class="flex-1 min-h-0 min-w-0 flex flex-col">
                 <Show when={hasPdf()}>
-                  <div class="flex-1 min-h-0">
+                  <div class="flex-1 min-h-0 min-w-0">
                     <TexPdfViewer
                       pdfPath={e().result.pdfPath!}
                       reloadToken={e().completedAt}
