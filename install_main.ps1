@@ -886,17 +886,8 @@ function Install-Gpd {
         Write-Warn "Physics libs install failed -- agent code that imports scipy/numpy may break. Retry: ~\.gpd\venv\Scripts\pip.exe install scipy numpy matplotlib sympy"
     }
 
-    # arxiv-mcp-server: upstream package the gpd-arxiv MCP bridge imports
-    # at process startup. Without it, gpd.mcp.servers.arxiv_bridge raises
-    # ModuleNotFoundError on first run and the desktop app shows a red
-    # dot next to gpd-arxiv in the Tools panel.
-    #
-    # The `[pdf]` extra pulls pymupdf4llm + pymupdf — required for the
-    # PDF-conversion fallback path in arxiv_mcp_server's download_paper
-    # tool (HTML 404 -> PDF). Mirrors the install-gpd/install macOS/Linux
-    # branch. Without `[pdf]`, ~45% of download_paper calls error out
-    # with "HTML version not available and PDF conversion requires the
-    # pdf extra" once arxiv.org/html lacks the paper.
+    # arxiv-mcp-server[pdf]: powers the gpd-arxiv MCP bridge. The [pdf]
+    # extra pulls pymupdf4llm so the bridge's PDF-conversion path works.
     Write-Log "Installing arxiv-mcp-server[pdf] (powers the gpd-arxiv MCP bridge)..."
     & $venvPip install --upgrade --quiet "arxiv-mcp-server[pdf]>=0.4"
     if ($LASTEXITCODE -ne 0) {
