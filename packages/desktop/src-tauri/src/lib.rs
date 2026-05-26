@@ -1,3 +1,4 @@
+mod app_menu;
 mod auth_lock;
 mod cli;
 mod constants;
@@ -17,6 +18,8 @@ mod os;
 mod server;
 mod window_customizer;
 mod windows;
+#[cfg(target_os = "macos")]
+mod pinch_gesture;
 
 use crate::cli::CommandChild;
 use futures::{FutureExt, TryFutureExt};
@@ -640,6 +643,7 @@ pub fn run() {
 
     let mut builder = tauri_builder
         .invoke_handler(specta_builder.invoke_handler())
+        .on_menu_event(app_menu::handle_event)
         .setup(move |app| {
             let handle = app.handle().clone();
 
@@ -654,7 +658,89 @@ pub fn run() {
             // click aborts an in-flight compile instead of racing it.
             handle.manage(tex_compiler::TexCompileState::new());
 
+            // RES-1158: install a custom menu so Cmd+F can be claimed by our
+            // "Find in Conversation" item instead of the system Find binding.
+            // See app_menu.rs for why this is needed on macOS.
+            //
+            // Note: `App::set_menu()` + `Menu::set_as_app_menu()` were
+            // empirically insufficient — verified 2026-05-26 by setting a
+            // distinctive submenu title ("GPD-Edit") that never appeared in
+            // the visible macOS menubar after restart. The cause was not
+            // identified; switching to a global-shortcut registration below
+            // for Cmd+F (the only shortcut that matters here) sidesteps the
+            // menu propagation issue entirely. The custom menu is still
+            // installed for non-shortcut menu UX (kept in case future
+            // platform versions honor it).
+            let menu = app_menu::build(&handle)?;
+            app.set_menu(menu)?;
+
+            // RES-1158: register Cmd/Ctrl+F as an OS-level shortcut. This
+            // fires regardless of menu state and bypasses macOS WKWebView's
+            // native Cmd+F interception. Emits the same Tauri event as the
+            // menu item would, so the desktop bridge in index.tsx routes it
+            // uniformly into the webview's session search bar.
+            #[cfg(desktop)]
+            {
+                use tauri::Emitter;
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+                let win_handle = handle.clone();
+                let modifier = if cfg!(target_os = "macos") {
+                    Modifiers::SUPER
+                } else {
+                    Modifiers::CONTROL
+                };
+                let find_shortcut = Shortcut::new(Some(modifier), Code::KeyF);
+                app.handle()
+                    .plugin(
+                        tauri_plugin_global_shortcut::Builder::new()
+                            .with_handler(move |_app, shortcut, event| {
+                                if shortcut == &find_shortcut && event.state() == ShortcutState::Pressed {
+                                    // Only fire when our window is focused —
+                                    // otherwise we'd hijack Cmd+F system-wide.
+                                    if let Some(win) = win_handle.get_webview_window(MainWindow::LABEL)
+                                    {
+                                        let focused = win.is_focused().unwrap_or(false);
+                                        if !focused {
+                                            return;
+                                        }
+                                        let _ = win.emit(
+                                            app_menu::FIND_IN_CONVERSATION_EVENT,
+                                            (),
+                                        );
+                                    }
+                                }
+                            })
+                            .build(),
+                    )
+                    .map_err(|e| {
+                        tracing::error!("RES-1158: failed to register global-shortcut plugin: {e}");
+                        e
+                    })?;
+                handle
+                    .global_shortcut()
+                    .register(find_shortcut)
+                    .map_err(|e| {
+                        tracing::error!("RES-1158: failed to register Cmd+F shortcut: {e}");
+                        e
+                    })?;
+                tracing::info!("RES-1158: registered Cmd/Ctrl+F global shortcut");
+            }
+
             specta_builder.mount_events(&handle);
+
+            // Wire the native macOS pinch-gesture recognizer (installed by
+            // PinchZoomDisablePlugin) to a Tauri event stream the PDF
+            // viewer in JS subscribes to. See pinch_gesture.rs for the
+            // why-WebKit-doesn't-deliver-pinches-to-JS background.
+            #[cfg(target_os = "macos")]
+            {
+                let emit_handle = handle.clone();
+                pinch_gesture::set_emitter(move |payload| {
+                    use tauri::Emitter;
+                    let _ = emit_handle.emit("gpd:pinch", payload);
+                });
+            }
+
             tauri::async_runtime::spawn(initialize(handle));
 
             Ok(())
@@ -713,6 +799,7 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             tex_compiler::synctex_reverse,
             tex_compiler::parse_tex_log,
             tex_compiler::read_tex_artifact_base64,
+            tex_compiler::save_tex_artifact_to_path,
             project_fs::create_project_directory,
             project_fs::check_project_accessible,
             project_fs::canonicalize_project_path

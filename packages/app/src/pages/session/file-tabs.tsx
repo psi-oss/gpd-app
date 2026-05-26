@@ -13,6 +13,7 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { showToast } from "@opencode-ai/ui/toast"
+import { PdfCanvasViewer } from "@/pages/session/pdf-canvas-viewer"
 import { TexBuildPane } from "@/pages/session/tex-build-pane"
 import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
 import { useComments } from "@/context/comments"
@@ -491,6 +492,22 @@ export function FileTabContent(props: { tab: string }) {
               : undefined
           }
         />
+      )
+    }
+    // Application/PDF in a file tab gets the canvas-backed viewer so
+    // trackpad pinch / Cmd+wheel zoom work and the user can read pages
+    // at any size without falling back to WebKit's native PDF overlay
+    // (whose download button is unwired). The viewer keys on the hash
+    // so a re-fetched PDF (new compile, file changed on disk) reloads.
+    const content = state()?.content
+    if (content?.mimeType === "application/pdf" && content.encoding === "base64") {
+      return (
+        <div class="relative h-full w-full">
+          <PdfCanvasViewer
+            source={{ kind: "base64", base64: content.content }}
+            sourceKey={`${p ?? "pdf"}:${content.hash ?? ""}`}
+          />
+        </div>
       )
     }
     return renderFile(contents())

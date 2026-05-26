@@ -13,6 +13,7 @@ const icons = {
   "bullet-list": `<path d="M9.58329 13.7497H17.0833M9.58329 6.24967H17.0833M6.24996 6.24967C6.24996 7.17015 5.50377 7.91634 4.58329 7.91634C3.66282 7.91634 2.91663 7.17015 2.91663 6.24967C2.91663 5.3292 3.66282 4.58301 4.58329 4.58301C5.50377 4.58301 6.24996 5.3292 6.24996 6.24967ZM6.24996 13.7497C6.24996 14.6701 5.50377 15.4163 4.58329 15.4163C3.66282 15.4163 2.91663 14.6701 2.91663 13.7497C2.91663 12.8292 3.66282 12.083 4.58329 12.083C5.50377 12.083 6.24996 12.8292 6.24996 13.7497Z" stroke="currentColor" stroke-linecap="square"/>`,
   "check-small": `<path d="M6.5 11.4412L8.97059 13.5L13.5 6.5" stroke="currentColor" stroke-linecap="square"/>`,
   "chevron-down": `<path d="M6.6665 8.33325L9.99984 11.6666L13.3332 8.33325" stroke="currentColor" stroke-linecap="square"/>`,
+  "chevron-up": `<path d="M6.6665 11.6667L9.99984 8.33337L13.3332 11.6667" stroke="currentColor" stroke-linecap="square"/>`,
   "chevron-left": `<path d="M12 15L7 10L12 5" stroke="currentColor" stroke-linecap="square"/>`,
   "chevron-right": `<path d="M8 15L13 10L8 5" stroke="currentColor" stroke-linecap="square"/>`,
   "chevron-grabber-vertical": `<path d="M6.66675 12.4998L10.0001 15.8332L13.3334 12.4998M6.66675 7.49984L10.0001 4.1665L13.3334 7.49984" stroke="currentColor" stroke-linecap="square"/>`,

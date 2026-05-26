@@ -292,7 +292,12 @@ export function TexBuildPane(props: {
               <div class="flex-1 min-h-0 flex flex-col">
                 <Show when={hasPdf()}>
                   <div class="flex-1 min-h-0">
-                    <TexPdfViewer pdfPath={e().result.pdfPath!} zoom={pdfZoom()} />
+                    <TexPdfViewer
+                      pdfPath={e().result.pdfPath!}
+                      reloadToken={e().completedAt}
+                      zoom={pdfZoom()}
+                      onZoomChange={(z) => setPdfZoom(clampPdfZoom(z))}
+                    />
                   </div>
                   <Show when={!errorsCollapsed()}>
                     <ResizeHandle

@@ -210,14 +210,26 @@ pub fn detect_tex_root(start_file: String) -> String {
         cursor = dir.parent();
     }
 
-    // 3. Heuristic: look in start's directory for a `.tex` with `\documentclass`.
+    // 3. If the starting file IS itself a root (has `\documentclass`), use it
+    // directly. This is the common case for a workspace with multiple
+    // independent `.tex` files (a.tex, b.tex, …): each is its own root, and
+    // we must not compile a sibling root just because it happens to come
+    // earlier in `read_dir` iteration order.
+    if let Ok(contents) = std::fs::read_to_string(&start)
+        && contents.contains("\\documentclass")
+    {
+        return start_file;
+    }
+
+    // 4. Heuristic: when the starting file is NOT a root (e.g. an `\input`-ed
+    // chapter), look in its directory for a `.tex` with `\documentclass`.
     if let Some(dir) = start.parent()
         && let Some(root) = scan_dir_for_documentclass(dir)
     {
         return root.to_string_lossy().to_string();
     }
 
-    // 4. Fallback.
+    // 5. Fallback.
     start_file
 }
 
@@ -534,6 +546,33 @@ pub fn read_tex_artifact_base64(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&canon_path)
         .map_err(|e| format!("Couldn't read {}. Check that it exists and hasn't been moved. ({e})", canon_path.display()))?;
     Ok(base64_encode(&bytes))
+}
+
+/// Copy a build artifact (PDF, log, synctex) from the GPD cache to a
+/// user-chosen destination path. The source MUST live under the GPD
+/// `.tex-builds` cache directory — same boundary check as
+/// `read_tex_artifact_base64`. The destination is the path returned by
+/// the save-file dialog and is trusted to be where the user wants the
+/// file written; no further sandboxing is applied.
+#[tauri::command]
+#[specta::specta]
+pub fn save_tex_artifact_to_path(src: String, dest: String) -> Result<(), String> {
+    let src_path = PathBuf::from(&src);
+    let cache_root = gpd_config_dir().join(".tex-builds");
+    let canon_src = std::fs::canonicalize(&src_path)
+        .map_err(|e| format!("Couldn't resolve the file path. Try moving the file to a simpler location. ({e})"))?;
+    let canon_cache = std::fs::canonicalize(&cache_root)
+        .map_err(|e| format!("GPD's LaTeX build folder is missing. Re-render the document. ({e})"))?;
+    if !canon_src.starts_with(&canon_cache) {
+        return Err(format!(
+            "For safety, GPD can only export files inside its LaTeX build folder. ({})",
+            canon_src.display()
+        ));
+    }
+    let dest_path = PathBuf::from(&dest);
+    std::fs::copy(&canon_src, &dest_path)
+        .map_err(|e| format!("Couldn't save to {}. ({e})", dest_path.display()))?;
+    Ok(())
 }
 
 /// Minimal base64 encoder so we don't take a direct dep for a single use.

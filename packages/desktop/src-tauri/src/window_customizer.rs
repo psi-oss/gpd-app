@@ -33,6 +33,7 @@ impl<R: Runtime> Plugin<R> for PinchZoomDisablePlugin {
             #[cfg(target_os = "macos")]
             unsafe {
                 use objc2::rc::Retained;
+                use objc2_app_kit::NSView;
                 use objc2_web_kit::WKWebView;
 
                 // Get the WKWebView pointer and disable magnification gestures
@@ -40,6 +41,16 @@ impl<R: Runtime> Plugin<R> for PinchZoomDisablePlugin {
                 let wk_webview: Retained<WKWebView> =
                     Retained::retain(_webview.inner().cast()).unwrap();
                 wk_webview.setAllowsMagnification(false);
+
+                // …but with magnification disabled, WebKit also drops the
+                // pinch gesture before it reaches JS (gesturestart never
+                // fires in user-mode WebKit, and macOS doesn't synthesise
+                // wheel+ctrlKey from pinch). Install our own gesture
+                // recognizer on the WKWebView's NSView so we can route
+                // pinches to the PDF viewer in JS via Tauri events while
+                // still keeping the chrome safe from accidental zoom.
+                let view: &NSView = wk_webview.as_ref();
+                crate::pinch_gesture::install_on_view(view);
             }
         });
     }

@@ -10,6 +10,7 @@ import {
   createMemo,
   createEffect,
   createComputed,
+  createSignal,
   on,
   onMount,
   untrack,
@@ -50,7 +51,9 @@ import {
   shouldFocusTerminalOnKeyDown,
 } from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/message-timeline"
+import { SESSION_SEARCH_OPEN_EVENT } from "@/pages/session/menu-bridge"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
+import { SessionSearchBar } from "@/pages/session/session-search-bar"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import {
   listAutoOpened as listPaperAutoOpened,
@@ -817,6 +820,35 @@ export default function Page() {
   let scrollMark = 0
   let messageMark = 0
 
+  // RES-1158: Cmd/Ctrl+F search bar state. The bar mounts inside the
+  // message-timeline container; the focus accessor lets a second Cmd+F
+  // press while the bar is open re-focus the input (browser-find idiom).
+  const [searchOpen, setSearchOpen] = createSignal(false)
+  let focusSearchInput: (() => void) | undefined
+  const openSearch = () => {
+    if (searchOpen()) {
+      focusSearchInput?.()
+      return
+    }
+    setSearchOpen(true)
+  }
+  const closeSearch = () => {
+    setSearchOpen(false)
+  }
+  // RES-1158: Tauri menu (app_menu.rs → desktop/src/index.tsx) dispatches
+  // this CustomEvent when the user picks Edit > Find in Conversation
+  // (Cmd/Ctrl+F). Listening here means the shortcut works even when the
+  // OS-level menu accelerator consumes the keystroke before any JS keydown
+  // handler can see it (verified on macOS WKWebView).
+  onMount(() => {
+    const handler = () => {
+      if (!params.id) return
+      openSearch()
+    }
+    window.addEventListener(SESSION_SEARCH_OPEN_EVENT, handler)
+    onCleanup(() => window.removeEventListener(SESSION_SEARCH_OPEN_EVENT, handler))
+  })
+
   const scrollGestureWindowMs = 250
 
   const markScrollGesture = (target?: EventTarget | null) => {
@@ -1076,6 +1108,28 @@ export default function Page() {
         void halt(sessionID)
         return
       }
+    }
+
+    // RES-1158: Cmd/Ctrl+F opens the in-conversation search bar. Intercept
+    // BEFORE the editable-target guards below so it works regardless of
+    // whether focus is in the prompt input. Mirrors the Escape→halt pattern
+    // above. Skip when no session is active.
+    // RES-1158: Cmd/Ctrl+F is primarily routed through the Tauri Edit menu's
+    // "Find in Conversation" item (see app_menu.rs) because on macOS the
+    // system Find menu accelerator consumes Cmd+F before the keystroke reaches
+    // the webview's JS. This JS-side intercept stays as a fallback for
+    // platforms / configurations where the menu doesn't claim the shortcut.
+    if (
+      (event.code === "KeyF" || event.key === "f" || event.key === "F") &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      params.id &&
+      !dialog.active
+    ) {
+      event.preventDefault()
+      openSearch()
+      return
     }
 
     const path = event.composedPath()
@@ -2094,7 +2148,15 @@ export default function Page() {
             width: sessionPanelWidth(),
           }}
         >
-          <div class="flex-1 min-h-0 overflow-hidden">
+          <div class="flex-1 min-h-0 overflow-hidden relative">
+            <SessionSearchBar
+              open={searchOpen}
+              onClose={closeSearch}
+              scroller={() => scroller}
+              registerFocus={(fn) => {
+                focusSearchInput = fn
+              }}
+            />
             <Switch>
               <Match when={params.id}>
                 <Show when={messagesReady()}>

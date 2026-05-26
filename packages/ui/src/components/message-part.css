@@ -156,6 +156,7 @@
     width: 100%;
     opacity: 0;
     pointer-events: none;
+    user-select: none;
     transition: opacity 0.15s ease;
     will-change: opacity;
 
@@ -1287,4 +1288,20 @@
     flex-shrink: 0;
     color: var(--icon-weak);
   }
+}
+
+/* RES-1158: in-conversation search match highlights. Applied by the
+ * SessionSearchBar component, which wraps matched text in <mark> elements
+ * inside the message timeline. The active match (current step target) gets
+ * the stronger surface + outline to stand out from the surrounding matches. */
+mark[data-search-match="true"] {
+  background-color: var(--surface-warning-base);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+mark[data-search-match="true"][data-search-match-active="true"] {
+  background-color: var(--surface-warning-strong);
+  outline: 1px solid var(--border-warning-selected);
 }
