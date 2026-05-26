@@ -5,7 +5,7 @@ import { TextField } from "@opencode-ai/ui/text-field"
 import { useMutation } from "@tanstack/solid-query"
 import { Icon } from "@opencode-ai/ui/icon"
 import { createMemo, For, Show } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createStore, produce } from "solid-js/store"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
 import { type LocalProject, getAvatarColors } from "@/context/layout"
@@ -28,6 +28,10 @@ export function DialogEditProject(props: { project: LocalProject }) {
     name: defaultName(),
     color: props.project.icon?.color || "pink",
     iconUrl: props.project.icon?.override || "",
+    // RES-1010: optional 1-2 char glyph that wins over the auto-derived
+    // first-letter fallback. Persisted via icon_character on the
+    // backend (drizzle migration 20260518200617_productive_rafael_vega).
+    character: props.project.icon?.character || "",
     startup: props.project.commands?.start ?? "",
     dragOver: false,
     iconHover: false,
@@ -76,22 +80,59 @@ export function DialogEditProject(props: { project: LocalProject }) {
       const name = store.name.trim() === folderName() ? "" : store.name.trim()
       const start = store.startup.trim()
 
+      // Trim the character glyph and clamp to two graphemes — the
+      // backend zod allows up to 2 but the input is free-form text;
+      // explicit empty (after trim) clears the prior value on save.
+      const character = store.character.trim().slice(0, 2)
+
       if (props.project.id && props.project.id !== "global") {
         await globalSDK.client.project.update({
           projectID: props.project.id,
           directory: props.project.worktree,
           name,
-          icon: { color: store.color, override: store.iconUrl },
+          icon: { color: store.color, override: store.iconUrl, character },
           commands: { start },
         })
         globalSync.project.icon(props.project.worktree, store.iconUrl || undefined)
+        // The SDK call persists icon.character + color server-side, but the
+        // local project list cache (driving the sidebar avatar) only refreshes
+        // on bootstrap or via this optimistic patch. Without this the sidebar
+        // tile keeps showing the previous glyph until the next reload.
+        const projectId = props.project.id
+        globalSync.set(
+          "project",
+          produce((draft) => {
+            const idx = draft.findIndex((p) => p.id === projectId)
+            if (idx < 0) return
+            const existing = draft[idx]
+            if (!existing) return
+            draft[idx] = {
+              ...existing,
+              name: name || existing.name,
+              icon: {
+                ...(existing.icon ?? {}),
+                color: store.color,
+                override: store.iconUrl || undefined,
+                character: character || undefined,
+              },
+              commands: {
+                ...(existing.commands ?? {}),
+                start: start || undefined,
+              },
+            }
+          }),
+        )
         dialog.close()
         return
       }
 
       globalSync.project.meta(props.project.worktree, {
         name,
-        icon: { color: store.color, override: store.iconUrl || undefined },
+        icon: {
+          color: store.color,
+          override: store.iconUrl || undefined,
+          character: character || undefined,
+        },
         commands: { start: start || undefined },
       })
       dialog.close()
@@ -106,7 +147,7 @@ export function DialogEditProject(props: { project: LocalProject }) {
 
   return (
     <Dialog title={language.t("dialog.project.edit.title")} class="w-full max-w-[480px] mx-auto">
-      <form onSubmit={handleSubmit} class="flex flex-col gap-6 p-6 pt-0">
+      <form onSubmit={handleSubmit} class="flex flex-col gap-6 p-6 pt-0 flex-1 min-h-0 overflow-y-auto">
         <div class="flex flex-col gap-4">
           <TextField
             autofocus
@@ -219,6 +260,7 @@ export function DialogEditProject(props: { project: LocalProject }) {
                     >
                       <Avatar
                         fallback={store.name || defaultName()}
+                        text={store.character}
                         {...getAvatarColors(color)}
                         class="size-full rounded"
                       />
@@ -227,6 +269,19 @@ export function DialogEditProject(props: { project: LocalProject }) {
                 </For>
               </div>
             </div>
+
+            {/* RES-1010: optional 1-2 char glyph override. Empties out
+                to the auto-derived first-letter fallback when blank. */}
+            <TextField
+              type="text"
+              label={language.t("dialog.project.edit.icon.character")}
+              description={language.t("dialog.project.edit.icon.character.description")}
+              placeholder={language.t("dialog.project.edit.icon.character.placeholder")}
+              value={store.character}
+              onChange={(v) => setStore("character", v.slice(0, 2))}
+              spellcheck={false}
+              class="w-full"
+            />
           </Show>
 
           <TextField

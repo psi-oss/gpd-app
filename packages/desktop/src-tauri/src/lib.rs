@@ -350,6 +350,67 @@ fn read_gpd_key() -> Result<Option<String>, String> {
     Ok(key)
 }
 
+/// Read the author profile JSON at `~/.gpd/profile.json` (or
+/// `$GPD_HOME/profile.json`). The Settings → Profile pane consumes
+/// the raw string and parses on the renderer side, mirroring the
+/// `read_gpd_key` shape. Missing or unreadable file → Ok(None), so
+/// the renderer treats it as "no profile saved" and renders an empty
+/// form. Malformed JSON is still returned verbatim so the user can
+/// see and correct it instead of silently losing their data.
+///
+/// The matching consumer on the Python side is
+/// `gpd.core.profile.load_profile()` in get-physics-done — both
+/// resolve to the same default path (`~/.gpd/profile.json`) when no
+/// env var is set, which is the only case for the v1 desktop UX.
+#[tauri::command]
+#[specta::specta]
+fn read_profile() -> Result<Option<String>, String> {
+    let path = gpd_setup::config_dir().join("profile.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read profile.json: {e}")),
+    }
+}
+
+/// Write the author profile JSON atomically. Validates that the body
+/// parses as JSON (rejects garbage early) but does NOT enforce the
+/// schema — that's the Settings pane's job — so partial drafts can be
+/// saved while the user edits. Sets 0o600 on Unix to match `auth.json`'s
+/// treatment of PII, then renames into place so a concurrent read by
+/// the paper-writer skill never observes a half-written file.
+#[tauri::command]
+#[specta::specta]
+fn write_profile(json: String) -> Result<(), String> {
+    // Validate JSON shape before writing — bad input shouldn't clobber
+    // a previously valid profile.
+    if let Err(e) = serde_json::from_str::<serde_json::Value>(&json) {
+        return Err(format!("profile body is not valid JSON: {e}"));
+    }
+
+    let dir = gpd_setup::config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+
+    let final_path = dir.join("profile.json");
+    let tmp_path = dir.join("profile.json.tmp");
+
+    std::fs::write(&tmp_path, json.as_bytes())
+        .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&tmp_path, perms)
+            .map_err(|e| format!("chmod {}: {e}", tmp_path.display()))?;
+    }
+
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| format!("rename to {}: {e}", final_path.display()))?;
+
+    Ok(())
+}
+
 /// Remove the "gpd" entry from auth.json so the sidecar stops reading
 /// a stale key on the next provider resolve. Called by the settings /
 /// sidebar "Change API Key" flow as an authoritative reset — the
@@ -625,6 +686,8 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             quit_app,
             read_gpd_key,
             remove_gpd_key,
+            read_profile,
+            write_profile,
             cli::install_cli,
             await_initialization,
             server::get_default_server_url,
@@ -1057,12 +1120,6 @@ async fn initialize(app: AppHandle) {
                 }
             }
 
-            // Manifest reconciliation: ensures pip-installed Python deps stay
-            // in sync with the bundled python-manifest.json across desktop
-            // auto-updates. Fire-and-forget — never blocks app startup. Runs
-            // unconditionally because the manifest hash-marker short-circuits
-            // the no-diff case (zero pip activity, milliseconds). See
-            // gpd_setup::reconcile_manifest.
             let reconcile_app = app_clone.clone();
             tokio::spawn(async move {
                 if let Err(e) = gpd_setup::reconcile_manifest(reconcile_app).await {

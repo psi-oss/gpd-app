@@ -48,6 +48,7 @@ export const ProjectIcon = (props: { project: LocalProject; class?: string; noti
           src={
             props.project.id === OPENCODE_PROJECT_ID ? "https://opencode.ai/favicon.svg" : props.project.icon?.override
           }
+          text={props.project.icon?.character}
           {...getAvatarColors(props.project.icon?.color)}
           class="size-full rounded"
           classList={{ "badge-mask": notify() }}

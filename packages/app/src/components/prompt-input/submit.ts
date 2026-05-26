@@ -1,4 +1,4 @@
-import type { Message, Session } from "@opencode-ai/sdk/v2/client"
+import type { Message, Session, SessionGoal } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { Binary } from "@opencode-ai/util/binary"
@@ -26,6 +26,139 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const GOAL_OBJECTIVE_MAX_LENGTH = 4000
+
+const goalDescription = (goal: SessionGoal) =>
+  [
+    goal.objective,
+    `Time: ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : `/${goal.time.budgetSeconds}s`}`,
+    `Cost: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : `/$${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
+    "Commands: /goal edit, /goal pause, /goal resume, /goal clear",
+  ].join("\n")
+
+// Parse durations like "30m", "2h", "1h30m", "120s", "1h30m45s"
+function parseDuration(raw: string): number | undefined {
+  const match = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/)
+  if (!match || (!match[1] && !match[2] && !match[3])) return undefined
+  const h = match[1] ? parseInt(match[1], 10) : 0
+  const m = match[2] ? parseInt(match[2], 10) : 0
+  const s = match[3] ? parseInt(match[3], 10) : 0
+  return h * 3600 + m * 60 + s
+}
+
+type GoalFlags = { timeBudgetSeconds?: number; costBudgetUSD?: number }
+
+// Extract --budget=$X / --time=Yh flags from anywhere in the objective text
+// (leading, trailing, or interior). Returns the cleaned objective + parsed
+// flags. Throws on malformed flag values.
+function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
+  const flags: GoalFlags = {}
+  // Anchor on either start-of-string or whitespace so a flag that's the
+  // first argument right after `/goal ` parses, not just one buried later
+  // (e.g. `/goal --budget=$1.00 reproduce X` used to leave `--budget=$1.00`
+  // glued to the objective and the cost budget unparsed).
+  const flagPattern = /(?:^|\s+)--(budget|time)=(\S+)/g
+  // Extract values first by iterating matches on the ORIGINAL arg. The
+  // strip step runs as a single independent pass below so partial
+  // whitespace-normalization between iterations can't leave a later flag
+  // unstripped (the previous loop edited cleanArg incrementally and the
+  // \s+ prefix from match[0] disappeared after the first replace).
+  for (const match of arg.matchAll(flagPattern)) {
+    const [, key, raw] = match
+    if (key === "budget") {
+      const usd = parseFloat(raw.replace(/^\$/, ""))
+      if (!Number.isFinite(usd) || usd <= 0) {
+        throw new Error(`Invalid --budget=${raw}; expected $<positive number>`)
+      }
+      flags.costBudgetUSD = usd
+    } else if (key === "time") {
+      const seconds = parseDuration(raw)
+      if (seconds === undefined || seconds <= 0) {
+        throw new Error(`Invalid --time=${raw}; expected e.g. 30m, 2h, 1h30m, 120s`)
+      }
+      flags.timeBudgetSeconds = seconds
+    }
+  }
+  const cleanArg = arg
+    .replace(/(?:^|\s+)--(?:budget|time)=\S+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return { cleanArg, flags }
+}
+
+async function runGoal(input: {
+  client: ReturnType<typeof useSDK>["client"]
+  sessionID: string
+  text: string
+  edit?: (value: string) => void
+}) {
+  const text = input.text.trim()
+  const arg = text.slice("/goal".length).trim()
+  const control = !arg || arg === "pause" || arg === "resume" || arg === "clear" || arg === "edit"
+  if (!control && arg.length > GOAL_OBJECTIVE_MAX_LENGTH) {
+    throw new Error(
+      `Goal objective is too long (${arg.length}/${GOAL_OBJECTIVE_MAX_LENGTH} characters). Shorten the /goal objective and put extra details in a normal follow-up prompt.`,
+    )
+  }
+  const current = await input.client.session.goal.get({ sessionID: input.sessionID })
+  if (!arg) {
+    const goal = current.data
+    showToast({
+      title: goal ? `Goal ${goal.status}` : "No goal set",
+      description: goal ? goalDescription(goal) : "Use /goal <objective>.",
+    })
+    return true
+  }
+  if (arg === "pause") {
+    if (!current.data) throw new Error("No goal to pause.")
+    await input.client.session.goal.update({ sessionID: input.sessionID, status: "paused" })
+    showToast({ title: "Goal paused" })
+    return true
+  }
+  if (arg === "resume") {
+    if (!current.data) throw new Error("No goal to resume.")
+    const updated = await input.client.session.goal.update({ sessionID: input.sessionID, status: "active" })
+    if (updated.data?.status === "budget_limited") {
+      showToast({
+        title: "Goal still budget-limited",
+        description: "Increase or clear the token budget to resume continuation.",
+      })
+    } else {
+      showToast({ title: "Goal resumed" })
+    }
+    return true
+  }
+  if (arg === "clear") {
+    await input.client.session.goal.clear({ sessionID: input.sessionID })
+    showToast({ title: "Goal cleared" })
+    return true
+  }
+  if (arg === "edit") {
+    if (!current.data) throw new Error("No goal to edit. Use /goal <objective>.")
+    input.edit?.(`/goal ${current.data.objective}`)
+    return true
+  }
+  const { cleanArg, flags } = parseGoalFlags(arg)
+  const objective = cleanArg.trim() || arg.trim() // fall back to raw if flags consumed everything
+  if (!objective) throw new Error("Goal objective is required.")
+  if (current.data) {
+    await input.client.session.goal.update({
+      sessionID: input.sessionID,
+      objective,
+      status: "active",
+      ...flags,
+    })
+    showToast({ title: "Goal updated" })
+    return true
+  }
+  await input.client.session.goal.create({
+    sessionID: input.sessionID,
+    objective,
+    ...flags,
+  })
+  showToast({ title: "Goal set" })
+  return true
+}
 
 /**
  * Aborts every in-flight prompt submission across every session.
@@ -98,8 +231,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     return true
   }
 
+  const commandText = text.trim()
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
+  if (commandText === "/goal" || commandText.startsWith("/goal ")) {
+    if (!(await wait())) return false
+    await runGoal({ client: input.client, sessionID: input.draft.sessionID, text: commandText })
+    return true
+  }
   if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
     setBusy()
     try {
@@ -478,6 +617,24 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
           restoreInput()
         })
+      return
+    }
+
+    if (mode === "normal" && (text === "/goal" || text.startsWith("/goal "))) {
+      clearInput()
+      void runGoal({
+        client,
+        sessionID: session.id,
+        text,
+        edit: (value) => prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length),
+      }).catch((err) => {
+        showToast({
+          variant: "error",
+          title: "Goal command failed",
+          description: formatServerError(err, language.t, language.t("common.requestFailed")),
+        })
+        restoreInput()
+      })
       return
     }
 

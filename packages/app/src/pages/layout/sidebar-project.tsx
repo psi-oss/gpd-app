@@ -291,7 +291,7 @@ const ProjectPreviewPanel = (props: {
     <div class="px-2 py-2 border-t border-border-weak-base">
       <Button
         variant="ghost"
-        class="flex w-full text-left justify-start text-text-base px-2 hover:bg-transparent active:bg-transparent"
+        class="flex w-full text-left justify-start text-text-base px-2 hover:bg-surface-base-hover"
         onClick={() => {
           props.ctx.openSidebar()
           props.ctx.onHoverOpenChanged(props.project.worktree, false)

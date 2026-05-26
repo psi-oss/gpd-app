@@ -71,6 +71,42 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const idle = { type: "idle" as const }
   const status = () => sync.data.session_status[params.id ?? ""] ?? idle
+  const goal = () => sync.data.session_goal[params.id ?? ""]
+  const goalDescription = () => {
+    const current = goal()
+    if (!current) return "Use /goal <objective>."
+    return [
+      current.objective,
+      `Tokens: ${current.tokens.used}${current.tokens.budget === undefined ? "" : `/${current.tokens.budget}`}`,
+      `Time: ${current.time.used}s`,
+    ].join("\n")
+  }
+  // Compact one-line description shown in the slash popover. When no goal
+  // is set we surface the available flags so /goal works like /help — a
+  // self-documenting hint. When a goal IS set we surface its budgets so
+  // the user can see the current --budget / --time / --tokens at a glance.
+  const formatGoalDuration = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const secs = seconds % 60
+    const parts: string[] = []
+    if (hours) parts.push(`${hours}h`)
+    if (minutes) parts.push(`${minutes}m`)
+    if (secs || parts.length === 0) parts.push(`${secs}s`)
+    return parts.join("")
+  }
+  const goalCommandDescription = () => {
+    const current = goal()
+    if (!current) return "<objective> [--budget=$X] [--time=Yh]"
+    const parts: string[] = [`${current.status}: ${current.objective}`]
+    if (current.cost.budgetMicroUSD !== undefined) {
+      parts.push(`--budget=$${(current.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`)
+    }
+    if (current.time.budgetSeconds !== undefined) {
+      parts.push(`--time=${formatGoalDuration(current.time.budgetSeconds)}`)
+    }
+    return parts.join(" · ")
+  }
   const messages = () => {
     const id = params.id
     if (!id) return []
@@ -355,6 +391,61 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const shareCmds = () => [] as CommandOption[]
 
   const sessionCmds = () => [
+    sessionCommand({
+      id: "session.goal",
+      // Match the trigger slug so the popover collapses to a single
+      // "goal" chip (slash-popover.tsx suppresses the /trigger suffix
+      // when title === trigger) — keeping /goal visually in line with
+      // the custom gpd-* commands.
+      title: "goal",
+      description: goalCommandDescription(),
+      slash: "goal",
+      onSelect: () =>
+        showToast({
+          title: goal() ? `Goal ${goal()!.status}` : "No goal set",
+          description: goalDescription(),
+        }),
+    }),
+    sessionCommand({
+      id: "session.goal.pause",
+      title: "Pause Goal",
+      description: "Pause active goal continuation",
+      disabled: !params.id || !goal() || goal()?.status === "paused",
+      onSelect: async () => {
+        if (!params.id) return
+        await sdk.client.session.goal.update({ sessionID: params.id, status: "paused" })
+        showToast({ title: "Goal paused" })
+      },
+    }),
+    sessionCommand({
+      id: "session.goal.resume",
+      title: "Resume Goal",
+      description: "Resume goal continuation",
+      disabled: !params.id || !goal() || goal()?.status === "active",
+      onSelect: async () => {
+        if (!params.id) return
+        const updated = await sdk.client.session.goal.update({ sessionID: params.id, status: "active" })
+        if (updated.data?.status === "budget_limited") {
+          showToast({
+            title: "Goal still budget-limited",
+            description: "Increase or clear the token budget to resume continuation.",
+          })
+        } else {
+          showToast({ title: "Goal resumed" })
+        }
+      },
+    }),
+    sessionCommand({
+      id: "session.goal.clear",
+      title: "Clear Goal",
+      description: "Clear the current session goal",
+      disabled: !params.id || !goal(),
+      onSelect: async () => {
+        if (!params.id) return
+        await sdk.client.session.goal.clear({ sessionID: params.id })
+        showToast({ title: "Goal cleared" })
+      },
+    }),
     sessionCommand({
       id: "session.new",
       title: language.t("command.session.new"),

@@ -20,11 +20,12 @@ import { AppFileSystem } from "@/filesystem"
 import { McpOAuthProvider } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
+import { isTransportError, isSessionExpiredError } from "./transport-error"
 import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
-import { Effect, Exit, Layer, Option, Context, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Context, Stream, Schedule, Duration } from "effect"
 import { EffectLogger } from "@/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -33,6 +34,13 @@ import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
   const DEFAULT_TIMEOUT = 30_000
+  // Floor for per-tool-call timeouts when neither `cfg.experimental.mcp_timeout`
+  // nor a per-server `timeout` is set. The MCP SDK's own default is 60s, which
+  // is too short for network-bound tools that hit rate-limited public APIs
+  // (e.g. arxiv) — the SDK fires -32001 RequestTimeout before the upstream
+  // can respond. `resetTimeoutOnProgress: true` is wired but only helps when
+  // the server actually emits progress notifications; many servers don't.
+  const DEFAULT_TOOL_TIMEOUT = 120_000
 
   export const Resource = z
     .object({
@@ -127,38 +135,7 @@ export namespace MCP {
     return typeof entry === "object" && entry !== null && "type" in entry
   }
 
-  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
-
-  // Convert MCP tool definition to AI SDK Tool type
-  function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
-    const inputSchema = mcpTool.inputSchema
-
-    // Spread first, then override type to ensure it's always "object"
-    const schema: JSONSchema7 = {
-      ...(inputSchema as JSONSchema7),
-      type: "object",
-      properties: (inputSchema.properties ?? {}) as JSONSchema7["properties"],
-      additionalProperties: false,
-    }
-
-    return dynamicTool({
-      description: mcpTool.description ?? "",
-      inputSchema: jsonSchema(schema),
-      execute: async (args: unknown) => {
-        return client.callTool(
-          {
-            name: mcpTool.name,
-            arguments: (args || {}) as Record<string, unknown>,
-          },
-          CallToolResultSchema,
-          {
-            resetTimeoutOnProgress: true,
-            timeout,
-          },
-        )
-      },
-    })
-  }
+  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_]/g, "_")
 
   function defs(key: string, client: MCPClient, timeout?: number) {
     return Effect.tryPromise({
@@ -254,7 +231,13 @@ export namespace MCP {
       const auth = yield* McpAuth.Service
       const bus = yield* Bus.Service
 
+      // Single-flight reconnect dedup: concurrent tool calls for the same MCP
+      // share one in-flight reconnect Promise instead of racing N connects.
+      const reconnecting = new Map<string, Promise<boolean>>()
+
       type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
+
+      const stopOAuthCallback = Effect.tryPromise(() => McpOAuthCallback.stop()).pipe(Effect.ignore)
 
       /**
        * Connect a client via the given transport with resource safety:
@@ -436,7 +419,7 @@ export namespace MCP {
 
         const listed = yield* defs(key, mcpClient, mcp.timeout)
         if (!listed) {
-          yield* Effect.tryPromise(() => mcpClient.close()).pipe(Effect.ignore)
+          yield* stopClient(mcpClient)
           return { status: { status: "failed", error: "Failed to get tools" } } satisfies CreateResult
         }
 
@@ -471,6 +454,34 @@ export namespace MCP {
         Effect.catch(() => Effect.succeed([] as number[])),
       )
 
+      // Terminate a stdio MCP child process tree (root + descendants) before
+      // closing the client. Plain `client.close()` only severs the JSON-RPC
+      // channel; the spawned process and its children stay alive on
+      // disconnect / replace / rollback / instance disposal, leaking long
+      // after the parent has dropped its reference.
+      const stopClient = Effect.fnUntraced(function* (client: MCPClient) {
+        const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : undefined
+
+        if (typeof pid === "number") {
+          for (const target of [...(yield* descendants(pid)), pid]) {
+            try {
+              process.kill(target, "SIGTERM")
+            } catch {}
+          }
+        }
+
+        yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+      })
+
+      function dropConnection(s: State, name: string, client: MCPClient, reason: string) {
+        if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
+        log.warn("mcp server disconnected, marking as failed", { server: name, reason })
+        s.status[name] = { status: "failed", error: reason }
+        delete s.clients[name]
+        delete s.defs[name]
+        void Effect.runPromise(stopClient(client).pipe(Effect.provide(EffectLogger.layer)))
+      }
+
       function watch(s: State, name: string, client: MCPClient, timeout?: number) {
         client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
           log.info("tools list changed notification received", { server: name })
@@ -485,7 +496,50 @@ export namespace MCP {
             bus.publish(ToolsChanged, { server: name }).pipe(Effect.ignore, Effect.provide(EffectLogger.layer)),
           )
         })
+
+        // Reactive reconnect: when the underlying MCP transport closes
+        // unexpectedly, mark the server as failed so the 30s health-check
+        // (or the next tool call's transport-error path) can attempt
+        // reconnection. Without this, the cached "connected" status lingers
+        // and every subsequent callTool hits the same dead client.
+        client.onclose = () => {
+          dropConnection(s, name, client, "MCP transport closed unexpectedly")
+        }
       }
+
+      // Periodic health-check: attempt to reconnect failed servers every 30s.
+      // Refs `state` + `reconnectClient` via closure; both are resolved at
+      // call-time (not closure-capture-time), so it is safe that they are
+      // defined further down in the outer Effect.gen. The fiber is forked
+      // inside the state init body via Effect.forkScoped so it is bound to
+      // the per-instance ScopedCache scope and dies when the instance is
+      // disposed.
+      const runHealthCheckOnce = (): Effect.Effect<void, never, never> =>
+        Effect.gen(function* () {
+          const s = yield* InstanceState.get(state)
+          const cfg = yield* cfgSvc.get()
+          const config = cfg.mcp ?? {}
+          const failedServers = Object.entries(s.status).filter(
+            ([name, st]) => st.status === "failed" && config[name] && isMcpConfigured(config[name]),
+          )
+          if (failedServers.length > 0) {
+            log.info("mcp health-check: attempting reconnect for failed servers", {
+              servers: failedServers.map(([name]) => name),
+            })
+          }
+          for (const [name] of failedServers) {
+            // Skip if already reconnecting
+            if (reconnecting.has(name)) continue
+            const mcp = config[name]
+            if (!mcp) continue
+            const ok = yield* Effect.promise(() => reconnectClient(name))
+            if (ok) {
+              log.info("mcp health-check: reconnected", { server: name })
+            } else {
+              log.debug("mcp health-check: reconnect still failed", { server: name })
+            }
+          }
+        }).pipe(Effect.catchCause(() => Effect.void))
 
       const state = yield* InstanceState.make<State>(
         Effect.fn("MCP.state")(function* () {
@@ -511,7 +565,14 @@ export namespace MCP {
                   return
                 }
 
-                const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
+                const result = yield* create(key, mcp).pipe(
+                  Effect.catch((err: unknown) => {
+                    const msg = err instanceof Error ? err.message : String(err)
+                    log.error("mcp server initialization failed, marking as failed", { key, error: msg })
+                    s.status[key] = { status: "failed", error: msg }
+                    return Effect.void
+                  }),
+                )
                 if (!result) return
 
                 s.status[key] = result.status
@@ -526,26 +587,18 @@ export namespace MCP {
 
           yield* Effect.addFinalizer(() =>
             Effect.gen(function* () {
-              yield* Effect.forEach(
-                Object.values(s.clients),
-                (client) =>
-                  Effect.gen(function* () {
-                    const pid = (client.transport as any)?.pid
-                    if (typeof pid === "number") {
-                      const pids = yield* descendants(pid)
-                      for (const dpid of pids) {
-                        try {
-                          process.kill(dpid, "SIGTERM")
-                        } catch {}
-                      }
-                    }
-                    yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
-                  }),
-                { concurrency: "unbounded" },
-              )
+              yield* Effect.forEach(Object.values(s.clients), (client) => stopClient(client), {
+                concurrency: "unbounded",
+              })
               pendingOAuthTransports.clear()
+              yield* stopOAuthCallback
             }),
           )
+
+          // Start periodic health-check (every 30s) to auto-reconnect failed
+          // MCP servers. forkScoped ties the fiber to this state's scope so
+          // it dies on instance disposal.
+          yield* runHealthCheckOnce().pipe(Effect.repeat(Schedule.spaced(Duration.seconds(30))), Effect.forkScoped)
 
           return s
         }),
@@ -555,7 +608,7 @@ export namespace MCP {
         const client = s.clients[name]
         delete s.defs[name]
         if (!client) return Effect.void
-        return Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+        return stopClient(client)
       }
 
       const storeClient = Effect.fnUntraced(function* (
@@ -629,13 +682,86 @@ export namespace MCP {
         s.status[name] = { status: "disabled" }
       })
 
+      // Run an Effect that depends only on services baked into the layer
+      // closure (cfgSvc, bus, spawner) as a Promise. Needed because tool
+      // `execute` callbacks live in AI SDK Promise-land, outside the Effect
+      // runtime that built the layer.
+      const runLayerPromise = <A>(eff: Effect.Effect<A, any, any>): Promise<A> =>
+        Effect.runPromise(eff.pipe(Effect.provide(EffectLogger.layer)) as Effect.Effect<A, any, never>)
+
+      // Single-flight reconnect: concurrent tool calls for the same MCP name
+      // share one in-flight Promise instead of each triggering a new connect.
+      // Entry is removed on both success and failure.
+      const reconnectClient = (name: string): Promise<boolean> => {
+        const existing = reconnecting.get(name)
+        if (existing) return existing
+        const p = runLayerPromise(getMcpConfig(name))
+          .then((mcp) => {
+            if (!mcp) return false
+            return runLayerPromise(createAndStore(name, { ...mcp, enabled: true })).then(
+              (status) => status.status === "connected",
+            )
+          })
+          .catch((err) => {
+            log.error("mcp reconnect failed", { name, error: err instanceof Error ? err.message : String(err) })
+            return false
+          })
+          .finally(() => {
+            reconnecting.delete(name)
+          })
+        reconnecting.set(name, p)
+        return p
+      }
+
+      // Wraps an MCP tool as an AI SDK dynamicTool. The catch branch in
+      // execute is the key piece: on a transport error, call reconnectClient
+      // and retry once with the fresh client. Non-transport errors and
+      // failed reconnects rethrow as-is so business errors stay visible.
+      const makeTool = (clientName: string, mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool => {
+        const schema: JSONSchema7 = {
+          ...(mcpTool.inputSchema as JSONSchema7),
+          type: "object",
+          properties: (mcpTool.inputSchema.properties ?? {}) as JSONSchema7["properties"],
+          additionalProperties: false,
+        }
+        return dynamicTool({
+          description: mcpTool.description ?? "",
+          inputSchema: jsonSchema(schema),
+          execute: (args: unknown) => {
+            const payload = {
+              name: mcpTool.name,
+              arguments: (args || {}) as Record<string, unknown>,
+            }
+            // `onprogress` must be set for the MCP SDK to inject a
+            // progressToken; without it, `resetTimeoutOnProgress` is a no-op
+            // and long-running tools hit the default 60s timeout.
+            const opts = { onprogress: () => {}, resetTimeoutOnProgress: true, timeout }
+            return client.callTool(payload, CallToolResultSchema, opts).catch(async (e) => {
+              const isSession = isSessionExpiredError(e)
+              if (!isSession && !isTransportError(e)) throw e
+              log.warn(isSession ? "mcp session expired, reconnecting" : "mcp transport error, attempting reconnect", {
+                clientName,
+                tool: mcpTool.name,
+                error: e instanceof Error ? e.message : String(e),
+              })
+              const ok = await reconnectClient(clientName)
+              if (!ok) throw e
+              const next = await runLayerPromise(InstanceState.get(state))
+              const fresh = next.clients[clientName]
+              if (!fresh || next.status[clientName]?.status !== "connected") throw e
+              return fresh.callTool(payload, CallToolResultSchema, opts)
+            })
+          },
+        })
+      }
+
       const tools = Effect.fn("MCP.tools")(function* () {
         const result: Record<string, Tool> = {}
         const s = yield* InstanceState.get(state)
 
         const cfg = yield* cfgSvc.get()
         const config = cfg.mcp ?? {}
-        const defaultTimeout = cfg.experimental?.mcp_timeout
+        const defaultTimeout = cfg.experimental?.mcp_timeout ?? DEFAULT_TOOL_TIMEOUT
 
         const connectedClients = Object.entries(s.clients).filter(
           ([clientName]) => s.status[clientName]?.status === "connected",
@@ -656,7 +782,12 @@ export namespace MCP {
 
               const timeout = entry?.timeout ?? defaultTimeout
               for (const mcpTool of listed) {
-                result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+                result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = makeTool(
+                  clientName,
+                  mcpTool,
+                  client,
+                  timeout,
+                )
               }
             }),
           { concurrency: "unbounded" },
@@ -787,92 +918,97 @@ export namespace MCP {
       })
 
       const authenticate = Effect.fn("MCP.authenticate")(function* (mcpName: string) {
-        const result = yield* startAuth(mcpName)
-        if (!result.authorizationUrl) {
-          const client = "client" in result ? result.client : undefined
-          const mcpConfig = yield* getMcpConfig(mcpName)
-          if (!mcpConfig) {
-            yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
-            return { status: "failed", error: "MCP config not found after auth" } as Status
+        return yield* Effect.gen(function* () {
+          const result = yield* startAuth(mcpName)
+          if (!result.authorizationUrl) {
+            const client = "client" in result ? result.client : undefined
+            const mcpConfig = yield* getMcpConfig(mcpName)
+            if (!mcpConfig) {
+              yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
+              return { status: "failed", error: "MCP config not found after auth" } as Status
+            }
+
+            const listed = client ? yield* defs(mcpName, client, mcpConfig.timeout) : undefined
+            if (!client || !listed) {
+              yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
+              return { status: "failed", error: "Failed to get tools" } as Status
+            }
+
+            const s = yield* InstanceState.get(state)
+            yield* auth.clearOAuthState(mcpName)
+            return yield* storeClient(s, mcpName, client, listed, mcpConfig.timeout)
           }
 
-          const listed = client ? yield* defs(mcpName, client, mcpConfig.timeout) : undefined
-          if (!client || !listed) {
-            yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
-            return { status: "failed", error: "Failed to get tools" } as Status
-          }
+          log.info("opening browser for oauth", { mcpName, url: result.authorizationUrl, state: result.oauthState })
 
-          const s = yield* InstanceState.get(state)
-          yield* auth.clearOAuthState(mcpName)
-          return yield* storeClient(s, mcpName, client, listed, mcpConfig.timeout)
-        }
+          const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
 
-        log.info("opening browser for oauth", { mcpName, url: result.authorizationUrl, state: result.oauthState })
-
-        const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
-
-        yield* Effect.tryPromise(() => open(result.authorizationUrl)).pipe(
-          Effect.flatMap((subprocess) =>
-            Effect.callback<void, Error>((resume) => {
-              const timer = setTimeout(() => resume(Effect.void), 500)
-              subprocess.on("error", (err) => {
-                clearTimeout(timer)
-                resume(Effect.fail(err))
-              })
-              subprocess.on("exit", (code) => {
-                if (code !== null && code !== 0) {
+          yield* Effect.tryPromise(() => open(result.authorizationUrl)).pipe(
+            Effect.flatMap((subprocess) =>
+              Effect.callback<void, Error>((resume) => {
+                const timer = setTimeout(() => resume(Effect.void), 500)
+                subprocess.on("error", (err) => {
                   clearTimeout(timer)
-                  resume(Effect.fail(new Error(`Browser open failed with exit code ${code}`)))
-                }
-              })
+                  resume(Effect.fail(err))
+                })
+                subprocess.on("exit", (code) => {
+                  if (code !== null && code !== 0) {
+                    clearTimeout(timer)
+                    resume(Effect.fail(new Error(`Browser open failed with exit code ${code}`)))
+                  }
+                })
+              }),
+            ),
+            Effect.catch(() => {
+              log.warn("failed to open browser, user must open URL manually", { mcpName })
+              return bus.publish(BrowserOpenFailed, { mcpName, url: result.authorizationUrl }).pipe(Effect.ignore)
             }),
-          ),
-          Effect.catch(() => {
-            log.warn("failed to open browser, user must open URL manually", { mcpName })
-            return bus.publish(BrowserOpenFailed, { mcpName, url: result.authorizationUrl }).pipe(Effect.ignore)
-          }),
-        )
+          )
 
-        const code = yield* Effect.promise(() => callbackPromise)
+          const code = yield* Effect.promise(() => callbackPromise)
 
-        const storedState = yield* auth.getOAuthState(mcpName)
-        if (storedState !== result.oauthState) {
+          const storedState = yield* auth.getOAuthState(mcpName)
+          if (storedState !== result.oauthState) {
+            yield* auth.clearOAuthState(mcpName)
+            throw new Error("OAuth state mismatch - potential CSRF attack")
+          }
           yield* auth.clearOAuthState(mcpName)
-          throw new Error("OAuth state mismatch - potential CSRF attack")
-        }
-        yield* auth.clearOAuthState(mcpName)
-        return yield* finishAuth(mcpName, code)
+          return yield* finishAuth(mcpName, code)
+        }).pipe(Effect.ensuring(stopOAuthCallback))
       })
 
       const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string) {
-        const transport = pendingOAuthTransports.get(mcpName)
-        if (!transport) throw new Error(`No pending OAuth flow for MCP server: ${mcpName}`)
+        return yield* Effect.gen(function* () {
+          const transport = pendingOAuthTransports.get(mcpName)
+          if (!transport) throw new Error(`No pending OAuth flow for MCP server: ${mcpName}`)
 
-        const result = yield* Effect.tryPromise({
-          try: () => transport.finishAuth(authorizationCode).then(() => true as const),
-          catch: (error) => {
-            log.error("failed to finish oauth", { mcpName, error })
-            return error
-          },
-        }).pipe(Effect.option)
+          const result = yield* Effect.tryPromise({
+            try: () => transport.finishAuth(authorizationCode).then(() => true as const),
+            catch: (error) => {
+              log.error("failed to finish oauth", { mcpName, error })
+              return error
+            },
+          }).pipe(Effect.option)
 
-        if (Option.isNone(result)) {
-          return { status: "failed", error: "OAuth completion failed" } as Status
-        }
+          if (Option.isNone(result)) {
+            return { status: "failed", error: "OAuth completion failed" } as Status
+          }
 
-        yield* auth.clearCodeVerifier(mcpName)
-        pendingOAuthTransports.delete(mcpName)
+          yield* auth.clearCodeVerifier(mcpName)
+          pendingOAuthTransports.delete(mcpName)
 
-        const mcpConfig = yield* getMcpConfig(mcpName)
-        if (!mcpConfig) return { status: "failed", error: "MCP config not found after auth" } as Status
+          const mcpConfig = yield* getMcpConfig(mcpName)
+          if (!mcpConfig) return { status: "failed", error: "MCP config not found after auth" } as Status
 
-        return yield* createAndStore(mcpName, mcpConfig)
+          return yield* createAndStore(mcpName, mcpConfig)
+        }).pipe(Effect.ensuring(stopOAuthCallback))
       })
 
       const removeAuth = Effect.fn("MCP.removeAuth")(function* (mcpName: string) {
         yield* auth.remove(mcpName)
         McpOAuthCallback.cancelPending(mcpName)
         pendingOAuthTransports.delete(mcpName)
+        yield* stopOAuthCallback
         log.info("removed oauth credentials", { mcpName })
       })
 

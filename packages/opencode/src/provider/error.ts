@@ -26,6 +26,7 @@ export namespace ProviderError {
     /prompt too long; exceeded (?:max )?context length/i, // Ollama explicit overflow error
     /too large for model with \d+ maximum context length/i, // Mistral
     /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
+    /tokens in request more than max tokens allowed/i, // OpenAI-compatible providers
   ]
 
   function isOpenAiErrorRetryable(e: APICallError) {
@@ -117,7 +118,10 @@ export namespace ProviderError {
       }
 
   export function parseStreamError(input: unknown): ParsedStreamError | undefined {
-    const body = json(input)
+    const raw = json(input)
+    // Some SDKs wrap stream-error envelopes inside `{ message: "<json>" }`.
+    // Unwrap before classifying so the inner `type: "error"` envelope is seen.
+    const body = typeof raw?.message === "string" ? (json(raw.message) ?? raw) : raw
     if (!body) return
 
     const responseBody = JSON.stringify(body)
@@ -155,6 +159,7 @@ export namespace ProviderError {
           isRetryable: false,
           responseBody,
         }
+      case "server_is_overloaded":
       case "server_error":
       case "internal_server_error":
       case "overloaded_error":

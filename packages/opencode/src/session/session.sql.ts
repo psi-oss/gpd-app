@@ -1,11 +1,11 @@
-import { sqliteTable, text, integer, index, primaryKey } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { ProjectTable } from "../project/project.sql"
 import type { MessageV2 } from "./message-v2"
 import type { SessionEntry } from "../v2/session-entry"
 import type { Snapshot } from "../snapshot"
 import type { Permission } from "../permission"
 import type { ProjectID } from "../project/schema"
-import type { SessionID, MessageID, PartID } from "./schema"
+import type { SessionID, MessageID, PartID, GoalID } from "./schema"
 import type { WorkspaceID } from "../control-plane/schema"
 import { Timestamps } from "../storage/schema.sql"
 
@@ -92,6 +92,30 @@ export const TodoTable = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.session_id, table.position] }),
     index("todo_session_idx").on(table.session_id),
+  ],
+)
+
+export const SessionGoalTable = sqliteTable(
+  "session_goal",
+  {
+    id: text().$type<GoalID>().primaryKey(),
+    session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    objective: text().notNull(),
+    status: text().notNull(),
+    token_budget: integer(),
+    tokens_used: integer().notNull().default(0),
+    time_budget: integer(),
+    time_used: integer().notNull().default(0),
+    cost_budget_micro: integer(),
+    cost_used_micro: integer().notNull().default(0),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("session_goal_session_idx").on(table.session_id),
+    index("session_goal_status_idx").on(table.status),
   ],
 )
 

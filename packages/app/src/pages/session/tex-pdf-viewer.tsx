@@ -16,6 +16,13 @@ import { usePlatform } from "@/context/platform"
  * element and forces the viewer to forget its scroll position. This is
  * the right default: a new compile usually invalidates the previous view.
  */
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 3
+const ZOOM_STEP = 0.25
+const ZOOM_DEFAULT = 1
+
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))
+
 export function TexPdfViewer(props: {
   pdfPath: string
   /**
@@ -37,6 +44,19 @@ export function TexPdfViewer(props: {
       return `data:application/pdf;base64,${b64}`
     },
   )
+
+  // Zoom is implemented by scaling the iframe's CSS dimensions: the
+  // native PDF renderer (WebKit on macOS, WebView2 on Windows) auto-fits
+  // page width to its containing iframe, so a 200% iframe means a 200%
+  // page render. The outer container has overflow-auto so the user can
+  // scroll the oversized iframe in both axes. CSS transform: scale()
+  // would render-only and the overflow container wouldn't see the
+  // visual size; resizing the iframe itself makes layout honor the
+  // zoom and the scrollbars work.
+  const [zoom, setZoom] = createSignal(ZOOM_DEFAULT)
+  const zoomIn = () => setZoom((z) => clampZoom(z + ZOOM_STEP))
+  const zoomOut = () => setZoom((z) => clampZoom(z - ZOOM_STEP))
+  const zoomReset = () => setZoom(ZOOM_DEFAULT)
 
   // Re-fetch whenever the path changes (e.g. recompile produced a new build).
   createEffect(
@@ -137,21 +157,54 @@ export function TexPdfViewer(props: {
             ›
           </button>
         </div>
-        <Show when={props.onJumpToSource}>
-          {(handler) => (
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1">
             <button
               type="button"
-              class="px-2 py-0.5 rounded hover:bg-background-weaker-base"
-              title={language.t("tex.pdf.jumpToSource.hint")}
-              onClick={() => handler()({ page: page(), x: 50, y: 50 })}
+              class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+              onClick={zoomOut}
+              disabled={zoom() <= ZOOM_MIN + 1e-6}
+              aria-label={language.t("tex.pdf.zoomOut")}
+              title={language.t("tex.pdf.zoomOut")}
             >
-              {language.t("tex.pdf.jumpToSource")}
+              −
             </button>
-          )}
-        </Show>
+            <button
+              type="button"
+              class="px-2 py-0.5 rounded hover:bg-background-weaker-base text-12-regular tabular-nums min-w-[3.5em] text-center"
+              onClick={zoomReset}
+              aria-label={language.t("tex.pdf.zoomReset")}
+              title={language.t("tex.pdf.zoomReset")}
+            >
+              {Math.round(zoom() * 100)}%
+            </button>
+            <button
+              type="button"
+              class="px-2 py-0.5 rounded hover:bg-background-weaker-base disabled:opacity-40 disabled:hover:bg-transparent"
+              onClick={zoomIn}
+              disabled={zoom() >= ZOOM_MAX - 1e-6}
+              aria-label={language.t("tex.pdf.zoomIn")}
+              title={language.t("tex.pdf.zoomIn")}
+            >
+              +
+            </button>
+          </div>
+          <Show when={props.onJumpToSource}>
+            {(handler) => (
+              <button
+                type="button"
+                class="px-2 py-0.5 rounded hover:bg-background-weaker-base"
+                title={language.t("tex.pdf.jumpToSource.hint")}
+                onClick={() => handler()({ page: page(), x: 50, y: 50 })}
+              >
+                {language.t("tex.pdf.jumpToSource")}
+              </button>
+            )}
+          </Show>
+        </div>
       </div>
 
-      <div class="flex-1 min-h-0">
+      <div class="flex-1 min-h-0 overflow-auto">
         <Show
           when={dataUrl()}
           fallback={
@@ -166,7 +219,13 @@ export function TexPdfViewer(props: {
                 iframeRef = el
               }}
               src={url()}
-              class="w-full h-full border-0 bg-white"
+              class="border-0 bg-white"
+              style={{
+                width: `${zoom() * 100}%`,
+                height: `${zoom() * 100}%`,
+                "min-width": "100%",
+                "min-height": "100%",
+              }}
               title={language.t("tex.pdf.title")}
               onLoad={() => startPolling()}
             />

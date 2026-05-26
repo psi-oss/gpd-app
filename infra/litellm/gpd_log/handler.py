@@ -58,9 +58,27 @@ _PEPPER = bytes.fromhex(_PEPPER_HEX)
 # Blocklist of user_ids reserved for CI / smoke testing. These values
 # must NEVER write to the production log bucket. Caller is expected to
 # either use a real virtual-key user_id or hit a dedicated smoke-test
-# endpoint that writes elsewhere. See `gpd-desktop-logs/user=236baedff028ad77/`
-# for the historical pollution we're guarding against (LAUNCH-READINESS.md
-# P0-4).
+# endpoint that writes elsewhere. Original incident: a 2026-04-21/22
+# testing wave hit /gpd/log with `user_id=smoke` and polluted the prod
+# bucket (LAUNCH-READINESS.md P0-4).
+#
+# If a `user_id=smoke` event were to land today, it would write to
+# `user=4e83a97d2290c1e1/` (HMAC under the current pepper); pre-HMAC
+# events from the same incident would have used the bare-sha256 path
+# `user=04d588cb41b8022d/`. As of 2026-05-18 neither prefix exists in
+# the live bucket — the historical pollution appears to have been
+# purged or never landed in the first place.
+#
+# The canary user_id `gpd-smoke-canary` (used by the
+# `litellm-smoke-test.yml` workflow) is NOT in this blocklist — it is
+# an intentional legitimate writer that exercises /gpd/log
+# end-to-end. Its HMAC prefix is `user=236baedff028ad77/`. As of
+# 2026-05-18 that prefix is empty in the bucket because the smoke
+# workflow's `LITELLM_SMOKE_CANARY_KEY` GH secret is a stale virtual
+# key (`sk-...r0MQ`) that LiteLLM no longer recognises — every run
+# fails with HTTP 401 at step 1 and never writes a row. Rotate the
+# secret to restore canary coverage. Details in
+# .planning/INVESTIGATION-2026-05-18-user-hash-attribution.md.
 _BLOCKED_TEST_USER_IDS = frozenset({
     "smoke",
     "smoke-test",
@@ -129,12 +147,15 @@ async def gpd_log(
 
     # Reject reserved test/CI user_ids. We mistakenly shipped a smoke-CI
     # workflow that hit `/gpd/log` with `user_id=smoke` in the early
-    # 2026-04-21 / 22 testing wave; the resulting rows are in the prod
-    # bucket as gs://gpd-desktop-logs/user=236baedff028ad77/. Block the
-    # known testing values at the source so the bucket only ever
-    # contains real-user telemetry going forward. Smoke tests should hit
-    # a dedicated test endpoint (or write to a quarantine bucket via a
-    # separate route).
+    # 2026-04-21 / 22 testing wave. Those events would have landed under
+    # `gs://gpd-desktop-logs/user=04d588cb41b8022d/` (pre-HMAC) and
+    # `user=4e83a97d2290c1e1/` (post-HMAC under the current pepper);
+    # neither prefix exists in the bucket on 2026-05-18, so the data
+    # was either purged or never actually wrote (not investigated).
+    # Block the known testing values at the source so the bucket only
+    # ever contains real-user telemetry going forward. Smoke tests
+    # should hit a dedicated test endpoint (or write to a quarantine
+    # bucket via a separate route).
     if user_id in _BLOCKED_TEST_USER_IDS:
         raise HTTPException(
             403,

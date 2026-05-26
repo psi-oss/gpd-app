@@ -14,6 +14,15 @@ function first(value: string) {
 export interface AvatarProps extends ComponentProps<"div"> {
   fallback: string
   src?: string
+  /**
+   * Explicit text override — when set, renders this string literally
+   * instead of the auto-derived first-grapheme of `fallback`. Used by
+   * the project icon path to support user-chosen 1-2 char glyphs that
+   * disambiguate sidebar projects sharing the same starting letter
+   * (RES-1010). Caller is responsible for keeping it short; the avatar
+   * box's `overflow: hidden` clips overflow if anyone abuses it.
+   */
+  text?: string
   background?: string
   foreground?: string
   size?: "small" | "normal" | "large"
@@ -23,6 +32,7 @@ export function Avatar(props: AvatarProps) {
   const [split, rest] = splitProps(props, [
     "fallback",
     "src",
+    "text",
     "background",
     "foreground",
     "size",
@@ -31,6 +41,7 @@ export function Avatar(props: AvatarProps) {
     "style",
   ])
   const src = split.src // did this so i can zero it out to test fallback
+  const textOverride = () => (split.text ? split.text.trim() : "")
   return (
     <div
       {...rest}
@@ -47,7 +58,7 @@ export function Avatar(props: AvatarProps) {
         ...(!src && split.foreground ? { "--avatar-fg": split.foreground } : {}),
       }}
     >
-      <Show when={src} fallback={first(split.fallback)}>
+      <Show when={src} fallback={textOverride() || first(split.fallback)}>
         {(src) => <img src={src()} draggable={false} data-slot="avatar-image" />}
       </Show>
     </div>

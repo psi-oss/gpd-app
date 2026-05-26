@@ -17,15 +17,26 @@
  * bake deployment-specific names into every invocation. Every value can
  * also be overridden via CLI flag.
  *
- *   GPD_LITELLM_BASE      (default: empty — must be passed via --litellm-base)
- *   GPD_LOG_BUCKET        (default: empty — must be passed via --bucket)
- *   GPD_BQ_PROJECT        (default: empty — must be passed via --bq-project)
- *   GPD_BQ_DATASET        (default: "gpd_logs")
+ *   GPD_LITELLM_BASE        (default: empty — must be passed via --litellm-base)
+ *   GPD_LOG_BUCKET          (default: empty — must be passed via --bucket)
+ *   GPD_BQ_PROJECT          (default: empty — must be passed via --bq-project)
+ *   GPD_BQ_DATASET          (default: "gpd_logs")
+ *   GPD_USER_HASH_PEPPER    (hex; required only when using --user-id)
+ *
+ * user_hash derivation matches the server: HMAC-SHA256(pepper, user_id)[:16]
+ * (see infra/litellm/gpd_log/handler.py). Bare sha256(user_id) — what this
+ * script computed before — does NOT match production paths and would cause
+ * a silent no-op delete. Prefer pre-computing the hash on the Railway
+ * litellm service (`infra/litellm/scripts/lookup-user-hash.py
+ * --user-id=...`) and passing --user-hash here.
  *
  * Usage:
- *   GPD_LITELLM_BASE=https://... GPD_LOG_BUCKET=... GPD_BQ_PROJECT=... \
- *     bun scripts/delete-user.ts --user-id=<plain user id>
- *   bun scripts/delete-user.ts --user-hash=<16 hex chars> --litellm-base=... --bucket=... --bq-project=...
+ *   bun scripts/delete-user.ts --user-hash=<16 hex chars> \
+ *     --litellm-base=... --bucket=... --bq-project=...
+ *
+ *   # Or, if the pepper is available locally:
+ *   GPD_USER_HASH_PEPPER=<hex> GPD_LITELLM_BASE=... GPD_LOG_BUCKET=... \
+ *     GPD_BQ_PROJECT=... bun scripts/delete-user.ts --user-id=<plain user id>
  *
  *   Add --confirm to actually delete.
  *   Add --litellm-master-key=<sk-...> to also purge the LiteLLM records.
@@ -48,8 +59,13 @@ function flag(name: string): boolean {
   return process.argv.includes(`--${name}`)
 }
 
-function hashUserId(userId: string): string {
-  return crypto.createHash("sha256").update(userId, "utf8").digest("hex").slice(0, 16)
+function hashUserId(userId: string, pepperHex: string): string {
+  if (!/^[0-9a-fA-F]+$/.test(pepperHex) || pepperHex.length % 2 !== 0) {
+    die("GPD_USER_HASH_PEPPER must be a hex string with even length")
+  }
+  const pepper = Buffer.from(pepperHex, "hex")
+  if (pepper.length === 0) die("GPD_USER_HASH_PEPPER must be non-empty hex bytes")
+  return crypto.createHmac("sha256", pepper).update(userId, "utf8").digest("hex").slice(0, 16)
 }
 
 function run(cmd: string, args: string[], opts: { capture?: boolean } = {}): string {
@@ -69,6 +85,7 @@ const litellmBase = arg("litellm-base") ?? process.env.GPD_LITELLM_BASE
 const bucket = arg("bucket") ?? process.env.GPD_LOG_BUCKET
 const bqProject = arg("bq-project") ?? process.env.GPD_BQ_PROJECT
 const bqDataset = arg("bq-dataset") ?? process.env.GPD_BQ_DATASET ?? "gpd_logs"
+const pepperHex = process.env.GPD_USER_HASH_PEPPER
 
 if (!litellmBase) die("pass --litellm-base=... or set GPD_LITELLM_BASE")
 if (!bucket) die("pass --bucket=... or set GPD_LOG_BUCKET")
@@ -76,10 +93,18 @@ if (!bqProject) die("pass --bq-project=... or set GPD_BQ_PROJECT")
 
 if (!userId && !userHashArg) die("pass --user-id=<id> OR --user-hash=<hash>")
 if (userHashArg && !/^[0-9a-f]{16}$/.test(userHashArg)) {
-  die("--user-hash must be 16 hex chars (first 16 of sha256)")
+  die("--user-hash must be 16 hex chars (first 16 of hmac_sha256)")
+}
+if (userId && !pepperHex) {
+  die(
+    "--user-id requires GPD_USER_HASH_PEPPER in env (same value as the Railway litellm service).\n" +
+      "       Alternatively, pre-compute the hash on Railway:\n" +
+      "         railway ssh --service litellm 'python3 -c \"...\"'  # see infra/litellm/scripts/lookup-user-hash.py\n" +
+      "       then pass --user-hash=<hash> here.",
+  )
 }
 
-const userHash = userHashArg ?? hashUserId(userId!)
+const userHash = userHashArg ?? hashUserId(userId!, pepperHex!)
 const dryRun = !confirm
 
 console.log(`--- GDPR delete ---`)

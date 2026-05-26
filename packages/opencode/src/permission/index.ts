@@ -11,6 +11,7 @@ import { Log } from "@/util/log"
 import { Wildcard } from "@/util/wildcard"
 import { Deferred, Effect, Layer, Schema, Context } from "effect"
 import os from "os"
+import path from "path"
 import z from "zod"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
@@ -168,9 +169,19 @@ export namespace Permission {
         const { ruleset, ...request } = input
         let needsAsk = false
 
+        // For each requested pattern, evaluate both the relative and absolute
+        // forms and pick the rule with the longest matching pattern. This
+        // ensures specific path/command rules win over wildcard catch-alls
+        // regardless of whether the caller passed a relative or absolute path.
         for (const pattern of request.patterns) {
-          const rule = evaluate(request.permission, pattern, ruleset, approved)
-          log.info("evaluated", { permission: request.permission, pattern, action: rule })
+          const candidates = [pattern]
+          if (!path.isAbsolute(pattern)) candidates.push(path.resolve(Instance.worktree, pattern))
+          const evaluated = candidates.map((p) => {
+            const rule = evaluate(request.permission, p, ruleset, approved)
+            log.info("evaluated", { permission: request.permission, pattern: p, action: rule })
+            return rule
+          })
+          const rule = evaluated.reduce((a, b) => (b.pattern.length > a.pattern.length ? b : a), evaluated[0])
           if (rule.action === "deny") {
             return yield* new DeniedError({
               ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
@@ -285,7 +296,15 @@ export namespace Permission {
 
   export function fromConfig(permission: Config.Permission) {
     const ruleset: Ruleset = []
-    for (const [key, value] of Object.entries(permission)) {
+    // Process wildcard permission keys first so that specific tool rules
+    // (like "bash") always appear later and win via findLast.
+    // This prevents key ordering issues from mergeDeep where "*" can end up
+    // after specific tools in the object.
+    // See: https://github.com/anomalyco/opencode/issues/8832
+    const entries = Object.entries(permission)
+    const wildcards = entries.filter(([key]) => key.includes("*"))
+    const rest = entries.filter(([key]) => !key.includes("*"))
+    for (const [key, value] of [...wildcards, ...rest]) {
       if (typeof value === "string") {
         ruleset.push({ permission: key, action: value, pattern: "*" })
         continue

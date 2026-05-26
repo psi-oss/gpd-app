@@ -1083,6 +1083,8 @@ export namespace Config {
     directories: string[]
     deps: Fiber.Fiber<void, never>[]
     consoleState: ConsoleState
+    files: string[]
+    fingerprints: Record<string, string>
   }
 
   export interface Interface {
@@ -1174,6 +1176,24 @@ export namespace Config {
   }
 
   export const { JsonError, InvalidError } = ConfigPaths
+
+  async function fingerprintFile(filepath: string) {
+    try {
+      const stat = await fsNode.stat(filepath)
+      return `${stat.size}:${stat.mtimeMs}`
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing"
+      throw err
+    }
+  }
+
+  async function fingerprintFiles(files: string[]) {
+    const result: Record<string, string> = {}
+    for (const file of files) {
+      result[file] = await fingerprintFile(file)
+    }
+    return result
+  }
 
   export const ConfigDirectoryTypoError = NamedError.create(
     "ConfigDirectoryTypoError",
@@ -1388,6 +1408,7 @@ export namespace Config {
         const auth = yield* authSvc.all().pipe(Effect.orDie)
 
         let result: Info = {}
+        const files = new Set<string>()
         const consoleManagedProviders = new Set<string>()
         let activeOrgName: string | undefined
 
@@ -1436,10 +1457,15 @@ export namespace Config {
           }
         }
 
+        for (const file of ["config.json", "opencode.json", "opencode.jsonc"]) {
+          files.add(path.join(Global.Path.config, file))
+        }
+
         const global = yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
         if (Flag.OPENCODE_CONFIG) {
+          files.add(Flag.OPENCODE_CONFIG)
           yield* merge(Flag.OPENCODE_CONFIG, yield* loadFile(Flag.OPENCODE_CONFIG))
           log.debug("loaded custom config", { path: Flag.OPENCODE_CONFIG })
         }
@@ -1448,6 +1474,7 @@ export namespace Config {
           for (const file of yield* Effect.promise(() =>
             ConfigPaths.projectFiles("opencode", ctx.directory, ctx.worktree),
           )) {
+            files.add(file)
             yield* merge(file, yield* loadFile(file), "local")
           }
         }
@@ -1468,6 +1495,7 @@ export namespace Config {
           if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
             for (const file of ["opencode.json", "opencode.jsonc"]) {
               const source = path.join(dir, file)
+              files.add(source)
               log.debug(`loading config from ${source}`)
               yield* merge(source, yield* loadFile(source))
               result.agent ??= {}
@@ -1547,6 +1575,7 @@ export namespace Config {
         if (existsSync(managedDir)) {
           for (const file of ["opencode.json", "opencode.jsonc"]) {
             const source = path.join(managedDir, file)
+            files.add(source)
             yield* merge(source, yield* loadFile(source), "global")
           }
         }
@@ -1593,10 +1622,14 @@ export namespace Config {
           result.compaction = { ...result.compaction, prune: false }
         }
 
+        const trackedFiles = Array.from(files)
+
         return {
           config: result,
           directories,
           deps,
+          files: trackedFiles,
+          fingerprints: yield* Effect.promise(() => fingerprintFiles(trackedFiles)),
           consoleState: {
             consoleManagedProviders: Array.from(consoleManagedProviders),
             activeOrgName,
@@ -1612,6 +1645,15 @@ export namespace Config {
       )
 
       const get = Effect.fn("Config.get")(function* () {
+        const current = yield* InstanceState.get(state)
+        const latest = yield* Effect.promise(() => fingerprintFiles(current.files))
+        const changed = current.files.some((file: string) => latest[file] !== current.fingerprints[file])
+
+        if (changed) {
+          yield* invalidateGlobal
+          yield* InstanceState.invalidate(state)
+        }
+
         return yield* InstanceState.use(state, (s) => s.config)
       })
 
@@ -1644,6 +1686,7 @@ export namespace Config {
 
       const invalidate = Effect.fn("Config.invalidate")(function* (wait?: boolean) {
         yield* invalidateGlobal
+        yield* InstanceState.invalidate(state)
         const task = Instance.disposeAll()
           .catch(() => undefined)
           .finally(() =>

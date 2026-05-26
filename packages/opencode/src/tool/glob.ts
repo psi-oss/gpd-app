@@ -9,6 +9,8 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
 import { Tool } from "./tool"
 
+const SEARCH_TIMEOUT_MS = 30_000
+
 export const GlobTool = Tool.define(
   "glob",
   Effect.gen(function* () {
@@ -47,9 +49,13 @@ export const GlobTool = Tool.define(
           }
           yield* assertExternalDirectoryEffect(ctx, search, { kind: "directory" })
 
+          const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+          const signal = AbortSignal.any([ctx.abort, timeoutSignal])
+
           const limit = 100
           let truncated = false
-          const files = yield* rg.files({ cwd: search, glob: [params.pattern], signal: ctx.abort }).pipe(
+          let timedOut = false
+          const files = yield* rg.files({ cwd: search, glob: [params.pattern], signal }).pipe(
             Stream.mapEffect((file) =>
               Effect.gen(function* () {
                 const full = path.resolve(search, file)
@@ -65,6 +71,13 @@ export const GlobTool = Tool.define(
             Stream.take(limit + 1),
             Stream.runCollect,
             Effect.map((chunk) => [...chunk]),
+            Effect.catchIf(
+              () => timeoutSignal.aborted && !ctx.abort.aborted,
+              () => {
+                timedOut = true
+                return Effect.succeed([] as { path: string; mtime: number }[])
+              },
+            ),
           )
 
           if (files.length > limit) {
@@ -74,7 +87,13 @@ export const GlobTool = Tool.define(
           files.sort((a, b) => b.mtime - a.mtime)
 
           const output = []
-          if (files.length === 0) output.push("No files found")
+          if (timedOut) {
+            output.push(
+              `Search timed out after ${SEARCH_TIMEOUT_MS / 1000}s. The search path "${search}" is too broad. Use a more specific path closer to the target files.`,
+            )
+          } else if (files.length === 0) {
+            output.push("No files found")
+          }
           if (files.length > 0) {
             output.push(...files.map((file) => file.path))
             if (truncated) {

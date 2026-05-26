@@ -5,6 +5,7 @@ import { Session } from "../session"
 import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
+import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "../config/config"
 import { Effect } from "effect"
@@ -14,6 +15,19 @@ export interface TaskPromptOps {
   cancel(sessionID: SessionID): void
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<MessageV2.WithParts>
+}
+
+/**
+ * Strip leading/trailing whitespace and zero-width / BOM characters from a
+ * subagent_type string before it is used for agent lookup.  Defensive fix for
+ * issue #24276 where upstream skill emitters can prefix the value with a
+ * zero-width space (U+200B), causing ProviderModelNotFoundError.
+ *
+ * Characters removed: U+200B ZERO-WIDTH SPACE, U+200C ZERO-WIDTH NON-JOINER,
+ * U+200D ZERO-WIDTH JOINER, U+FEFF BOM / ZERO-WIDTH NO-BREAK SPACE.
+ */
+export function sanitizeAgentTypeId(value: string): string {
+  return value.replace(/[​‌‍﻿]/g, "").trim()
 }
 
 const id = "task"
@@ -53,17 +67,19 @@ export const TaskTool = Tool.define(
         })
       }
 
-      const next = yield* agent.get(params.subagent_type)
+      const agentTypeId = sanitizeAgentTypeId(params.subagent_type)
+      const next = yield* agent.get(agentTypeId)
       if (!next) {
-        return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
+        return yield* Effect.fail(new Error(`Unknown agent type: ${agentTypeId} is not a valid agent type`))
       }
-
-      const canTask = next.permission.some((rule) => rule.permission === id)
-      const canTodo = next.permission.some((rule) => rule.permission === "todowrite")
 
       const taskID = params.task_id
       const session = taskID
         ? yield* sessions.get(SessionID.make(taskID)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        : undefined
+      const parent = yield* sessions.get(ctx.sessionID)
+      const parentAgent = ctx.agent
+        ? yield* agent.get(ctx.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       const nextSession =
         session ??
@@ -71,24 +87,11 @@ export const TaskTool = Tool.define(
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           permission: [
-            ...(canTodo
-              ? []
-              : [
-                  {
-                    permission: "todowrite" as const,
-                    pattern: "*" as const,
-                    action: "deny" as const,
-                  },
-                ]),
-            ...(canTask
-              ? []
-              : [
-                  {
-                    permission: id,
-                    pattern: "*" as const,
-                    action: "deny" as const,
-                  },
-                ]),
+            ...deriveSubagentSessionPermission({
+              parentSessionPermission: parent.permission ?? [],
+              parentAgent,
+              subagent: next,
+            }),
             ...(cfg.experimental?.primary_tools?.map((item) => ({
               pattern: "*",
               action: "allow" as const,
@@ -138,9 +141,10 @@ export const TaskTool = Tool.define(
               },
               agent: next.name,
               tools: {
-                ...(canTodo ? {} : { todowrite: false }),
-                ...(canTask ? {} : { task: false }),
+                ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
+                ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
                 ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
+                plan_exit: false,
               },
               parts,
             })

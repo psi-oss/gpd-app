@@ -36,6 +36,8 @@ import type {
   ExperimentalWorkspaceRemoveErrors,
   ExperimentalWorkspaceRemoveResponses,
   ExperimentalWorkspaceStatusResponses,
+  FileCreateErrors,
+  FileCreateResponses,
   FileDeleteErrors,
   FileDeleteResponses,
   FileEditLineErrors,
@@ -137,6 +139,14 @@ import type {
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionGoalClearErrors,
+  SessionGoalClearResponses,
+  SessionGoalCreateErrors,
+  SessionGoalCreateResponses,
+  SessionGoalGetErrors,
+  SessionGoalGetResponses,
+  SessionGoalUpdateErrors,
+  SessionGoalUpdateResponses,
   SessionInitErrors,
   SessionInitResponses,
   SessionListResponses,
@@ -652,6 +662,7 @@ export class Project extends HeyApiClient {
         url?: string
         override?: string
         color?: string
+        character?: string
       }
       commands?: {
         /**
@@ -1660,6 +1671,164 @@ export class Worktree extends HeyApiClient {
   }
 }
 
+export class Goal extends HeyApiClient {
+  /**
+   * Clear session goal
+   *
+   * Clear the current session goal.
+   */
+  public clear<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<SessionGoalClearResponses, SessionGoalClearErrors, ThrowOnError>({
+      url: "/session/{sessionID}/goal",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get session goal
+   *
+   * Retrieve the current goal for a session, if one exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionGoalGetResponses, SessionGoalGetErrors, ThrowOnError>({
+      url: "/session/{sessionID}/goal",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update session goal
+   *
+   * Update goal objective, status, or token budget.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      objective?: string
+      status?: "active" | "paused" | "budget_limited" | "complete"
+      tokenBudget?: number | null
+      timeBudgetSeconds?: number | null
+      costBudgetUSD?: number | null
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "objective" },
+            { in: "body", key: "status" },
+            { in: "body", key: "tokenBudget" },
+            { in: "body", key: "timeBudgetSeconds" },
+            { in: "body", key: "costBudgetUSD" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<SessionGoalUpdateResponses, SessionGoalUpdateErrors, ThrowOnError>({
+      url: "/session/{sessionID}/goal",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create session goal
+   *
+   * Create a persistent goal for a session.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      objective?: string
+      tokenBudget?: number
+      timeBudgetSeconds?: number
+      costBudgetUSD?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "objective" },
+            { in: "body", key: "tokenBudget" },
+            { in: "body", key: "timeBudgetSeconds" },
+            { in: "body", key: "costBudgetUSD" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionGoalCreateResponses, SessionGoalCreateErrors, ThrowOnError>({
+      url: "/session/{sessionID}/goal",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -2606,6 +2775,11 @@ export class Session2 extends HeyApiClient {
       ...params,
     })
   }
+
+  private _goal?: Goal
+  get goal(): Goal {
+    return (this._goal ??= new Goal({ client: this.client }))
+  }
 }
 
 export class Part extends HeyApiClient {
@@ -3377,6 +3551,45 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<FileDeleteResponses, FileDeleteErrors, ThrowOnError>({
       url: "/file/delete",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create file or directory
+   *
+   * Create a new empty file or directory under the project directory. Returns 409 if the target path already exists. Directory creation is recursive (missing parents inside the project root are created).
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      type?: "file" | "directory"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileCreateResponses, FileCreateErrors, ThrowOnError>({
+      url: "/file/create",
       ...options,
       ...params,
       headers: {

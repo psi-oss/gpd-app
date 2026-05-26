@@ -10,8 +10,9 @@ import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { File } from "@opencode-ai/ui/file"
 import { Markdown } from "@opencode-ai/ui/markdown"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
-import type { Message, Part, UserMessage } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part, SessionGoal, UserMessage } from "@opencode-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
+import { GoalStatusPill } from "./goal-popover"
 import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContextMetrics } from "./session-context-metrics"
@@ -97,6 +98,17 @@ export function SessionContextTab() {
   const { params, view } = useSessionLayout()
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const goal = createMemo(() => sync.data.session_goal[params.id ?? ""])
+
+  function usageSummary(g: SessionGoal): string {
+    const parts: string[] = []
+    if (g.time.budgetSeconds !== undefined) parts.push(`${g.time.used}s / ${g.time.budgetSeconds}s`)
+    else if (g.time.used > 0) parts.push(`${g.time.used}s`)
+    if (g.cost.budgetMicroUSD !== undefined)
+      parts.push(`$${(g.cost.usedMicroUSD / 1_000_000).toFixed(2)} / $${(g.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`)
+    else if (g.cost.usedMicroUSD > 0) parts.push(`$${(g.cost.usedMicroUSD / 1_000_000).toFixed(2)}`)
+    return parts.length > 0 ? parts.join(" · ") : "—"
+  }
 
   const messages = createMemo(
     () => {
@@ -277,6 +289,18 @@ export function SessionContextTab() {
       onScroll={handleScroll}
     >
       <div class="px-6 pt-4 pb-10 flex flex-col gap-10">
+        <Show when={goal()}>
+          {(g) => (
+            <div class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-stronger px-3 py-2.5">
+              <div class="flex items-center gap-2">
+                <span class="text-13-medium text-text-strong">{language.t("session.goal.title")}</span>
+                <GoalStatusPill status={g().status} />
+              </div>
+              <p class="text-12-regular text-text-strong break-words">{g().objective}</p>
+              <div class="text-11-regular text-text-weak tabular-nums">{usageSummary(g())}</div>
+            </div>
+          )}
+        </Show>
         <div class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
           <For each={stats}>
             {(stat) => <Stat label={language.t(stat.label as Parameters<typeof language.t>[0])} value={stat.value()} />}

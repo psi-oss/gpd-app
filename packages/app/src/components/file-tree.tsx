@@ -9,6 +9,7 @@ import { Icon } from "@opencode-ai/ui/icon"
 import {
   createEffect,
   createMemo,
+  createSignal,
   For,
   Match,
   on,
@@ -194,7 +195,93 @@ const FileTreeNode = (
   )
 }
 
-export type FileContextAction = "copy-path" | "copy-contents" | "reveal" | "delete"
+export type FileContextAction = "copy-path" | "copy-contents" | "reveal" | "delete" | "new-file" | "new-folder"
+
+export type PendingCreate = { parent: string; type: "file" | "directory" }
+
+const CreateRow = (props: {
+  level: number
+  type: "file" | "directory"
+  onSubmit: (name: string) => void | Promise<void>
+  onCancel: () => void
+}) => {
+  const language = useLanguage()
+  const [value, setValue] = createSignal("")
+  const [busy, setBusy] = createSignal(false)
+  let inputRef: HTMLInputElement | undefined
+
+  const submit = async () => {
+    if (busy()) return
+    const name = value().trim()
+    if (!name) {
+      props.onCancel()
+      return
+    }
+    if (name.includes("/") || name.includes("\\")) {
+      return
+    }
+    setBusy(true)
+    try {
+      await props.onSubmit(name)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      classList={{
+        "w-full min-w-0 h-6 flex items-center justify-start gap-x-1.5 rounded-md px-1.5 py-0 text-left bg-surface-raised-base-hover": true,
+      }}
+      style={`padding-left: ${Math.max(0, 8 + props.level * 12 - (props.type === "file" ? 24 : 4))}px`}
+    >
+      <Show
+        when={props.type === "directory"}
+        fallback={<div class="w-4 shrink-0" />}
+      >
+        <div class="size-4 flex items-center justify-center text-icon-weak">
+          <Icon name="chevron-right" size="small" />
+        </div>
+      </Show>
+      <Icon
+        name={props.type === "directory" ? "folder" : "file-tree"}
+        size="small"
+        class="shrink-0 text-icon-weak"
+      />
+      <input
+        ref={(el) => {
+          inputRef = el
+          queueMicrotask(() => el.focus())
+        }}
+        type="text"
+        value={value()}
+        onInput={(e) => setValue(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault()
+            void submit()
+          } else if (e.key === "Escape") {
+            e.preventDefault()
+            props.onCancel()
+          }
+        }}
+        onBlur={() => {
+          if (busy()) return
+          if (value().trim().length === 0) {
+            props.onCancel()
+            return
+          }
+          void submit()
+        }}
+        disabled={busy()}
+        placeholder={language.t(
+          props.type === "directory" ? "filetree.create.folder.placeholder" : "filetree.create.file.placeholder",
+        )}
+        class="flex-1 min-w-0 bg-transparent text-12-medium text-text-strong outline-none placeholder:text-text-weaker"
+      />
+    </div>
+  )
+}
 
 export default function FileTree(props: {
   path: string
@@ -208,6 +295,9 @@ export default function FileTree(props: {
   draggable?: boolean
   onFileClick?: (file: FileNode) => void
   onFileContextAction?: (action: FileContextAction, file: FileNode) => void
+  pending?: PendingCreate
+  onCreateSubmit?: (parent: string, type: "file" | "directory", name: string) => void | Promise<void>
+  onCreateCancel?: () => void
 
   _filter?: Filter
   _marks?: Set<string>
@@ -394,6 +484,14 @@ export default function FileTree(props: {
 
   return (
     <div data-component="filetree" class={`flex flex-col gap-0.5 ${props.class ?? ""}`}>
+      <Show when={props.pending && props.pending.parent === props.path}>
+        <CreateRow
+          level={level}
+          type={props.pending!.type}
+          onSubmit={(name) => props.onCreateSubmit?.(props.path, props.pending!.type, name)}
+          onCancel={() => props.onCreateCancel?.()}
+        />
+      </Show>
       <For each={nodes()}>
         {(node) => {
           const expanded = () => file.tree.state(node.path)?.expanded ?? false
@@ -412,8 +510,9 @@ export default function FileTree(props: {
                   open={expanded()}
                   onOpenChange={(open) => (open ? file.tree.expand(node.path) : file.tree.collapse(node.path))}
                 >
-                  <Collapsible.Trigger>
-                    <FileTreeNode
+                  <ContextMenu>
+                    <ContextMenu.Trigger
+                      as={FileTreeNode}
                       node={node}
                       level={level}
                       active={props.active}
@@ -421,12 +520,34 @@ export default function FileTree(props: {
                       draggable={draggable()}
                       kinds={kinds()}
                       marks={marks()}
+                      host="button"
+                      type="button"
+                      onClick={() => file.tree.toggle(node.path)}
                     >
                       <div class="size-4 flex items-center justify-center text-icon-weak">
                         <Icon name={expanded() ? "chevron-down" : "chevron-right"} size="small" />
                       </div>
-                    </FileTreeNode>
-                  </Collapsible.Trigger>
+                    </ContextMenu.Trigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onSelect={() => props.onFileContextAction?.("new-file", node)}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFile")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                        <ContextMenu.Item onSelect={() => props.onFileContextAction?.("new-folder", node)}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFolder")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onSelect={() => props.onFileContextAction?.("copy-path", node)}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.copyPath")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                        <Show when={platform.revealPath}>
+                          <ContextMenu.Item onSelect={() => props.onFileContextAction?.("reveal", node)}>
+                            <ContextMenu.ItemLabel>{language.t("filetree.menu.reveal")}</ContextMenu.ItemLabel>
+                          </ContextMenu.Item>
+                        </Show>
+                      </ContextMenu.Content>
+                    </ContextMenu.Portal>
+                  </ContextMenu>
                   <Collapsible.Content class="relative pt-0.5">
                     <div
                       classList={{
@@ -450,6 +571,9 @@ export default function FileTree(props: {
                         draggable={props.draggable}
                         onFileClick={props.onFileClick}
                         onFileContextAction={props.onFileContextAction}
+                        pending={props.pending}
+                        onCreateSubmit={props.onCreateSubmit}
+                        onCreateCancel={props.onCreateCancel}
                         _filter={filter()}
                         _marks={marks()}
                         _deeps={deeps()}

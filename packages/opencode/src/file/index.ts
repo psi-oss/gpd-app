@@ -9,7 +9,7 @@ import { createHash, randomUUID } from "crypto"
 import { formatPatch, structuredPatch } from "diff"
 import fuzzysort from "fuzzysort"
 import ignore from "ignore"
-import { rename, unlink } from "fs/promises"
+import { mkdir, open, rename, unlink } from "fs/promises"
 import path from "path"
 import z from "zod"
 import { Global } from "../global"
@@ -150,6 +150,27 @@ export namespace File {
       ref: "FileDeleteConflict",
     })
   export type DeleteConflict = z.infer<typeof DeleteConflict>
+
+  export const CreateResult = z
+    .object({
+      ok: z.literal(true),
+      path: z.string(),
+      type: z.enum(["file", "directory"]),
+    })
+    .meta({
+      ref: "FileCreateResult",
+    })
+  export type CreateResult = z.infer<typeof CreateResult>
+
+  export const CreateConflict = z
+    .object({
+      ok: z.literal(false),
+      reason: z.literal("exists"),
+    })
+    .meta({
+      ref: "FileCreateConflict",
+    })
+  export type CreateConflict = z.infer<typeof CreateConflict>
 
   const log = Log.create({ service: "file" })
 
@@ -379,6 +400,18 @@ export namespace File {
     return ["image", "audio", "video", "font", "model", "multipart"].includes(top)
   }
 
+  const SNIFF_BYTES = 8192
+
+  // Sniff a small prefix of bytes to detect binary content. Used as a fallback
+  // for files whose extension/MIME does not classify them (e.g. extensionless
+  // compiled executables), which would otherwise be read as a UTF-8 string and
+  // fed to `git diff` — slow or hung for large binaries.
+  function isBinaryBySniff(bytes: Uint8Array) {
+    if (bytes.length === 0) return false
+    if (bytes.includes(0)) return true
+    return bytes.filter((b) => b < 9 || (b > 13 && b < 32)).length / bytes.length > 0.3
+  }
+
   const hidden = (item: string) => {
     const normalized = item.replaceAll("\\", "/").replace(/\/+$/, "")
     return normalized.split("/").some((part) => part.startsWith(".") && part.length > 1)
@@ -422,6 +455,10 @@ export namespace File {
       content: string
     }) => Effect.Effect<WriteResult | WriteConflict>
     readonly delete: (input: { path: string; expectedHash: string }) => Effect.Effect<DeleteResult | DeleteConflict>
+    readonly create: (input: {
+      path: string
+      type: "file" | "directory"
+    }) => Effect.Effect<CreateResult | CreateConflict>
   }
 
   export class Service extends Context.Service<Service, Interface>()("@opencode/File") {}
@@ -670,6 +707,27 @@ export namespace File {
           }
         }
 
+        if (!knownText) {
+          const sniff = yield* Effect.scoped(
+            Effect.acquireRelease(
+              Effect.promise(() => open(full, "r")),
+              (fh) => Effect.promise(() => fh.close()),
+            ).pipe(
+              Effect.flatMap((fh) =>
+                Effect.promise(async () => {
+                  const buf = new Uint8Array(SNIFF_BYTES)
+                  const result = await fh.read(buf, 0, SNIFF_BYTES, 0)
+                  return buf.subarray(0, result.bytesRead)
+                }),
+              ),
+            ),
+          ).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+          if (isBinaryBySniff(sniff)) {
+            const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
+            return { type: "binary" as const, content: "", hash: hash(bytes), mimeType }
+          }
+        }
+
         const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
         const content = Buffer.from(bytes).toString("utf8")
         const digest = hash(bytes)
@@ -897,8 +955,54 @@ export namespace File {
         return { ok: true as const } satisfies DeleteResult
       })
 
+      const create: Interface["create"] = Effect.fn("File.create")(function* (input) {
+        const full = path.resolve(Instance.directory, input.path)
+        const parentDir = path.dirname(full)
+        const inside = (item: string) => {
+          const rel = path.relative(Instance.directory, item)
+          return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+        }
+
+        if (!inside(full)) throw new Error("Access denied: path escapes project directory")
+        if (!inside(parentDir)) throw new Error("Access denied: path escapes project directory")
+
+        const existing = yield* appFs.stat(full).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (existing) {
+          return { ok: false as const, reason: "exists" as const } satisfies CreateConflict
+        }
+
+        if (input.type === "directory") {
+          yield* Effect.tryPromise({
+            try: () => mkdir(full, { recursive: true }),
+            catch: (cause) => cause,
+          }).pipe(Effect.orDie)
+          return {
+            ok: true as const,
+            path: input.path,
+            type: "directory" as const,
+          } satisfies CreateResult
+        }
+
+        const parent = yield* appFs.stat(parentDir).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!parent) throw new Error(`Directory not found: ${path.dirname(input.path)}`)
+        if (parent.type !== "Directory") throw new Error(`Parent path is not a directory: ${path.dirname(input.path)}`)
+
+        const tmp = path.join(parentDir, `.${path.basename(full)}.tmp.${process.pid}.${randomUUID()}`)
+        yield* appFs.writeFileString(tmp, "").pipe(Effect.orDie)
+        yield* Effect.tryPromise({
+          try: () => rename(tmp, full),
+          catch: (cause) => cause,
+        }).pipe(Effect.tapError(() => Effect.promise(() => unlink(tmp).catch(() => undefined))), Effect.orDie)
+
+        return {
+          ok: true as const,
+          path: input.path,
+          type: "file" as const,
+        } satisfies CreateResult
+      })
+
       log.info("init")
-      return Service.of({ init, status, read, list, search, editLine, write, delete: remove })
+      return Service.of({ init, status, read, list, search, editLine, write, delete: remove, create })
     }),
   )
 
@@ -949,5 +1053,12 @@ export namespace File {
 
   export async function remove(input: { path: string; expectedHash: string }): Promise<DeleteResult | DeleteConflict> {
     return runPromise((svc) => svc.delete(input))
+  }
+
+  export async function create(input: {
+    path: string
+    type: "file" | "directory"
+  }): Promise<CreateResult | CreateConflict> {
+    return runPromise((svc) => svc.create(input))
   }
 }

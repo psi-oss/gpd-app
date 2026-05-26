@@ -25,14 +25,10 @@ const GPD_CONFIG_DIR_NAME: &str = "gpd";
 /// Marker file written after successful first-run setup
 const GPD_INIT_MARKER: &str = ".gpd-initialized";
 
-/// Marker file recording the SHA256 of the python-manifest.json that was
-/// last reconciled against the user's venv. Compared against the current
-/// bundled manifest on every launch — if they match, the reconciler short-
-/// circuits without touching pip. See `reconcile_manifest`.
+/// SHA256 of the last-reconciled python-manifest.json.
 const GPD_DEPS_HASH_MARKER: &str = ".gpd-deps-hash";
 
-/// Tauri resource path for the Python dependency manifest. Resolved via
-/// `app.path().resolve(..., BaseDirectory::Resource)`.
+/// Bundled Python dependency manifest (Tauri resource path).
 const PYTHON_MANIFEST_RESOURCE: &str = "python-manifest.json";
 
 /// LiteLLM proxy URL
@@ -79,7 +75,7 @@ pub fn build_config_json() -> String {
         "gpd-skills": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.skills_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
         "gpd-state": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.state_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
         "gpd-verification": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.verification_server"],"enabled":true,"environment":{{"LOG_LEVEL":"WARNING"}}}},
-        "gpd-arxiv": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true}}
+        "gpd-arxiv": {{"type":"local","command":["{p}","-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true,"timeout":180000}}
     }}"#);
 
     let m = r#""modalities":{"input":["text","image","pdf"],"output":["text"]}"#;
@@ -237,21 +233,23 @@ pub async fn run_first_setup(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Manifest reconciliation (existing-user dep upgrades)
-// ---------------------------------------------------------------------------
-
-/// One Python package the reconciler ensures is installed and importable.
-///
-/// `spec` is what gets passed to `uv pip install --upgrade` on probe-fail
-/// (e.g. `arxiv-mcp-server[pdf]>=0.4.11`). `import_check` is the module
-/// whose `import` MUST succeed in the venv — chosen to detect the specific
-/// failure mode this package fixes (e.g. `pymupdf4llm` for the [pdf] extra,
-/// not the package name itself).
 #[derive(Debug, Deserialize)]
 struct ManifestPackage {
     spec: String,
     import_check: String,
+    /// PyPI distribution name (e.g. `get-physics-done` for `get-physics-done[arxiv]`).
+    /// When set together with `min_version`, the reconciler also verifies the
+    /// installed version is at least this floor — `import gpd` succeeding is
+    /// not enough, because a buggy old version of an importable package is
+    /// worse than no package (see e.g. the gpd 1.1.0 arxiv bridge that had a
+    /// 60s sleep+retry which tripped opencode's MCP request timeout).
+    #[serde(default)]
+    distribution: Option<String>,
+    /// Minimum installed version required for this manifest entry to be
+    /// considered satisfied. If the installed version is below this, the
+    /// reconciler runs `uv pip install --upgrade <spec>`.
+    #[serde(default)]
+    min_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,23 +259,11 @@ struct PythonManifest {
     packages: Vec<ManifestPackage>,
 }
 
-/// Reconcile the user's `~/.gpd/venv` against the bundled
-/// `python-manifest.json`. Probes each package's `import_check` module; on
-/// failure runs `uv pip install --upgrade <spec>`.
+/// Reconcile `~/.gpd/venv` against the bundled `python-manifest.json`.
 ///
-/// Why: Tauri auto-update replaces the app bundle but never touches
-/// `~/.gpd/venv/`. `is_venv_valid()` only checks `import gpd` succeeds,
-/// never versions, so users who installed before a Python-side fix never
-/// receive it. This reconciler is the bridge — it runs on every launch
-/// (after the sidecar is healthy), short-circuits when the manifest SHA256
-/// matches `~/.gpd/.gpd-deps-hash`, and only does pip work on the first
-/// launch after a desktop release that bumps the manifest.
-///
-/// Fire-and-forget contract: this function should be invoked via
-/// `tokio::spawn(...)` so it never blocks app startup. All errors are
-/// returned for logging; the caller drops them. Failures are non-fatal —
-/// the existing venv keeps working at its previous state, and the hash
-/// marker is left untouched so the next launch retries.
+/// Fire-and-forget — must be invoked via `tokio::spawn(...)`. The hash
+/// marker at `~/.gpd/.gpd-deps-hash` short-circuits the no-op case so
+/// the steady-state cost is one SHA256 + one file read.
 pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     let manifest_path = app
         .path()
@@ -299,8 +285,6 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
 
     let python = gpd_python();
     if !python.exists() {
-        // First-run setup hasn't installed the venv yet. The first-run path
-        // will install the right packages; reconciler defers until next launch.
         tracing::debug!("GPD venv not yet present; reconciler deferring");
         return Ok(());
     }
@@ -316,8 +300,12 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     let mut all_ok = true;
 
     for pkg in &manifest.packages {
-        let ok = probe_import(&python, &pkg.import_check).await;
-        if ok {
+        let import_ok = probe_import(&python, &pkg.import_check).await;
+        let version_ok = match (&pkg.distribution, &pkg.min_version) {
+            (Some(dist), Some(min)) => probe_version_at_least(&python, dist, min).await,
+            _ => true,
+        };
+        if import_ok && version_ok {
             tracing::debug!(import = %pkg.import_check, "manifest probe ok; skipping pip");
             continue;
         }
@@ -368,9 +356,6 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    // Only stamp the hash marker if every package reconciled cleanly. A partial
-    // success leaves the marker stale so the next launch retries the failed
-    // ones; a complete success means "we know the venv matches this manifest".
     if all_ok {
         let _ = std::fs::write(&hash_marker, &hash_hex);
         tracing::info!(hash = %hash_hex, "python-manifest reconciled");
@@ -381,10 +366,37 @@ pub async fn reconcile_manifest(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Probe whether `python -c "import {module}"` exits 0 within 5 seconds.
-/// Returns false on any failure (missing module, syntax error, timeout, IO).
 async fn probe_import(python: &Path, module: &str) -> bool {
     let cmd = format!("import {module}");
+    let result = timeout(
+        Duration::from_secs(5),
+        Command::new(python)
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await;
+
+    matches!(result, Ok(Ok(output)) if output.status.success())
+}
+
+/// Returns true when the installed distribution's version is >= `min_version`
+/// according to PEP 440 ordering (delegated to `packaging.version.Version`,
+/// which is part of the `packaging` library that ships with `uv` and is also
+/// pulled in transitively by most of our deps). Returns false if the package
+/// is not installed, if the version cannot be read, or if it is below the
+/// floor — all of which should trigger `uv pip install --upgrade`.
+async fn probe_version_at_least(python: &Path, distribution: &str, min_version: &str) -> bool {
+    let cmd = format!(
+        "from importlib.metadata import version, PackageNotFoundError\n\
+         from packaging.version import Version\n\
+         try:\n    v = version({dist:?})\nexcept PackageNotFoundError:\n    raise SystemExit(2)\n\
+         raise SystemExit(0 if Version(v) >= Version({min:?}) else 1)\n",
+        dist = distribution,
+        min = min_version,
+    );
     let result = timeout(
         Duration::from_secs(5),
         Command::new(python)
@@ -718,7 +730,7 @@ fn inject_provider_config(config: &Path) -> Result<(), String> {
             "gpd-skills": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.skills_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
             "gpd-state": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.state_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
             "gpd-verification": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.verification_server"],"enabled":true,"environment":{"LOG_LEVEL":"WARNING"}},
-            "gpd-arxiv": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true}
+            "gpd-arxiv": {"type":"local","command":[&*p,"-m","gpd.mcp.servers.arxiv_bridge"],"enabled":true,"timeout":180000}
         });
         obj.insert("mcp".to_string(), mcp_json);
     }

@@ -1,11 +1,13 @@
 import path from "path"
 import os from "os"
+import { stat } from "fs/promises"
 import z from "zod"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Log } from "../util/log"
 import { SessionRevert } from "./revert"
 import { Session } from "."
+import { SessionGoal } from "./goal"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { ModelID, ProviderID } from "../provider/schema"
@@ -33,6 +35,7 @@ import { pathToFileURL, fileURLToPath } from "url"
 import { ConfigMarkdown } from "../config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/util/error"
+import { NotFoundError } from "@/storage/db"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
@@ -51,6 +54,9 @@ import { SessionRunState } from "./run-state"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
+
+const GOAL_CONTINUATION_MARKER = "Continue working toward the active session goal."
+const GOAL_CONTINUATION_IDLE_GRACE = "150 millis"
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -79,6 +85,8 @@ export namespace SessionPrompt {
 
   export interface Interface {
     readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+    readonly continueGoal: (sessionID: SessionID) => Effect.Effect<void>
+    readonly resumeGoals: () => Effect.Effect<void>
     readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
     readonly loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts>
     readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
@@ -94,6 +102,7 @@ export namespace SessionPrompt {
       const bus = yield* Bus.Service
       const status = yield* SessionStatus.Service
       const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
       const agents = yield* Agent.Service
       const provider = yield* Provider.Service
       const processor = yield* SessionProcessor.Service
@@ -115,6 +124,13 @@ export namespace SessionPrompt {
       const summary = yield* SessionSummary.Service
       const sys = yield* SystemPrompt.Service
       const llm = yield* LLM.Service
+      const goalIdleSubscription = yield* InstanceState.make(() =>
+        Effect.succeed({
+          active: false,
+          pending: new Set<SessionID>(),
+          continuing: new Set<SessionID>(),
+        }),
+      )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
         const ctx = yield* Effect.context()
         return {
@@ -133,7 +149,185 @@ export namespace SessionPrompt {
 
       const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
         yield* elog.info("cancel", { sessionID })
+        const goal = yield* goals.get(sessionID)
+        if (goal?.status === "active") {
+          yield* goals.update({ sessionID, status: "paused" }).pipe(Effect.ignore)
+        }
         yield* state.cancel(sessionID)
+      })
+
+      const isGoalContinuationMessage = (message: MessageV2.WithParts) =>
+        message.info.role === "user" &&
+        message.parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.synthetic &&
+            (part.metadata?.goalContinuation === true || part.text.includes(GOAL_CONTINUATION_MARKER)),
+        )
+
+      const assistantMadeGoalProgress = (message: MessageV2.WithParts) =>
+        message.info.role === "assistant" &&
+        message.parts.some((part) => {
+          if (part.type === "patch" || part.type === "subtask") return true
+          if (part.type !== "tool") return false
+          // Inspecting goal state via get_goal IS legitimate progress —
+          // the model is loading context before deciding the next step.
+          // The previous policy of treating get_goal as "no progress"
+          // auto-paused after a single state-check turn, which felt
+          // overly aggressive to users running open-ended goals where
+          // the first move is "look around, ask a clarifying question."
+          return part.state.status === "completed" || part.state.status === "running" || part.state.status === "pending"
+        })
+
+      const scheduleGoalIdleRetry: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.scheduleGoalIdleRetry",
+      )(function* (sessionID: SessionID) {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.pending.has(sessionID)) return
+        subscription.pending.add(sessionID)
+        yield* Effect.gen(function* () {
+          while ((yield* status.get(sessionID)).type !== "idle") {
+            yield* Effect.sleep(25)
+          }
+          yield* autoContinueGoal(sessionID)
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
+          Effect.ignore,
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+      })
+
+      const autoContinueGoal: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.autoContinueGoal",
+      )(function* (sessionID: SessionID) {
+        yield* ensureGoalIdleSubscription()
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.continuing.has(sessionID)) return
+        subscription.continuing.add(sessionID)
+        yield* Effect.gen(function* () {
+          const goal = yield* goals.get(sessionID)
+          if (goal?.status !== "active") return
+
+          const current = yield* status.get(sessionID)
+          if (current.type !== "idle") {
+            yield* scheduleGoalIdleRetry(sessionID)
+            return
+          }
+          yield* Effect.sleep(GOAL_CONTINUATION_IDLE_GRACE)
+          const afterGraceGoal = yield* goals.get(sessionID)
+          if (afterGraceGoal?.status !== "active") return
+          const afterGraceStatus = yield* status.get(sessionID)
+          if (afterGraceStatus.type !== "idle") {
+            yield* scheduleGoalIdleRetry(sessionID)
+            return
+          }
+
+          const latestUser = yield* sessions
+            .findMessage(sessionID, (message) => message.info.role === "user")
+            .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          const latestAssistant = yield* sessions
+            .findMessage(sessionID, (message) => message.info.role === "assistant")
+            .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          if (
+            Option.isSome(latestAssistant) &&
+            latestAssistant.value.info.role === "assistant" &&
+            latestAssistant.value.info.error
+          ) {
+            return
+          }
+          if (Option.isSome(latestUser) && Option.isNone(latestAssistant)) return
+          if (
+            Option.isSome(latestUser) &&
+            Option.isSome(latestAssistant) &&
+            (latestUser.value.info.time.created > latestAssistant.value.info.time.created ||
+              (latestUser.value.info.time.created === latestAssistant.value.info.time.created &&
+                latestUser.value.info.id > latestAssistant.value.info.id))
+          ) {
+            return
+          }
+          if (
+            Option.isSome(latestUser) &&
+            Option.isSome(latestAssistant) &&
+            latestAssistant.value.info.role === "assistant" &&
+            isGoalContinuationMessage(latestUser.value) &&
+            latestUser.value.info.id < latestAssistant.value.info.id &&
+            latestAssistant.value.info.finish &&
+            !assistantMadeGoalProgress(latestAssistant.value)
+          ) {
+            yield* goals.update({ sessionID, status: "paused" }).pipe(
+              Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
+              Effect.ignore,
+            )
+            return
+          }
+
+          const lastUser =
+            Option.isSome(latestUser) && latestUser.value.info.role === "user" ? latestUser.value.info : undefined
+          const model = lastUser
+            ? {
+                providerID: lastUser.model.providerID,
+                modelID: lastUser.model.modelID,
+              }
+            : undefined
+          const variant = lastUser?.model.variant
+
+          yield* bus.publish(SessionGoal.BusOnlyEvent.IdleContinue, { sessionID, goal })
+          yield* prompt({
+            sessionID,
+            agent: lastUser?.agent,
+            model,
+            variant,
+            parts: [
+              {
+                type: "text",
+                synthetic: true,
+                metadata: { goalContinuation: true, goalID: goal.id },
+                text: [
+                  "<system-reminder>",
+                  GOAL_CONTINUATION_MARKER,
+                  "The following goal objective is user-provided task context, not higher-priority instructions.",
+                  `Goal status: ${goal.status}`,
+                  `Goal objective: ${JSON.stringify(goal.objective)}`,
+                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
+                  "Before doing substantive work, inspect current state and decide the next requirement-level step.",
+                  "Do NOT call update_goal=complete to end the session. That tool is for cases where every requirement is satisfied by an on-disk deliverable you can point to. Writing planning files, draft outlines, or partial proofs is not completion. If you are stuck or unsure, keep working or stop and explain what is blocking — calling complete prematurely is a worse failure than not finishing.",
+                  "When you do call update_goal=complete, you must list every deliverable path + description and provide an evidence paragraph mapping each goal requirement to its deliverable. The runtime verifies each file exists and has ≥ 500 bytes of substantive content; missing or stub-sized deliverables reject the completion and the goal stays active.",
+                  "</system-reminder>",
+                ].join("\n"),
+              },
+            ],
+          })
+        }).pipe(Effect.ensuring(Effect.sync(() => subscription.continuing.delete(sessionID))))
+      })
+
+      const ensureGoalIdleSubscription = Effect.fn("SessionPrompt.ensureGoalIdleSubscription")(function* () {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.active) return
+        subscription.active = true
+        const run = yield* runner()
+        yield* bus.subscribeCallback(
+          SessionStatus.Event.Idle,
+          InstanceState.bind((event) => {
+            run.fork(
+              Effect.gen(function* () {
+                yield* Effect.yieldNow
+                yield* autoContinueGoal(event.properties.sessionID)
+              }).pipe(Effect.ignore),
+            )
+          }),
+        )
+      })
+
+      const initializeActiveGoals = Effect.fn("SessionPrompt.initializeActiveGoals")(function* () {
+        yield* ensureGoalIdleSubscription()
+        const ctx = yield* InstanceState.context
+        const activeGoals = yield* goals.listActive({ projectID: ctx.project.id })
+        yield* Effect.forEach(
+          activeGoals,
+          (goal) =>
+            autoContinueGoal(goal.sessionID).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true })),
+          { discard: true },
+        )
       })
 
       const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -371,6 +565,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return input.messages
       })
 
+      const userRequestedGoalCreate = (messages: MessageV2.WithParts[]) => {
+        const latest = messages.findLast((message) => message.info.role === "user")
+        if (!latest) return false
+        const text = latest.parts
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.synthetic && !part.ignored)
+          .map((part) => part.text)
+          .join("\n")
+          .trim()
+        if (!text) return false
+        if (/^\/goal\s+(?!(edit|pause|resume|clear)\b)\S/i.test(text)) return true
+        if (/\b(create|set|start|add|make|establish)\s+(a\s+|an\s+|the\s+|my\s+|this\s+)?(session\s+)?goal\b/i.test(text))
+          return true
+        if (/\b(set|make|change)\s+(the\s+|my\s+)?goal\s+(to|as)\b/i.test(text)) return true
+        return false
+      }
+
       const resolveTools = Effect.fn("SessionPrompt.resolveTools")(function* (input: {
         agent: Agent.Info
         model: Provider.Model
@@ -384,6 +594,216 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const tools: Record<string, AITool> = {}
         const run = yield* runner()
         const promptOps = yield* ops()
+
+        const goalToolResult = (title: string, goal: SessionGoal.Info | null) => ({
+          title,
+          metadata: goal ? { goal } : { goal: null },
+          output: JSON.stringify(goal ? { goal } : { goal: null }, null, 2),
+        })
+
+        tools["get_goal"] = tool({
+          description: "Get the current session goal and usage metadata.",
+          inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
+          execute() {
+            return run.promise(
+              Effect.gen(function* () {
+                const goal = (yield* goals.get(input.session.id)) ?? null
+                return goalToolResult(goal ? "Current goal" : "No current goal", goal)
+              }),
+            )
+          },
+        })
+
+        const canCreateGoal = userRequestedGoalCreate(input.messages)
+        if (canCreateGoal) {
+          tools["create_goal"] = tool({
+            description: "Create a session goal only when the user explicitly requested one.",
+            inputSchema: jsonSchema({
+              type: "object",
+              additionalProperties: false,
+              required: ["objective"],
+              properties: {
+                objective: { type: "string" },
+                tokenBudget: { type: "number" },
+              },
+            }),
+            execute(args) {
+              return run.promise(
+                Effect.gen(function* () {
+                  if (!canCreateGoal) {
+                    throw new Error("create_goal requires an explicit user request in the latest message")
+                  }
+                  const payload = args as { objective?: unknown; tokenBudget?: unknown }
+                  if (typeof payload.objective !== "string") throw new Error("objective is required")
+                  const current = yield* goals.get(input.session.id)
+                  if (current) throw new Error("create_goal failed: a goal already exists for this session")
+                  const tokenBudget = typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined
+                  const goal = yield* goals.create({
+                    sessionID: input.session.id,
+                    objective: payload.objective,
+                    tokenBudget,
+                  })
+                  return goalToolResult("Goal created", goal)
+                }),
+              )
+            },
+          })
+        }
+
+        tools["update_goal"] = tool({
+          description: [
+            "Mark the current session goal complete. Use this RARELY — only when every requirement",
+            "in the goal objective has been satisfied with a real, on-disk deliverable that the user",
+            "could open and verify. Writing planning notes, draft outlines, or partial proofs does",
+            "NOT make a goal complete. If you cannot finish, keep working or stop and explain what",
+            "is blocking you — do NOT call this tool just to end the session.",
+            "",
+            "You must list every deliverable file as a path relative to the project root and a one-",
+            "line description of what it contains. The runtime VERIFIES each path exists and has",
+            "substantive content (≥ 500 bytes) before accepting the completion. If any deliverable",
+            "is missing or stub-sized, the call is rejected and the goal stays active.",
+            "",
+            "The `evidence` field is a paragraph (≥ 200 chars) tracing each goal requirement to the",
+            "deliverable(s) that satisfy it and the verification you ran (dimensional check,",
+            "limiting case, numerical benchmark, peer review, etc.). Vague summaries fail.",
+            "",
+            "If a `gpd-verifier` agent (or `/gpd-verify-work` run) was completed, include its",
+            "task_id in `verifier_task_id` — a passed verification result is the strongest signal.",
+          ].join(" "),
+          inputSchema: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "deliverables", "evidence"],
+            properties: {
+              status: { type: "string", enum: ["complete"] },
+              deliverables: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["path", "description"],
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: "Path relative to the project root. Must exist on disk.",
+                    },
+                    description: {
+                      type: "string",
+                      description: "One-line description of what this deliverable contains.",
+                    },
+                  },
+                },
+              },
+              evidence: {
+                type: "string",
+                minLength: 200,
+                description:
+                  "Paragraph mapping each goal requirement to its deliverable(s) and the verification ran.",
+              },
+              verifier_task_id: {
+                type: "string",
+                description:
+                  "Optional: task_id from a completed gpd-verifier (or /gpd-verify-work) subagent run.",
+              },
+            },
+          }),
+          execute(args) {
+            return run.promise(
+              Effect.gen(function* () {
+                const payload = args as {
+                  status?: unknown
+                  deliverables?: unknown
+                  evidence?: unknown
+                  verifier_task_id?: unknown
+                }
+                if (payload.status !== "complete") throw new Error("Models can only mark goals complete")
+
+                const deliverables = Array.isArray(payload.deliverables) ? payload.deliverables : []
+                if (deliverables.length === 0) {
+                  throw new Error(
+                    "update_goal=complete requires at least one deliverable. List every on-disk artifact that satisfies the goal. If there is nothing to point at, the goal is not complete.",
+                  )
+                }
+                const evidence = typeof payload.evidence === "string" ? payload.evidence.trim() : ""
+                if (evidence.length < 200) {
+                  throw new Error(
+                    `update_goal=complete requires an evidence paragraph of at least 200 characters (got ${evidence.length}). Trace each goal requirement to the deliverable(s) that satisfy it and name the verification you ran (dimensional check, limiting case, numerical benchmark, peer review, etc.).`,
+                  )
+                }
+
+                const ctx = yield* InstanceState.context
+                const root = ctx.directory
+                const failures: string[] = []
+                const verified: { path: string; bytes: number; description: string }[] = []
+
+                const MIN_BYTES = 500
+                for (const raw of deliverables) {
+                  if (!raw || typeof raw !== "object") {
+                    failures.push(`Malformed deliverable: ${JSON.stringify(raw)}`)
+                    continue
+                  }
+                  const item = raw as { path?: unknown; description?: unknown }
+                  const rel = typeof item.path === "string" ? item.path.trim() : ""
+                  const desc = typeof item.description === "string" ? item.description.trim() : ""
+                  if (!rel) {
+                    failures.push("Deliverable missing path")
+                    continue
+                  }
+                  if (!desc) {
+                    failures.push(`Deliverable ${rel} missing description`)
+                    continue
+                  }
+                  const abs = path.isAbsolute(rel) ? rel : path.resolve(root, rel)
+                  const insideRel = path.relative(root, abs)
+                  if (insideRel.startsWith("..") || path.isAbsolute(insideRel)) {
+                    failures.push(`Deliverable ${rel} resolves outside the project root`)
+                    continue
+                  }
+                  try {
+                    const st = yield* Effect.tryPromise({
+                      try: () => stat(abs),
+                      catch: (e) => e,
+                    })
+                    if (st.isDirectory()) {
+                      failures.push(`Deliverable ${rel} is a directory, not a file`)
+                      continue
+                    }
+                    if (st.size < MIN_BYTES) {
+                      failures.push(
+                        `Deliverable ${rel} is only ${st.size} bytes; need ≥ ${MIN_BYTES}. Either fill it out or remove it from the deliverables list.`,
+                      )
+                      continue
+                    }
+                    verified.push({ path: rel, bytes: st.size, description: desc })
+                  } catch (_e) {
+                    failures.push(`Deliverable ${rel} does not exist on disk under ${root}`)
+                  }
+                }
+
+                if (failures.length > 0) {
+                  throw new Error(
+                    `update_goal=complete rejected. The runtime verified ${verified.length}/${deliverables.length} deliverables; ${failures.length} failed:\n  - ${failures.join("\n  - ")}\n\nFix the failures (write the missing files, fill out the stubs, or remove the deliverable from the list) and retry. The goal remains active.`,
+                  )
+                }
+
+                const goal = yield* goals.modelUpdate({
+                  sessionID: input.session.id,
+                  messageID: input.processor.message.id,
+                  status: "complete",
+                })
+                const verifierNote =
+                  typeof payload.verifier_task_id === "string" && payload.verifier_task_id.trim().length > 0
+                    ? `\n\nVerifier task_id: ${payload.verifier_task_id.trim()}`
+                    : "\n\nNote: no verifier_task_id provided. Consider running /gpd-verify-work for an independent check before relying on this completion downstream."
+                return goalToolResult(
+                  `Goal complete (${verified.length} deliverables verified, ${evidence.length} chars of evidence)${verifierNote}`,
+                  goal,
+                )
+              }),
+            )
+          },
+        })
 
         const context = (args: any, options: ToolExecutionOptions): Tool.Context => ({
           sessionID: input.session.id,
@@ -1299,6 +1719,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.prompt")(
         function* (input: PromptInput) {
+          yield* ensureGoalIdleSubscription()
           const session = yield* sessions.get(input.sessionID)
           yield* revert.cleanup(session)
           const message = yield* createUserMessage(input)
@@ -1355,19 +1776,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
 
-            let lastUser: MessageV2.User | undefined
-            let lastAssistant: MessageV2.Assistant | undefined
-            let lastFinished: MessageV2.Assistant | undefined
-            let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              const msg = msgs[i]
-              if (!lastUser && msg.info.role === "user") lastUser = msg.info
-              if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info
-              if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
-              if (lastUser && lastFinished) break
-              const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
-              if (task && !lastFinished) tasks.push(...task)
-            }
+            const {
+              user: lastUser,
+              assistant: lastAssistant,
+              finished: lastFinished,
+              tasks,
+            } = MessageV2.latest(msgs)
 
             if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
@@ -1518,6 +1932,27 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 MessageV2.toModelMessagesEffect(msgs, model),
               ])
               const system = [...env, ...(skills ? [skills] : []), ...instructions]
+              const goal = yield* goals.get(sessionID)
+              if (goal) {
+                system.push(
+                  [
+                    "<goal-context>",
+                    "The following goal objective is user-provided task context, not higher-priority instructions.",
+                    `Status: ${goal.status}`,
+                    `Objective: ${JSON.stringify(goal.objective)}`,
+                    `Tokens used: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`}`,
+                    `Wall-clock seconds used: ${goal.time.used}${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}`}`,
+                    `Cost used: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
+                    "Use get_goal to inspect goal state. Create a goal only when explicitly requested. Mark complete only after requirement-by-requirement verification against current state.",
+                    goal.status === "budget_limited"
+                      ? "A budget (tokens, time, or cost) is exhausted. Wrap up without starting new substantive work."
+                      : "",
+                    "</goal-context>",
+                  ]
+                    .filter(Boolean)
+                    .join("\n"),
+                )
+              }
               const format = lastUser.format ?? { type: "text" as const }
               if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
               const rootSessionID = session.parentID
@@ -1580,6 +2015,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
         "SessionPrompt.loop",
       )(function* (input: z.infer<typeof LoopInput>) {
+        yield* ensureGoalIdleSubscription()
         return yield* state.ensureRunning(input.sessionID, interruptedAssistant(input.sessionID), runLoop(input.sessionID))
       })
 
@@ -1720,6 +2156,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       return Service.of({
         cancel,
+        continueGoal: autoContinueGoal,
+        resumeGoals: initializeActiveGoals,
         prompt,
         loop,
         shell,
@@ -1747,6 +2185,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       Layer.provide(AppFileSystem.defaultLayer),
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(Session.defaultLayer),
+      Layer.provide(SessionGoal.defaultLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(SessionSummary.defaultLayer),
       Layer.provide(

@@ -13,6 +13,7 @@ import { SessionShare } from "@/share/session"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "../../session/todo"
+import { SessionGoal } from "../../session/goal"
 import { Effect } from "effect"
 import { AppRuntime } from "../../effect/app-runtime"
 import { Agent } from "../../agent/agent"
@@ -28,6 +29,11 @@ import { Bus } from "../../bus"
 import { NamedError } from "@opencode-ai/util/error"
 
 const log = Log.create({ service: "server" })
+
+function goalTitleText(objective: string) {
+  const title = objective.replace(/\s+/g, " ").trim()
+  return title.length > 100 ? title.slice(0, 97) + "..." : title
+}
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -189,6 +195,183 @@ export const SessionRoutes = lazy(() =>
         const sessionID = c.req.valid("param").sessionID
         const todos = await AppRuntime.runPromise(Todo.Service.use((svc) => svc.get(sessionID)))
         return c.json(todos)
+      },
+    )
+    .get(
+      "/:sessionID/goal",
+      describeRoute({
+        summary: "Get session goal",
+        description: "Retrieve the current goal for a session, if one exists.",
+        operationId: "session.goal.get",
+        responses: {
+          200: {
+            description: "Session goal or null",
+            content: {
+              "application/json": {
+                schema: resolver(z.nullable(SessionGoal.Info)),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const goal = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            yield* session.get(sessionID)
+            const goalSvc = yield* SessionGoal.Service
+            const promptSvc = yield* SessionPrompt.Service
+            yield* promptSvc.resumeGoals().pipe(Effect.ignore)
+            return (yield* goalSvc.get(sessionID)) ?? null
+          }),
+        )
+        return c.json(goal)
+      },
+    )
+    .post(
+      "/:sessionID/goal",
+      describeRoute({
+        summary: "Create session goal",
+        description: "Create a persistent goal for a session.",
+        operationId: "session.goal.create",
+        responses: {
+          200: {
+            description: "Created session goal",
+            content: {
+              "application/json": {
+                schema: resolver(SessionGoal.Info),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      validator(
+        "json",
+        z.object({
+          objective: z.string(),
+          tokenBudget: z.number().int().positive().optional(),
+          timeBudgetSeconds: z.number().int().positive().optional(),
+          costBudgetUSD: z.number().positive().optional(),
+        }),
+      ),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        const created = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            const goalSvc = yield* SessionGoal.Service
+            const current = yield* session.get(sessionID)
+            const goal = yield* goalSvc.create({ ...body, sessionID })
+            const newTitle = goalTitleText(goal.objective)
+            if (newTitle && Session.isDefaultTitle(current.title) && current.title !== newTitle) {
+              yield* session.setTitle({ sessionID, title: newTitle })
+            }
+            return goal
+          }),
+        )
+        AppRuntime.runFork(
+          SessionPrompt.Service.use((svc) => svc.continueGoal(sessionID)).pipe(Effect.ignore),
+        )
+        return c.json(created)
+      },
+    )
+    .patch(
+      "/:sessionID/goal",
+      describeRoute({
+        summary: "Update session goal",
+        description: "Update goal objective, status, or token budget.",
+        operationId: "session.goal.update",
+        responses: {
+          200: {
+            description: "Updated session goal",
+            content: {
+              "application/json": {
+                schema: resolver(SessionGoal.Info),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      validator(
+        "json",
+        z.object({
+          objective: z.string().optional(),
+          status: z.enum(["active", "paused", "budget_limited", "complete"]).optional(),
+          tokenBudget: z.number().int().positive().nullable().optional(),
+          timeBudgetSeconds: z.number().int().positive().nullable().optional(),
+          costBudgetUSD: z.number().positive().nullable().optional(),
+        }),
+      ),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        const updated = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            const goalSvc = yield* SessionGoal.Service
+            const current = yield* session.get(sessionID)
+            const before = yield* goalSvc.get(sessionID)
+            const goal = yield* goalSvc.update({ ...body, sessionID })
+            if (body.objective !== undefined) {
+              const previousTitle = before ? goalTitleText(before.objective) : undefined
+              const newTitle = goalTitleText(goal.objective)
+              if (
+                newTitle &&
+                current.title !== newTitle &&
+                (Session.isDefaultTitle(current.title) || current.title === previousTitle)
+              ) {
+                yield* session.setTitle({ sessionID, title: newTitle })
+              }
+            }
+            return goal
+          }),
+        )
+        if (updated.status === "active") {
+          AppRuntime.runFork(
+            SessionPrompt.Service.use((svc) => svc.continueGoal(sessionID)).pipe(Effect.ignore),
+          )
+        }
+        return c.json(updated)
+      },
+    )
+    .delete(
+      "/:sessionID/goal",
+      describeRoute({
+        summary: "Clear session goal",
+        description: "Clear the current session goal.",
+        operationId: "session.goal.clear",
+        responses: {
+          200: {
+            description: "Cleared",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            yield* session.get(sessionID)
+            const goalSvc = yield* SessionGoal.Service
+            yield* goalSvc.clear(sessionID)
+          }),
+        )
+        return c.json(true)
       },
     )
     .post(

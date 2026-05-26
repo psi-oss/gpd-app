@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@opencode-ai/sdk/v2/client"
+import type {
+  Message,
+  Part,
+  PermissionRequest,
+  Project,
+  QuestionRequest,
+  Session,
+  SessionGoal,
+} from "@opencode-ai/sdk/v2/client"
 import { createStore } from "solid-js/store"
 import type { State } from "./types"
 import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"
@@ -57,6 +65,16 @@ const questionRequest = (id: string, sessionID: string, title = id) =>
     ],
   }) as QuestionRequest
 
+const goal = (sessionID: string, objective = "finish it") =>
+  ({
+    id: "goal_1",
+    sessionID,
+    objective,
+    status: "active",
+    tokens: { used: 0 },
+    time: { used: 0, created: 1, updated: 1 },
+  }) as SessionGoal
+
 const baseState = (input: Partial<State> = {}) =>
   ({
     status: "complete",
@@ -71,6 +89,7 @@ const baseState = (input: Partial<State> = {}) =>
     session: [],
     sessionTotal: 0,
     session_status: {},
+    session_goal: {},
     session_diff: {},
     todo: {},
     permission: {},
@@ -583,5 +602,41 @@ describe("applyDirectoryEvent", () => {
 
     expect(pushes).toEqual(["/tmp"])
     expect(lspLoads).toBe(1)
+  })
+
+  test("tracks session.goal.updated event", () => {
+    const sessionID = "ses_1"
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: { type: "session.goal.updated", properties: { sessionID, goal: goal(sessionID, "ship it") } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session_goal[sessionID]?.objective).toBe("ship it")
+  })
+
+  test("clears session goal on session.goal.cleared event", () => {
+    const sessionID = "ses_1"
+    const [store, setStore] = createStore(
+      baseState({
+        session_goal: { [sessionID]: goal(sessionID) },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "session.goal.cleared", properties: { sessionID } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session_goal[sessionID]).toBeUndefined()
   })
 })

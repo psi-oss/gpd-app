@@ -13,6 +13,7 @@ import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsLicenses } from "./settings-licenses"
 import { SettingsApiKey } from "./settings-api-key"
 import { SettingsModels } from "./settings-models"
+import { SettingsProfile } from "./settings-profile"
 import { SettingsStats } from "./settings-stats"
 
 export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
@@ -55,6 +56,10 @@ export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
                     <Tabs.Trigger value="api-key">
                       <Icon name="providers" />
                       {language.t("settings.account.accessKey.title")}
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="profile">
+                      <Icon name="glasses" />
+                      {language.t("settings.profile.title")}
                     </Tabs.Trigger>
                     <Tabs.Trigger value="models">
                       <Icon name="models" />
@@ -112,6 +117,9 @@ export const DialogSettings: Component<{ defaultTab?: string }> = (props) => {
         </Tabs.Content>
         <Tabs.Content value="api-key" class="no-scrollbar">
           <SettingsApiKey />
+        </Tabs.Content>
+        <Tabs.Content value="profile" class="no-scrollbar">
+          <SettingsProfile />
         </Tabs.Content>
         <Tabs.Content value="models" class="no-scrollbar">
           <SettingsModels />

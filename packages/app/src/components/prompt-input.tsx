@@ -1423,13 +1423,28 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "[&_[data-type=agent]]:text-syntax-type": true,
                 "font-mono!": store.mode === "shell",
               }}
-              style={{ "padding-bottom": space }}
+              style={{
+                "padding-bottom": space,
+                // RES-1009: WebKit on macOS renders the contenteditable
+                // caret at the element's computed line-height, not the
+                // glyph height. With text-14-regular's 180% line-height
+                // (= 25.2px) on a 14px font, the caret renders as an
+                // oversized I-beam that visibly extends well past the
+                // letters — Jim flagged this on MBP. Override with the
+                // CSS keyword `normal` so WebKit falls back to the
+                // font's intrinsic line metrics (~1.15-1.2× font-size
+                // for system fonts), which lines up the caret with
+                // glyph height. Vertical breathing room around wrapped
+                // lines is preserved by the surrounding `pt-2`/space
+                // padding and the parent flex layout, not line-height.
+                "line-height": "normal",
+              }}
             />
             <Show when={!prompt.dirty()}>
               <div
                 class="absolute top-0 inset-x-0 pl-3 pr-2 pt-2 text-14-regular text-text-weak pointer-events-none whitespace-nowrap truncate"
                 classList={{ "font-mono!": store.mode === "shell" }}
-                style={{ "padding-bottom": space }}
+                style={{ "padding-bottom": space, "line-height": "normal" }}
               >
                 {placeholder()}
               </div>

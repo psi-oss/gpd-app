@@ -1,6 +1,7 @@
-import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
+import { ContextMenu } from "@opencode-ai/ui/context-menu"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
@@ -12,7 +13,7 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 
-import FileTree, { type FileContextAction } from "@/components/file-tree"
+import FileTree, { type FileContextAction, type PendingCreate } from "@/components/file-tree"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { useCommand } from "@/context/command"
@@ -51,6 +52,48 @@ export function SessionSidePanel(props: {
   const sdk = useSDK()
   const { sessionKey, tabs, view } = useSessionLayout()
 
+  const [pending, setPending] = createSignal<PendingCreate | undefined>(undefined)
+
+  const startInlineCreate = (parent: string, type: "file" | "directory") => {
+    // Expand the parent so the inline rename row is visible inside its
+    // Collapsible.Content; if the dir hasn't been loaded yet, expandDir
+    // also triggers the listing.
+    if (parent !== "" && !(file.tree.state(parent)?.expanded ?? false)) {
+      file.tree.expand(parent)
+    }
+    setPending({ parent, type })
+  }
+
+  const submitInlineCreate = async (parent: string, type: "file" | "directory", name: string) => {
+    const safe = name.trim()
+    if (!safe) {
+      setPending(undefined)
+      return
+    }
+    const targetPath = parent ? `${parent}/${safe}` : safe
+    try {
+      const res = await sdk.client.file.create({ path: targetPath, type })
+      if (!res.data?.ok) {
+        const err = res.error
+        const exists = err && "reason" in err && err.reason === "exists"
+        showToast({
+          title: language.t("filetree.create.failed.title"),
+          description: exists
+            ? language.t("filetree.create.failed.exists", { name: safe })
+            : language.t("common.requestFailed"),
+        })
+        return
+      }
+      setPending(undefined)
+      await file.tree.refresh(parent)
+    } catch (err) {
+      showToast({
+        title: language.t("filetree.create.failed.title"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   const handleFileContextAction = async (action: FileContextAction, node: FileNode) => {
     try {
       switch (action) {
@@ -71,6 +114,12 @@ export function SessionSidePanel(props: {
           dialog.show(() => <mod.DialogConfirmDeleteFile node={node} />)
           return
         }
+        case "new-file":
+          startInlineCreate(node.path, "file")
+          return
+        case "new-folder":
+          startInlineCreate(node.path, "directory")
+          return
       }
     } catch (err) {
       showToast({
@@ -438,19 +487,36 @@ export function SessionSidePanel(props: {
                   </Switch>
                 </Tabs.Content>
                 <Tabs.Content value="all" class="bg-background-stronger px-3 py-0">
-                  <Switch>
-                    <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
-                    <Match when={true}>
-                      <FileTree
-                        path=""
-                        class="pt-3"
-                        modified={diffFiles()}
-                        kinds={kinds()}
-                        onFileClick={(node) => openTab(file.tab(node.path))}
-                        onFileContextAction={handleFileContextAction}
-                      />
-                    </Match>
-                  </Switch>
+                  <ContextMenu>
+                    <ContextMenu.Trigger as="div" class="h-full">
+                      <Switch>
+                        <Match when={nofiles() && !pending()}>{empty(language.t("session.files.empty"))}</Match>
+                        <Match when={true}>
+                          <FileTree
+                            path=""
+                            class="pt-3"
+                            modified={diffFiles()}
+                            kinds={kinds()}
+                            onFileClick={(node) => openTab(file.tab(node.path))}
+                            onFileContextAction={handleFileContextAction}
+                            pending={pending()}
+                            onCreateSubmit={submitInlineCreate}
+                            onCreateCancel={() => setPending(undefined)}
+                          />
+                        </Match>
+                      </Switch>
+                    </ContextMenu.Trigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onSelect={() => startInlineCreate("", "file")}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFile")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                        <ContextMenu.Item onSelect={() => startInlineCreate("", "directory")}>
+                          <ContextMenu.ItemLabel>{language.t("filetree.menu.newFolder")}</ContextMenu.ItemLabel>
+                        </ContextMenu.Item>
+                      </ContextMenu.Content>
+                    </ContextMenu.Portal>
+                  </ContextMenu>
                 </Tabs.Content>
               </Tabs>
             </div>

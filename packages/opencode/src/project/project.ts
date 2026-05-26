@@ -81,6 +81,12 @@ export namespace Project {
           url: z.string().optional(),
           override: z.string().optional(),
           color: z.string().optional(),
+          // 1-2 character user-chosen glyph (max 2 graphemes). Renders
+          // in place of the first-letter avatar fallback. Distinct from
+          // `override` (image data URL) and `url` (favicon discovery
+          // result) — populated only by explicit user choice in the
+          // Edit-Project dialog. RES-1010.
+          character: z.string().max(2).optional(),
         })
         .optional(),
       commands: z
@@ -109,8 +115,12 @@ export namespace Project {
 
   export function fromRow(row: Row): Info {
     const icon =
-      row.icon_url || row.icon_color
-        ? { url: row.icon_url ?? undefined, color: row.icon_color ?? undefined }
+      row.icon_url || row.icon_color || row.icon_character
+        ? {
+            url: row.icon_url ?? undefined,
+            color: row.icon_color ?? undefined,
+            character: row.icon_character ?? undefined,
+          }
         : undefined
     return {
       id: row.id,
@@ -285,10 +295,14 @@ export namespace Project {
               vcs: fakeVcs,
             }
           }
-          const worktree = (() => {
-            const common = resolveGitPath(sandbox, commonDir.text.trim())
-            return common === sandbox ? sandbox : pathSvc.dirname(common)
-          })()
+          const common = resolveGitPath(sandbox, commonDir.text.trim())
+          const bareCheck = yield* git(["config", "--bool", "core.bare"], { cwd: sandbox })
+          const isBareRepo = bareCheck.code === 0 && bareCheck.text.trim() === "true"
+          // Bare-backed worktree: cache lives in git-common-dir (so sibling
+          // bare repos don't collide), but the project worktree is the
+          // checked-out sandbox path so UI/cwd surfaces work.
+          const worktree = common === sandbox ? sandbox : isBareRepo ? sandbox : pathSvc.dirname(common)
+          const cacheDir = common === sandbox ? pathSvc.join(sandbox, ".git") : isBareRepo ? common : pathSvc.join(worktree, ".git")
 
           // Re-check after worktree-from-common-dir: a `git worktree`
           // setup or `core.worktree` config can lift the effective
@@ -304,7 +318,7 @@ export namespace Project {
           }
 
           if (id == null) {
-            id = yield* readCachedProjectId(pathSvc.join(worktree, ".git"))
+            id = yield* readCachedProjectId(cacheDir)
           }
 
           if (!id) {
@@ -317,7 +331,7 @@ export namespace Project {
 
             id = roots[0] ? ProjectID.make(roots[0]) : undefined
             if (id) {
-              yield* fs.writeFileString(pathSvc.join(worktree, ".git", "opencode"), id).pipe(Effect.ignore)
+              yield* fs.writeFileString(pathSvc.join(cacheDir, "opencode"), id).pipe(Effect.ignore)
             }
           }
 
@@ -382,6 +396,7 @@ export namespace Project {
               name: result.name,
               icon_url: result.icon?.url,
               icon_color: result.icon?.color,
+              icon_character: result.icon?.character,
               time_created: result.time.created,
               time_updated: result.time.updated,
               time_initialized: result.time.initialized,
@@ -396,6 +411,7 @@ export namespace Project {
                 name: result.name,
                 icon_url: result.icon?.url,
                 icon_color: result.icon?.color,
+                icon_character: result.icon?.character,
                 time_updated: result.time.updated,
                 time_initialized: result.time.initialized,
                 sandboxes: result.sandboxes,
@@ -458,6 +474,10 @@ export namespace Project {
               name: input.name,
               icon_url: input.icon?.url,
               icon_color: input.icon?.color,
+              // RES-1010: persist the user-chosen 1-2 char glyph. An
+              // empty string from the dialog clears it; undefined leaves
+              // the prior value intact (drizzle skips undefined fields).
+              icon_character: input.icon?.character === "" ? null : input.icon?.character,
               commands: input.commands,
               time_updated: Date.now(),
             })
