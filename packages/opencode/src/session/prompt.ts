@@ -1,6 +1,6 @@
 import path from "path"
 import os from "os"
-import { stat } from "fs/promises"
+import { stat, readdir, readFile } from "fs/promises"
 import z from "zod"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
@@ -289,9 +289,60 @@ export namespace SessionPrompt {
                   `Goal status: ${goal.status}`,
                   `Goal objective: ${JSON.stringify(goal.objective)}`,
                   `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
-                  "Before doing substantive work, inspect current state and decide the next requirement-level step.",
-                  "Do NOT call update_goal=complete to end the session. That tool is for cases where every requirement is satisfied by an on-disk deliverable you can point to. Writing planning files, draft outlines, or partial proofs is not completion. If you are stuck or unsure, keep working or stop and explain what is blocking — calling complete prematurely is a worse failure than not finishing.",
-                  "When you do call update_goal=complete, you must list every deliverable path + description and provide an evidence paragraph mapping each goal requirement to its deliverable. The runtime verifies each file exists and has ≥ 500 bytes of substantive content; missing or stub-sized deliverables reject the completion and the goal stays active.",
+                  "",
+                  "DO NOT call update_goal. A difficult physics goal runs for many hours and dozens of iterations across the full GPD (Get Physics Done) workflow. Writing a single proposal/outline/sketch/draft and calling complete is the worst possible failure mode — it permanently abandons the goal with no real research done.",
+                  "",
+                  "Your job each continuation is to advance the goal by ONE concrete step in the canonical GPD workflow below, then stop. The runtime re-invokes you for the next step.",
+                  "",
+                  "CANONICAL GPD WORKFLOW (use the matching slash command at every step):",
+                  "",
+                  "Stage 0 — orient (first turn after a continuation if you are unsure of state):",
+                  "  /gpd-start         — guided first-run router, detects folder state",
+                  "  /gpd-suggest-next  — single-command 'what should I do next?'",
+                  "  /gpd-progress      — phase status, blockers, unverified results, pending todos",
+                  "  /gpd-health        — diagnose planning-directory health, optionally repair",
+                  "",
+                  "Stage 1 — project initialization (only if GPD/PROJECT.md is missing):",
+                  "  /gpd-new-project       — staged intake → GPD/PROJECT.md, GPD/config.json, GPD/REQUIREMENTS.md, GPD/ROADMAP.md, GPD/STATE.md, GPD/state.json",
+                  "  /gpd-map-research      — for existing prior work",
+                  "  /gpd-new-milestone     — start the next research cycle when prior milestone is done",
+                  "",
+                  "Stage 2 — phase loop (repeat for each phase N in ROADMAP.md, in order):",
+                  "  /gpd-discuss-phase N   — adaptive questioning, gray-area decisions → N-CONTEXT.md",
+                  "  /gpd-plan-phase N      — typed contract with claims + deliverables + acceptance tests → N-PLAN.md",
+                  "  /gpd-execute-phase N   — wave-based execution by specialist agents → *-SUMMARY.md (auto-spawns gpd-verifier afterwards)",
+                  "  /gpd-verify-work N     — STANDALONE physics verification (dimensional, limits, convergence, regression) → N-VERIFICATION.md",
+                  "",
+                  "Stage 3 — numerical & consistency checks (call EVERY one that even arguably applies, even if you think the execute agent already did it):",
+                  "  /gpd-dimensional-analysis, /gpd-limiting-cases, /gpd-numerical-convergence, /gpd-parameter-sweep, /gpd-sensitivity-analysis, /gpd-error-propagation, /gpd-regression-check, /gpd-derive-equation, /gpd-validate-conventions, /gpd-compare-branches, /gpd-compare-results, /gpd-compare-experiment",
+                  "",
+                  "Stage 4 — internal quality gates (these ALWAYS run before milestone closeout, even if every phase passed):",
+                  "  /gpd-audit-milestone   — cross-phase consistency, requirements coverage, notation stability",
+                  "  /gpd-peer-review       — internal six-pass review (reader → literature → math → physics → significance → synthesis); theorem-bearing claims auto-spawn gpd-check-proof",
+                  "  /gpd-complete-milestone <version> — archive to GPD/milestones/, update GPD/MILESTONES.md, reset GPD/STATE.md",
+                  "",
+                  "Stage 5 — publication track (only if the goal asks for a paper / manuscript / arXiv submission):",
+                  "  /gpd-write-paper           — paper/{topic}.tex + ARTIFACT-MANIFEST.json + BIBLIOGRAPHY-AUDIT.json + reproducibility-manifest.json",
+                  "  /gpd-peer-review           — REVIEW-LEDGER.json + REFEREE-DECISION.json + REFEREE-REPORT.md",
+                  "  /gpd-respond-to-referees   — if reviewers asked for revisions; loop back to /gpd-peer-review",
+                  "  /gpd-arxiv-submission      — final bundle ready for arXiv",
+                  "",
+                  "Stage 6 — bookkeeping (use as needed mid-workflow, never as a substitute for finishing):",
+                  "  /gpd-record-insight, /gpd-record-backtrack, /gpd-tangent, /gpd-sync-state, /gpd-compact-state, /gpd-pause-work, /gpd-resume-work, /gpd-branch-hypothesis, /gpd-tour, /gpd-explain",
+                  "",
+                  "HARD RULES — these always hold, regardless of how 'good' your last step felt:",
+                  "  1. ERR ON THE SIDE OF CALLING THE NEXT SKILL. If you think a verification is unnecessary, call it anyway. If you think the execution agent already did the numerical checks, call /gpd-verify-work and /gpd-numerical-convergence anyway. If you think the paper is ready, call /gpd-peer-review anyway. Skipping a check is a much worse error than running a redundant one.",
+                  "  2. A proposal, outline, sketch, draft, plan, notes, or scratch file is NEVER sufficient deliverable evidence. Those are workflow INPUTS, not OUTPUTS.",
+                  "  3. Every completed phase must have BOTH a *-SUMMARY.md AND a *-VERIFICATION.md inside its GPD/phases/NN-name/ directory.",
+                  "  4. Every VERIFICATION.md must contain an `ASSERT_CONVENTION` lock matching GPD/state.json.",
+                  "  5. A derivation goal is not done until /gpd-check-proof or /gpd-derive-equation has produced a verified derivation artifact.",
+                  "  6. A numerical goal is not done until convergence + sensitivity + regression artifacts exist.",
+                  "  7. A paper goal is not done until paper/*.tex, ARTIFACT-MANIFEST.json, BIBLIOGRAPHY-AUDIT.json, REVIEW-LEDGER.json, REFEREE-DECISION.json, and REFEREE-REPORT.md all exist.",
+                  "  8. The /gpd-verifier subagent (or /gpd-verify-work) must have actually run end-to-end and produced a task_id; you will need to pass that task_id to update_goal at the very end.",
+                  "",
+                  "If you are blocked by a real external dependency (missing data, awaiting user decision), call /gpd-pause-work — DO NOT call update_goal=complete. A paused goal is recoverable; a falsely-completed goal is not.",
+                  "",
+                  "When the ENTIRE workflow above has actually been executed and signed off, update_goal=complete still has to pass the runtime gate. It mechanically verifies: GPD/PROJECT.md, GPD/REQUIREMENTS.md, GPD/ROADMAP.md, GPD/STATE.md all exist; at least one GPD/phases/NN-*/NN-VERIFICATION.md exists with an ASSERT_CONVENTION lock; every listed deliverable exists, is ≥ 2000 bytes, and is not a stub/proposal/outline; verifier_task_id is supplied; and the evidence paragraph is ≥ 500 chars and names each goal requirement, deliverable, and verification. If the goal mentions paper/manuscript/arxiv/publication, paper/*.tex and GPD/review/REFEREE-DECISION.json are additionally required. Any failed check rejects the call and the goal stays active.",
                   "</system-reminder>",
                 ].join("\n"),
               },
@@ -652,28 +703,34 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
         tools["update_goal"] = tool({
           description: [
-            "Mark the current session goal complete. Use this RARELY — only when every requirement",
-            "in the goal objective has been satisfied with a real, on-disk deliverable that the user",
-            "could open and verify. Writing planning notes, draft outlines, or partial proofs does",
-            "NOT make a goal complete. If you cannot finish, keep working or stop and explain what",
-            "is blocking you — do NOT call this tool just to end the session.",
+            "Mark the current session goal complete. Use this EXTREMELY RARELY — only at the END of",
+            "a fully-executed multi-phase GPD (Get Physics Done) workflow when every requirement in",
+            "the goal objective has been satisfied with on-disk deliverables that survived",
+            "/gpd-verifier review and (where applicable) /gpd-peer-review sign-off.",
             "",
-            "You must list every deliverable file as a path relative to the project root and a one-",
-            "line description of what it contains. The runtime VERIFIES each path exists and has",
-            "substantive content (≥ 500 bytes) before accepting the completion. If any deliverable",
-            "is missing or stub-sized, the call is rejected and the goal stays active.",
+            "A single proposal, outline, sketch, draft, plan, notes, or scratch file is NEVER",
+            "sufficient — those are workflow INPUTS, not OUTPUTS. Hard physics goals run for many",
+            "hours across discuss → plan → execute → verify → numerical-checks → audit →",
+            "complete-milestone (→ write-paper → peer-review → arxiv if a paper is requested).",
+            "If you cannot finish, keep iterating (/gpd-suggest-next, /gpd-progress) or call",
+            "/gpd-pause-work — do NOT call update_goal to end the session early.",
             "",
-            "The `evidence` field is a paragraph (≥ 200 chars) tracing each goal requirement to the",
-            "deliverable(s) that satisfy it and the verification you ran (dimensional check,",
-            "limiting case, numerical benchmark, peer review, etc.). Vague summaries fail.",
-            "",
-            "If a `gpd-verifier` agent (or `/gpd-verify-work` run) was completed, include its",
-            "task_id in `verifier_task_id` — a passed verification result is the strongest signal.",
+            "The runtime mechanically verifies every claim before accepting completion:",
+            "  - GPD/PROJECT.md, GPD/REQUIREMENTS.md, GPD/ROADMAP.md, GPD/STATE.md must all exist.",
+            "  - At least one GPD/phases/NN-*/NN-VERIFICATION.md must exist with an ASSERT_CONVENTION lock.",
+            "  - Every deliverable must exist, be ≥ 2000 bytes, and not be a stub/proposal/outline.",
+            "  - verifier_task_id is REQUIRED and must reference a completed /gpd-verifier run.",
+            "  - Evidence paragraph (≥ 500 chars) must name each requirement, its deliverable, and",
+            "    the specific verification (dimensional, limiting case, numerical convergence,",
+            "    sensitivity, regression, peer review, referee decision, etc.).",
+            "  - If the goal mentions paper/manuscript/arxiv/publication, paper/*.tex and",
+            "    GPD/review/REFEREE-DECISION.json are additionally required.",
+            "Any failed check rejects the call and the goal stays active.",
           ].join(" "),
           inputSchema: jsonSchema({
             type: "object",
             additionalProperties: false,
-            required: ["status", "deliverables", "evidence"],
+            required: ["status", "deliverables", "evidence", "verifier_task_id"],
             properties: {
               status: { type: "string", enum: ["complete"] },
               deliverables: {
@@ -697,14 +754,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               },
               evidence: {
                 type: "string",
-                minLength: 200,
+                minLength: 500,
                 description:
-                  "Paragraph mapping each goal requirement to its deliverable(s) and the verification ran.",
+                  "Paragraph (≥ 500 chars) tracing each goal requirement to its deliverable(s) and naming the specific verifications run.",
               },
               verifier_task_id: {
                 type: "string",
+                minLength: 1,
                 description:
-                  "Optional: task_id from a completed gpd-verifier (or /gpd-verify-work) subagent run.",
+                  "REQUIRED. task_id from a completed gpd-verifier (or /gpd-verify-work) subagent run that signed off on the deliverables.",
               },
             },
           }),
@@ -726,9 +784,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   )
                 }
                 const evidence = typeof payload.evidence === "string" ? payload.evidence.trim() : ""
-                if (evidence.length < 200) {
+                if (evidence.length < 500) {
                   throw new Error(
-                    `update_goal=complete requires an evidence paragraph of at least 200 characters (got ${evidence.length}). Trace each goal requirement to the deliverable(s) that satisfy it and name the verification you ran (dimensional check, limiting case, numerical benchmark, peer review, etc.).`,
+                    `update_goal=complete requires an evidence paragraph of at least 500 characters (got ${evidence.length}). Trace each goal requirement to the deliverable(s) that satisfy it and name the specific verifications you ran (dimensional check, limiting case, numerical convergence, sensitivity sweep, peer review, /gpd-verifier task_id, etc.). Vague summaries fail.`,
+                  )
+                }
+                const verifierTaskId =
+                  typeof payload.verifier_task_id === "string" ? payload.verifier_task_id.trim() : ""
+                if (verifierTaskId.length === 0) {
+                  throw new Error(
+                    "update_goal=complete requires verifier_task_id from a completed /gpd-verifier (or /gpd-verify-work) subagent run. A goal is not complete until an independent verifier has signed off on the deliverables. Run the verifier first, then retry with its task_id.",
                   )
                 }
 
@@ -737,7 +802,138 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 const failures: string[] = []
                 const verified: { path: string; bytes: number; description: string }[] = []
 
-                const MIN_BYTES = 500
+                // Fetch the current goal so we can branch on objective text
+                // (paper-track gating). The narrow goals.get above gives us
+                // the objective without the side-effect of marking complete.
+                const currentGoal = yield* goals.get(input.session.id)
+                const objectiveText =
+                  currentGoal && typeof currentGoal.objective === "string"
+                    ? currentGoal.objective
+                    : JSON.stringify(currentGoal?.objective ?? "")
+
+                // GPD workflow gate: a research goal is only "complete" once
+                // the project has actually been run through the GPD pipeline.
+                // Each artifact below is written by a specific GPD command, so
+                // absence is direct evidence that the workflow was skipped.
+                // Paths and names mirror the canonical layout from
+                // get-physics-done/src/gpd/commands.
+                const statRel = (rel: string) =>
+                  Effect.tryPromise({
+                    try: () => stat(path.resolve(root, rel)),
+                    catch: (e) => e,
+                  }).pipe(Effect.option)
+                const readdirRel = (rel: string) =>
+                  Effect.tryPromise({
+                    try: () => readdir(path.resolve(root, rel)),
+                    catch: (e) => e,
+                  }).pipe(Effect.option)
+                const readFileRel = (rel: string) =>
+                  Effect.tryPromise({
+                    try: () => readFile(path.resolve(root, rel), "utf8"),
+                    catch: (e) => e,
+                  }).pipe(Effect.option)
+
+                const requiredScaffold: { rel: string; remedy: string }[] = [
+                  {
+                    rel: "GPD/PROJECT.md",
+                    remedy: "Run /gpd-new-project to initialize PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md.",
+                  },
+                  {
+                    rel: "GPD/REQUIREMENTS.md",
+                    remedy: "Scoping contract is missing. Run /gpd-new-project (or /gpd-new-milestone) to approve REQUIREMENTS.md.",
+                  },
+                  {
+                    rel: "GPD/ROADMAP.md",
+                    remedy: "Phase structure is missing. Run /gpd-new-project or /gpd-new-milestone.",
+                  },
+                  {
+                    rel: "GPD/STATE.md",
+                    remedy: "STATE.md is missing. The GPD workflow has not been initialized for this project.",
+                  },
+                ]
+                for (const item of requiredScaffold) {
+                  const st = yield* statRel(item.rel)
+                  if (Option.isNone(st) || !st.value.isFile()) {
+                    failures.push(`${item.rel} is missing. ${item.remedy}`)
+                  }
+                }
+
+                // At least one phase must have been verified end-to-end.
+                // Canonical naming is GPD/phases/NN-name/NN-VERIFICATION.md;
+                // tolerate either NN-VERIFICATION.md or VERIFICATION.md.
+                // ASSERT_CONVENTION lock is mandatory inside the verification
+                // body — that's how gpd-verifier signs off.
+                let verifiedPhaseFound = false
+                let verifiedPhaseHasConventionLock = false
+                const phaseEntries = yield* readdirRel("GPD/phases")
+                if (Option.isSome(phaseEntries)) {
+                  for (const entryName of phaseEntries.value) {
+                    const phaseRel = path.join("GPD/phases", entryName)
+                    const phaseStat = yield* statRel(phaseRel)
+                    if (Option.isNone(phaseStat) || !phaseStat.value.isDirectory()) continue
+                    const inner = yield* readdirRel(phaseRel)
+                    if (Option.isNone(inner)) continue
+                    const verificationFiles = inner.value.filter((n) => /(^|-)VERIFICATION\.md$/i.test(n))
+                    for (const vf of verificationFiles) {
+                      const vRel = path.join(phaseRel, vf)
+                      const vstat = yield* statRel(vRel)
+                      if (Option.isNone(vstat) || !vstat.value.isFile() || vstat.value.size < 500) continue
+                      verifiedPhaseFound = true
+                      const body = yield* readFileRel(vRel)
+                      if (Option.isSome(body) && /ASSERT_CONVENTION/i.test(body.value)) {
+                        verifiedPhaseHasConventionLock = true
+                      }
+                      if (verifiedPhaseHasConventionLock) break
+                    }
+                    if (verifiedPhaseHasConventionLock) break
+                  }
+                }
+                if (!verifiedPhaseFound) {
+                  failures.push(
+                    "No verified phase found under GPD/phases/NN-*/*-VERIFICATION.md. Run /gpd-plan-phase → /gpd-execute-phase → /gpd-verify-work for at least one phase before claiming completion.",
+                  )
+                } else if (!verifiedPhaseHasConventionLock) {
+                  failures.push(
+                    "Found a *-VERIFICATION.md but none contained an ASSERT_CONVENTION lock. gpd-verifier did not sign off — re-run /gpd-verify-work so the verification artifact includes the convention assertion.",
+                  )
+                }
+
+                // Paper-track requirements activate when the goal objective
+                // mentions paper / manuscript / arxiv / publication. These
+                // goals must additionally have a paper source and a refereed
+                // decision artifact before completion.
+                const isPaperGoal = /(paper|manuscript|arxiv|publication|preprint|submission|referee)/i.test(objectiveText)
+                if (isPaperGoal) {
+                  let paperFound = false
+                  const paperEntries = yield* readdirRel("paper")
+                  if (Option.isSome(paperEntries)) {
+                    for (const name of paperEntries.value) {
+                      if (!/\.tex$/i.test(name)) continue
+                      const st = yield* statRel(path.join("paper", name))
+                      if (Option.isSome(st) && st.value.isFile() && st.value.size >= 2000) {
+                        paperFound = true
+                        break
+                      }
+                    }
+                  }
+                  if (!paperFound) {
+                    failures.push(
+                      "Goal mentions a paper/manuscript/arxiv submission but no paper/*.tex (≥ 2000 bytes) was found. Run /gpd-write-paper.",
+                    )
+                  }
+                  const refereeDecision = yield* statRel("GPD/review/REFEREE-DECISION.json")
+                  if (Option.isNone(refereeDecision) || !refereeDecision.value.isFile()) {
+                    failures.push(
+                      "GPD/review/REFEREE-DECISION.json is missing. Run /gpd-peer-review before claiming a paper goal complete; if reviewers requested changes, also run /gpd-respond-to-referees and re-review.",
+                    )
+                  }
+                }
+
+                // Reject deliverables whose filename signals a planning-only
+                // artifact. These are workflow inputs, not workflow outputs.
+                const STUB_NAME_RE = /(^|[/_-])(proposal|outline|sketch|draft|plan|notes|todo|scratch|idea|brainstorm)\b/i
+
+                const MIN_BYTES = 2000
                 for (const raw of deliverables) {
                   if (!raw || typeof raw !== "object") {
                     failures.push(`Malformed deliverable: ${JSON.stringify(raw)}`)
@@ -758,6 +954,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   const insideRel = path.relative(root, abs)
                   if (insideRel.startsWith("..") || path.isAbsolute(insideRel)) {
                     failures.push(`Deliverable ${rel} resolves outside the project root`)
+                    continue
+                  }
+                  const base = path.basename(rel)
+                  if (STUB_NAME_RE.test(base)) {
+                    failures.push(
+                      `Deliverable ${rel} looks like a planning artifact (proposal/outline/sketch/draft/plan/notes). Planning files are workflow inputs, not completion deliverables. Run the rest of the GPD workflow (execute → verify → numerical checks → paper) and list those outputs instead.`,
+                    )
                     continue
                   }
                   try {
@@ -783,7 +986,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
                 if (failures.length > 0) {
                   throw new Error(
-                    `update_goal=complete rejected. The runtime verified ${verified.length}/${deliverables.length} deliverables; ${failures.length} failed:\n  - ${failures.join("\n  - ")}\n\nFix the failures (write the missing files, fill out the stubs, or remove the deliverable from the list) and retry. The goal remains active.`,
+                    `update_goal=complete rejected. The runtime verified ${verified.length}/${deliverables.length} deliverables; ${failures.length} check(s) failed:\n  - ${failures.join("\n  - ")}\n\nResume the GPD workflow (/gpd-suggest-next or /gpd-progress) and only call update_goal again once every check above passes. The goal remains active.`,
                   )
                 }
 
@@ -792,12 +995,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   messageID: input.processor.message.id,
                   status: "complete",
                 })
-                const verifierNote =
-                  typeof payload.verifier_task_id === "string" && payload.verifier_task_id.trim().length > 0
-                    ? `\n\nVerifier task_id: ${payload.verifier_task_id.trim()}`
-                    : "\n\nNote: no verifier_task_id provided. Consider running /gpd-verify-work for an independent check before relying on this completion downstream."
                 return goalToolResult(
-                  `Goal complete (${verified.length} deliverables verified, ${evidence.length} chars of evidence)${verifierNote}`,
+                  `Goal complete (${verified.length} deliverables verified, ${evidence.length} chars of evidence)\n\nVerifier task_id: ${verifierTaskId}`,
                   goal,
                 )
               }),
