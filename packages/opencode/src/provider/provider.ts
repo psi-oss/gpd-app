@@ -1728,13 +1728,19 @@ export namespace Provider {
           const provider = s.providers[model.providerID]
           const options = { ...provider.options }
 
-          // Arm `wrapSSE` chunk-timeout watchdog by default on the PSI gpd
-          // provider so an upstream proxy that opens the SSE then hangs no
-          // longer leaves the client waiting indefinitely (ENG-561 fix #1,
-          // defense in depth). Opt out by setting chunkTimeout=0 in the
-          // provider config.
+          // Disabled by default on the PSI gpd provider. The 60s default
+          // (added 2026-05-11) was misfiring during legitimate Anthropic
+          // silences when Claude prepares a large tool_use payload (e.g.
+          // `write` with a multi-KB content block) after a heavy-context
+          // turn — killing subagents that were actually making progress.
+          // The proxy-side fix is gpd_keepalive (infra/litellm/gpd_keepalive)
+          // which injects `: keepalive\n\n` SSE comments every 30s during
+          // upstream silences; once that ships and is verified, this can
+          // be re-armed at a sensible value (e.g. 90s) without false
+          // positives. Opt back in per-user via `chunkTimeout` in the
+          // gpd provider config in opencode.json.
           if (model.providerID === "gpd" && options["chunkTimeout"] === undefined) {
-            options["chunkTimeout"] = 60_000
+            options["chunkTimeout"] = 0
           }
 
           if (model.providerID === "google-vertex" && !model.api.npm.includes("@ai-sdk/openai-compatible")) {
