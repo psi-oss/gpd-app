@@ -448,6 +448,66 @@ export namespace Session {
     return rows.length
   }
 
+  /**
+   * Mark every tool part whose `state.status` is "running" as errored.
+   * Counterpart to `finalizeOrphanedAssistants`: that handles the *message*
+   * envelope, but the embedded tool parts have their own status field that
+   * the UI reads independently. If a tool call (especially a `task` part
+   * for a subagent) is left "running" by a sidecar crash / SIGKILL / dev
+   * HMR restart, the parent session's input stays disabled because the
+   * UI sees an in-flight tool call. The path that normally finalizes
+   * these (prompt.ts:1107-1136 + Effect.onInterrupt cleanup) only runs
+   * for graceful shutdowns — hard kills bypass it.
+   *
+   * Writes directly to PartTable (no message envelope) and emits
+   * MessageV2.Event.PartUpdated so live UIs refresh without a reload.
+   */
+  export function finalizeOrphanedToolParts(now: number = Date.now()) {
+    const rows = Database.use((d) =>
+      d
+        .select()
+        .from(PartTable)
+        .where(sql`json_extract(${PartTable.data}, '$.state.status') = 'running'`)
+        .all(),
+    )
+    if (rows.length === 0) return 0
+    for (const row of rows) {
+      const data = row.data as MessageV2.ToolPart
+      if (data.type !== "tool") continue
+      if (data.state.status !== "running") continue
+      const next: MessageV2.ToolPart = {
+        ...data,
+        id: row.id,
+        sessionID: row.session_id,
+        messageID: row.message_id,
+        state: {
+          status: "error",
+          error: "Tool execution aborted (sidecar restarted mid-flight)",
+          input: data.state.input,
+          metadata: data.state.metadata,
+          time: {
+            start: data.state.time?.start ?? now,
+            end: now,
+          },
+        },
+      }
+      Database.use((d) =>
+        d
+          .update(PartTable)
+          .set({ data: next })
+          .where(and(eq(PartTable.id, row.id), eq(PartTable.session_id, row.session_id)))
+          .run(),
+      )
+      SyncEvent.run(MessageV2.Event.PartUpdated, {
+        sessionID: row.session_id,
+        part: next,
+        time: now,
+      })
+    }
+    log.info("finalized orphaned tool parts", { count: rows.length })
+    return rows.length
+  }
+
   export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | SessionGoal.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -464,6 +524,18 @@ export namespace Session {
       yield* Effect.sync(finalizeOrphanedAssistants).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => log.error("orphan recovery failed", { cause: String(cause) })),
+        ),
+      )
+
+      // Separate pass for stuck tool parts. The UI's busy-state check
+      // reads tool-part status independently of the message envelope, so
+      // a `task` part for a subagent left `state.status = "running"`
+      // disables the parent session's input even after the assistant
+      // message has been finalized with an error. See
+      // finalizeOrphanedToolParts above.
+      yield* Effect.sync(finalizeOrphanedToolParts).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => log.error("orphan tool-part recovery failed", { cause: String(cause) })),
         ),
       )
 
