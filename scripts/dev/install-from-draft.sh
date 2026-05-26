@@ -64,7 +64,10 @@ GPD_SOURCE_REPO="${GPD_SOURCE_REPO:-psi-oss/get-physics-done}"
 GPD_REF="${GPD_REF:-main}"
 
 GPD_HOME="${GPD_HOME:-$HOME/.gpd}"
-GPD_VENV="$GPD_HOME/.venv"
+# The desktop app's first-run setup (gpd_setup.rs) creates this path
+# WITHOUT a leading dot — `~/.gpd/venv`, not `~/.gpd/.venv`. Caught
+# after 1.0.5 install-draft hit "doesn't exist" on the swap step.
+GPD_VENV="$GPD_HOME/venv"
 GPD_UV="$GPD_HOME/bin/uv"
 
 DESKTOP_ONLY=0
