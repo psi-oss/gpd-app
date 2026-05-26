@@ -1,0 +1,256 @@
+name: LiteLLM source watchdog
+
+# Auto-revert the production LiteLLM service when its source mode drifts off
+# Dockerfile + our repo. The Railway dashboard exposes a service-source toggle
+# (Source repo → Dockerfile vs Source image → ghcr.io/...) that bypasses the
+# `railway.json` in the repo entirely. If anyone with workspace admin flips
+# the service to image mode, the next deploy strips out every /gpd/* hook
+# (gpd_log, gpd_tos, gpd_feedback, gpd_consent, gpd_sanitize) and breaks
+# every desktop user during TOS acceptance.
+#
+# This happened on 2026-04-30 (caught and reverted manually after ~2h) and
+# again on 2026-05-22 (caught after several days, broke every new user
+# trying to sign in). The litellm-smoke-test workflow above runs weekly,
+# which is too slow to be a real safety net.
+#
+# This workflow runs every 10 minutes, queries Railway's GraphQL for the
+# service's current source/builder config, and:
+#   - if drift detected (builder != DOCKERFILE OR source.image set),
+#     redeploys from infra/litellm/ via `railway up --path-as-root`
+#   - then polls until the new deploy is live and calls the canary
+#     /gpd/tos-accept endpoint to confirm hooks are registered
+#   - posts a Slack message (if SLACK_WEBHOOK_URL is set) describing the
+#     drift, the revert outcome, and the hook verification result
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'  # every 20 min
+  workflow_dispatch:
+    inputs:
+      force_revert:
+        description: 'Force a revert deploy even when no drift detected'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: litellm-source-watchdog
+  cancel-in-progress: true
+
+env:
+  # The production litellm service. Project psi-gpd, environment production.
+  # Hardcoded because they don't change and avoiding extra secrets.
+  RAILWAY_SERVICE_ID: b6d78513-0d16-47b7-b4fa-ce5391d98235
+  RAILWAY_ENVIRONMENT_ID: b2de8a2d-2d1b-4cf2-abf3-1d3ddb3e7fed
+  RAILWAY_PROJECT_ID: 0ddad766-1ee1-44ed-95c2-f8f7d9cb5515
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check current service source
+        id: check
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::RAILWAY_TOKEN secret missing; cannot query Railway"
+            exit 1
+          fi
+
+          # Pull the live service instance source/builder.
+          RESP=$(curl -sS "https://backboard.railway.com/graphql/v2" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"query { service(id: \\\"$RAILWAY_SERVICE_ID\\\") { serviceInstances { edges { node { source { image repo } builder environmentId } } } } }\"}")
+
+          echo "$RESP" | jq .
+
+          # Pick the instance for the production environment.
+          INSTANCE=$(echo "$RESP" | jq --arg env "$RAILWAY_ENVIRONMENT_ID" '
+            .data.service.serviceInstances.edges[].node
+            | select(.environmentId == $env)
+          ')
+
+          if [ -z "$INSTANCE" ] || [ "$INSTANCE" = "null" ]; then
+            echo "::error::could not find service instance for environment $RAILWAY_ENVIRONMENT_ID"
+            exit 1
+          fi
+
+          BUILDER=$(echo "$INSTANCE" | jq -r '.builder // "null"')
+          IMAGE=$(echo "$INSTANCE" | jq -r '.source.image // "null"')
+          REPO=$(echo "$INSTANCE" | jq -r '.source.repo // "null"')
+
+          echo "builder=$BUILDER image=$IMAGE repo=$REPO"
+          echo "builder=$BUILDER" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+          DRIFT=false
+          if [ "$BUILDER" != "DOCKERFILE" ]; then
+            echo "::warning::drift: builder=$BUILDER (expected DOCKERFILE)"
+            DRIFT=true
+          fi
+          if [ "$IMAGE" != "null" ] && [ -n "$IMAGE" ]; then
+            echo "::warning::drift: source.image=$IMAGE (expected null)"
+            DRIFT=true
+          fi
+
+          if [ "${{ inputs.force_revert }}" = "true" ]; then
+            echo "::notice::force_revert requested; will redeploy regardless of drift"
+            DRIFT=true
+          fi
+
+          echo "drift=$DRIFT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout (only when reverting)
+        if: steps.check.outputs.drift == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI (only when reverting)
+        if: steps.check.outputs.drift == 'true'
+        run: |
+          curl -fsSL https://railway.com/install.sh | sh
+          railway --version
+
+      - name: Auto-revert via railway up
+        if: steps.check.outputs.drift == 'true'
+        id: revert
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Reverting service source: $(date -u +%FT%TZ)"
+          # --path-as-root makes infra/litellm/Dockerfile the build context root.
+          # --ci streams build logs then exits (no interactive prompts).
+          railway up infra/litellm \
+            --path-as-root \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --ci 2>&1 | tee /tmp/railway-up.log
+
+          echo "revert_at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deploy + verify hooks are live
+        if: steps.check.outputs.drift == 'true'
+        id: verify
+        env:
+          GPD_LOG_URL: ${{ secrets.GPD_LOG_URL }}
+          CANARY_KEY: ${{ secrets.LITELLM_SMOKE_CANARY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPD_LOG_URL:-}" ] || [ -z "${CANARY_KEY:-}" ]; then
+            echo "::warning::no canary creds; skipping hook verification"
+            echo "hooks_ok=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE="${GPD_LOG_URL%/gpd/log}"
+
+          # Poll /gpd/tos-accept until 200 or 60s elapse — Railway redeploys
+          # take ~30s to swap. 404 from this endpoint = hooks NOT loaded
+          # (vanilla upstream image). 200 = hooks registered and working.
+          SHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+          PSHA=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+          QS="tos_version=1.0&tos_text_sha256=$SHA&privacy_text_sha256=$PSHA&app_version=watchdog-ci&viewed_in_full=1"
+
+          HTTP=000
+          for i in $(seq 1 30); do
+            HTTP=$(curl -sS -o /tmp/tos.json -w '%{http_code}' \
+              -X POST "$BASE/gpd/tos-accept?$QS" \
+              -H "Authorization: Bearer $CANARY_KEY" \
+              -H "User-Agent: gh-actions-watchdog/1.0" \
+              --max-time 10 || echo "000")
+            echo "  attempt $i: HTTP $HTTP"
+            if [ "$HTTP" = "200" ]; then break; fi
+            sleep 5
+          done
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::hooks did NOT come back after revert (last HTTP $HTTP)"
+            cat /tmp/tos.json || true
+            echo "hooks_ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if ! jq -e '.ok == true' /tmp/tos.json >/dev/null; then
+            echo "::error::/gpd/tos-accept returned 200 but shape unexpected"
+            cat /tmp/tos.json
+            echo "hooks_ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "hooks_ok=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::hooks confirmed live after revert"
+
+      - name: Notify Slack (#dev-infra-status, PSI Status App)
+        if: always() && steps.check.outputs.drift == 'true'
+        env:
+          # PSI Status App bot token (xoxb-...). Posts to #dev-infra-status (C0AHY119TEX)
+          # via chat.postMessage. If unset, this step no-ops so the workflow can still
+          # auto-revert without Slack visibility.
+          SLACK_BOT_TOKEN: ${{ secrets.PSI_STATUS_SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+            echo "::warning::PSI_STATUS_SLACK_BOT_TOKEN missing; skipping Slack alert"
+            exit 0
+          fi
+          # Status: revert worked + hooks live = "auto-healed";
+          # revert worked but hooks failed = "needs human"; revert failed = "needs human".
+          if [ "${{ steps.verify.outputs.hooks_ok }}" = "true" ]; then
+            STATUS=":white_check_mark: auto-healed"
+            COLOR="#36a64f"
+          else
+            STATUS=":rotating_light: REVERT FAILED — manual fix required"
+            COLOR="#cc0000"
+          fi
+          BUILDER='${{ steps.check.outputs.builder }}'
+          IMAGE='${{ steps.check.outputs.image }}'
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(jq -nc \
+            --arg channel "C0AHY119TEX" \
+            --arg status "$STATUS" \
+            --arg builder "$BUILDER" \
+            --arg image "$IMAGE" \
+            --arg url "$RUN_URL" \
+            --arg color "$COLOR" \
+            '{
+              channel: $channel,
+              text: "LiteLLM service source drifted — \($status)",
+              attachments: [{
+                color: $color,
+                fallback: "LiteLLM source drift detected",
+                title: "LiteLLM service source drifted",
+                text: ($status + "\n*builder:* `" + $builder + "`\n*source.image:* `" + $image + "`\n<" + $url + "|GH Actions run>"),
+                footer: "litellm-source-watchdog"
+              }]
+            }')
+          RESP=$(curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$BODY")
+          echo "$RESP"
+          if ! echo "$RESP" | jq -e '.ok == true' >/dev/null; then
+            echo "::error::Slack chat.postMessage failed: $(echo "$RESP" | jq -r '.error // "unknown"')"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## LiteLLM source watchdog"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| builder | \`${{ steps.check.outputs.builder }}\` |"
+            echo "| source.image | \`${{ steps.check.outputs.image }}\` |"
+            echo "| drift detected | ${{ steps.check.outputs.drift }} |"
+            if [ "${{ steps.check.outputs.drift }}" = "true" ]; then
+              echo "| revert at | ${{ steps.revert.outputs.revert_at }} |"
+              echo "| hooks live after revert | ${{ steps.verify.outputs.hooks_ok }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
