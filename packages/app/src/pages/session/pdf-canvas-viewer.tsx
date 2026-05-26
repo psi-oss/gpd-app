@@ -430,22 +430,25 @@ export function PdfCanvasViewer(props: PdfCanvasViewerProps) {
     const fy = oldRect.height > 0 ? (clientY - oldRect.top) / oldRect.height : 0.5
     setDisplayZoom(clamped)
     if (emit) emitZoom(clamped)
-    // Solid commits style.width/height synchronously on the page wrappers,
-    // but the browser doesn't flush layout until after this microtask
-    // returns. One rAF lands BEFORE the post-layout repaint on
-    // WebKit/Chromium, so the rect we'd read would still be stale.
-    // Wait two rAFs and read forcibly-up-to-date layout.
-    requestAnimationFrame(() => {
-      // Force layout commit before measuring.
-      void container.scrollHeight
-      requestAnimationFrame(() => {
-        const newRect = anchor.getBoundingClientRect()
-        const cRect = container.getBoundingClientRect()
-        const newTargetX = newRect.left + fx * newRect.width
-        const newTargetY = newRect.top + fy * newRect.height
-        container.scrollLeft += newTargetX - clientX
-        container.scrollTop += newTargetY - clientY
-      })
+    // Anchor the cursor point after the new size is committed to the DOM.
+    //
+    // `applyZoomAroundPoint` runs *inside* the `props.zoom` createEffect
+    // for the controlled (toolbar-button) path. Signal writes inside an
+    // effect are flushed by Solid only after the effect finishes, so the
+    // wrapper's new width/height (and the dependent `pagePadding`) are
+    // NOT on the DOM yet at this point — measuring here returns stale
+    // geometry. A `queueMicrotask` runs after Solid's synchronous flush
+    // commits the DOM, yet still before the browser's paint step (paint
+    // happens after the microtask queue drains). So we measure the
+    // up-to-date layout and set scrollLeft/scrollTop in the SAME frame —
+    // one paint, correctly anchored, no "twitch" toward the top-left.
+    queueMicrotask(() => {
+      void container.scrollHeight // force synchronous layout before measuring
+      const newRect = anchor.getBoundingClientRect()
+      const newTargetX = newRect.left + fx * newRect.width
+      const newTargetY = newRect.top + fy * newRect.height
+      container.scrollLeft += newTargetX - clientX
+      container.scrollTop += newTargetY - clientY
     })
   }
 
