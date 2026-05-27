@@ -107,9 +107,29 @@ export namespace Truncate {
         yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
         yield* fs.writeFileString(file, text).pipe(Effect.orDie)
 
-        const hint = hasTaskTool(agent)
-          ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
-          : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+        // A large output spread over very few lines (e.g. a single-line JSON
+        // blob) is not line-structured: Read paging by line offset is nearly
+        // useless and the head preview is often empty. Steer the model toward
+        // Grep, and — when the blob is JSON that wraps a payload produced by a
+        // tool that also saved a file — toward reading that file directly
+        // rather than chunk-reading the blob. This is the RES-1205 failure:
+        // an MCP tool returned a 538KB single-line JSON and the agent spent
+        // minutes chunk-reading the blob instead of the clean file behind it.
+        const trimmed = text.trimStart()
+        const fewLines = lines.length <= 5
+        const looksJson = trimmed.startsWith("{") || trimmed.startsWith("[")
+        const blobHint =
+          fewLines && looksJson
+            ? `\nNOTE: this output is a large JSON blob on ${lines.length} line(s) — Read with offset/limit pages by LINE and will not help. If this JSON wraps a large text payload from a tool that also persisted it (look for a "path", "file", or "outputPath" field), read THAT file directly. Otherwise use Grep with a regex to pull the specific fields/sections you need.`
+            : fewLines
+              ? `\nNOTE: this output spans only ${lines.length} line(s) — Read with offset/limit pages by LINE and will not help. Use Grep with a regex to extract the parts you need.`
+              : ""
+
+        const hint =
+          (hasTaskTool(agent)
+            ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
+            : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`) +
+          blobHint
 
         return {
           content:
