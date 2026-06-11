@@ -17,6 +17,7 @@ import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
+import { parseGoalFlags } from "./goal-flags"
 import { formatServerError } from "@/utils/server-errors"
 import { classifyError } from "@opencode-ai/util/classify-error"
 
@@ -35,56 +36,6 @@ const goalDescription = (goal: SessionGoal) =>
     `Cost: $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : `/$${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}`,
     "Commands: /goal edit, /goal pause, /goal resume, /goal clear",
   ].join("\n")
-
-// Parse durations like "30m", "2h", "1h30m", "120s", "1h30m45s"
-function parseDuration(raw: string): number | undefined {
-  const match = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/)
-  if (!match || (!match[1] && !match[2] && !match[3])) return undefined
-  const h = match[1] ? parseInt(match[1], 10) : 0
-  const m = match[2] ? parseInt(match[2], 10) : 0
-  const s = match[3] ? parseInt(match[3], 10) : 0
-  return h * 3600 + m * 60 + s
-}
-
-type GoalFlags = { timeBudgetSeconds?: number; costBudgetUSD?: number }
-
-// Extract --budget=$X / --time=Yh flags from anywhere in the objective text
-// (leading, trailing, or interior). Returns the cleaned objective + parsed
-// flags. Throws on malformed flag values.
-function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlags } {
-  const flags: GoalFlags = {}
-  // Anchor on either start-of-string or whitespace so a flag that's the
-  // first argument right after `/goal ` parses, not just one buried later
-  // (e.g. `/goal --budget=$1.00 reproduce X` used to leave `--budget=$1.00`
-  // glued to the objective and the cost budget unparsed).
-  const flagPattern = /(?:^|\s+)--(budget|time)=(\S+)/g
-  // Extract values first by iterating matches on the ORIGINAL arg. The
-  // strip step runs as a single independent pass below so partial
-  // whitespace-normalization between iterations can't leave a later flag
-  // unstripped (the previous loop edited cleanArg incrementally and the
-  // \s+ prefix from match[0] disappeared after the first replace).
-  for (const match of arg.matchAll(flagPattern)) {
-    const [, key, raw] = match
-    if (key === "budget") {
-      const usd = parseFloat(raw.replace(/^\$/, ""))
-      if (!Number.isFinite(usd) || usd <= 0) {
-        throw new Error(`Invalid --budget=${raw}; expected $<positive number>`)
-      }
-      flags.costBudgetUSD = usd
-    } else if (key === "time") {
-      const seconds = parseDuration(raw)
-      if (seconds === undefined || seconds <= 0) {
-        throw new Error(`Invalid --time=${raw}; expected e.g. 30m, 2h, 1h30m, 120s`)
-      }
-      flags.timeBudgetSeconds = seconds
-    }
-  }
-  const cleanArg = arg
-    .replace(/(?:^|\s+)--(?:budget|time)=\S+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-  return { cleanArg, flags }
-}
 
 async function runGoal(input: {
   client: ReturnType<typeof useSDK>["client"]

@@ -57,6 +57,14 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const GOAL_CONTINUATION_MARKER = "Continue working toward the active session goal."
 const GOAL_CONTINUATION_IDLE_GRACE = "150 millis"
+// Consecutive text-only (no tool call / patch / subtask) continuation turns
+// tolerated before the goal auto-pauses. One advisory turn used to pause the
+// goal immediately, which killed budgeted long-horizon goals the moment the
+// model paused to think out loud — and Resume could never escape it (see
+// the `force` path in autoContinueGoal). Budgets, not turn-shape, are the
+// real runaway guard; this threshold only catches a model that is truly
+// spinning without acting.
+const GOAL_NO_PROGRESS_PAUSE_THRESHOLD = 3
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -85,7 +93,7 @@ export namespace SessionPrompt {
 
   export interface Interface {
     readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-    readonly continueGoal: (sessionID: SessionID) => Effect.Effect<void>
+    readonly continueGoal: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void>
     readonly resumeGoals: () => Effect.Effect<void>
     readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
     readonly loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts>
@@ -129,6 +137,10 @@ export namespace SessionPrompt {
           active: false,
           pending: new Set<SessionID>(),
           continuing: new Set<SessionID>(),
+          // Consecutive no-progress continuation turns per session. In-memory
+          // on purpose: a sidecar restart resets the allowance, which at worst
+          // grants a few extra continuations — bounded by the goal budgets.
+          noProgress: new Map<SessionID, number>(),
         }),
       )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
@@ -179,27 +191,37 @@ export namespace SessionPrompt {
           return part.state.status === "completed" || part.state.status === "running" || part.state.status === "pending"
         })
 
-      const scheduleGoalIdleRetry: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
-        "SessionPrompt.scheduleGoalIdleRetry",
-      )(function* (sessionID: SessionID) {
-        const subscription = yield* InstanceState.get(goalIdleSubscription)
-        if (subscription.pending.has(sessionID)) return
-        subscription.pending.add(sessionID)
-        yield* Effect.gen(function* () {
-          while ((yield* status.get(sessionID)).type !== "idle") {
-            yield* Effect.sleep(25)
-          }
-          yield* autoContinueGoal(sessionID)
-        }).pipe(
-          Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
-          Effect.ignore,
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      })
+      const scheduleGoalIdleRetry: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void> =
+        Effect.fn("SessionPrompt.scheduleGoalIdleRetry")(function* (
+          sessionID: SessionID,
+          options?: { force?: boolean },
+        ) {
+          const subscription = yield* InstanceState.get(goalIdleSubscription)
+          if (subscription.pending.has(sessionID)) return
+          subscription.pending.add(sessionID)
+          yield* Effect.gen(function* () {
+            while ((yield* status.get(sessionID)).type !== "idle") {
+              yield* Effect.sleep(25)
+            }
+            yield* autoContinueGoal(sessionID, options)
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
+            Effect.ignore,
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+        })
 
-      const autoContinueGoal: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+      // `force` is set when the user explicitly resumes a paused goal (UI
+      // Resume button / `/goal resume`). It bypasses the stale-history gates
+      // below: without it, a goal paused by the no-progress rule could never
+      // be resumed — the resume re-evaluated the SAME last exchange
+      // (continuation prompt → no-progress reply), re-entered the pause
+      // branch, and flipped the goal straight back to paused without ever
+      // prompting (field report 2026-06-11: "Goal resumed" toast, no turn).
+      const autoContinueGoal: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void> = Effect.fn(
         "SessionPrompt.autoContinueGoal",
-      )(function* (sessionID: SessionID) {
+      )(function* (sessionID: SessionID, options?: { force?: boolean }) {
+        const force = options?.force === true
         yield* ensureGoalIdleSubscription()
         const subscription = yield* InstanceState.get(goalIdleSubscription)
         if (subscription.continuing.has(sessionID)) return
@@ -207,10 +229,11 @@ export namespace SessionPrompt {
         yield* Effect.gen(function* () {
           const goal = yield* goals.get(sessionID)
           if (goal?.status !== "active") return
+          if (force) subscription.noProgress.delete(sessionID)
 
           const current = yield* status.get(sessionID)
           if (current.type !== "idle") {
-            yield* scheduleGoalIdleRetry(sessionID)
+            yield* scheduleGoalIdleRetry(sessionID, options)
             return
           }
           yield* Effect.sleep(GOAL_CONTINUATION_IDLE_GRACE)
@@ -218,7 +241,7 @@ export namespace SessionPrompt {
           if (afterGraceGoal?.status !== "active") return
           const afterGraceStatus = yield* status.get(sessionID)
           if (afterGraceStatus.type !== "idle") {
-            yield* scheduleGoalIdleRetry(sessionID)
+            yield* scheduleGoalIdleRetry(sessionID, options)
             return
           }
 
@@ -235,8 +258,9 @@ export namespace SessionPrompt {
           ) {
             return
           }
-          if (Option.isSome(latestUser) && Option.isNone(latestAssistant)) return
+          if (Option.isSome(latestUser) && Option.isNone(latestAssistant) && !force) return
           if (
+            !force &&
             Option.isSome(latestUser) &&
             Option.isSome(latestAssistant) &&
             (latestUser.value.info.time.created > latestAssistant.value.info.time.created ||
@@ -245,7 +269,15 @@ export namespace SessionPrompt {
           ) {
             return
           }
+          // No-progress accounting. A single text-only continuation turn is
+          // NOT grounds to pause a budgeted goal — models legitimately spend
+          // a turn reasoning before acting, and the budgets (time / cost /
+          // tokens) are the actual runaway guard. Pause only after
+          // GOAL_NO_PROGRESS_PAUSE_THRESHOLD consecutive no-action turns;
+          // until then keep continuing with an escalating reminder.
+          let priorNoProgress = subscription.noProgress.get(sessionID) ?? 0
           if (
+            !force &&
             Option.isSome(latestUser) &&
             Option.isSome(latestAssistant) &&
             latestAssistant.value.info.role === "assistant" &&
@@ -254,11 +286,19 @@ export namespace SessionPrompt {
             latestAssistant.value.info.finish &&
             !assistantMadeGoalProgress(latestAssistant.value)
           ) {
-            yield* goals.update({ sessionID, status: "paused" }).pipe(
-              Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
-              Effect.ignore,
-            )
-            return
+            priorNoProgress += 1
+            if (priorNoProgress >= GOAL_NO_PROGRESS_PAUSE_THRESHOLD) {
+              subscription.noProgress.delete(sessionID)
+              yield* goals.update({ sessionID, status: "paused" }).pipe(
+                Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
+                Effect.ignore,
+              )
+              return
+            }
+            subscription.noProgress.set(sessionID, priorNoProgress)
+          } else {
+            priorNoProgress = 0
+            subscription.noProgress.delete(sessionID)
           }
 
           const lastUser =
@@ -293,6 +333,12 @@ export namespace SessionPrompt {
                   "DO NOT call update_goal. A difficult physics goal runs for many hours and dozens of iterations across the full GPD (Get Physics Done) workflow. Writing a single proposal/outline/sketch/draft and calling complete is the worst possible failure mode — it permanently abandons the goal with no real research done.",
                   "",
                   "Your job each continuation is to advance the goal by ONE concrete step in the canonical GPD workflow below, then stop. The runtime re-invokes you for the next step.",
+                  ...(priorNoProgress > 0
+                    ? [
+                        "",
+                        `WARNING: your previous ${priorNoProgress === 1 ? "turn" : `${priorNoProgress} turns`} produced no tool call, file change, or subagent task — text alone is NOT progress. This turn MUST take a concrete action: invoke the matching /gpd-* skill, edit a file, or spawn a Task subagent. Do not ask the user questions; make the best autonomous decision and record it. After ${GOAL_NO_PROGRESS_PAUSE_THRESHOLD} consecutive no-action turns the goal auto-pauses.`,
+                      ]
+                    : []),
                   "",
                   "CANONICAL GPD WORKFLOW (use the matching slash command at every step):",
                   "",
