@@ -925,7 +925,8 @@ export namespace Session {
   export const defaultLayer = layer.pipe(
     Layer.provide(Bus.layer),
     Layer.provide(Storage.defaultLayer),
-    Layer.provide(SessionGoal.defaultLayer),
+    // SessionGoal needs Bus for the budget-exhausted wind-down event.
+    Layer.provide(SessionGoal.defaultLayer.pipe(Layer.provide(Bus.layer))),
   )
 
   export function* list(input?: {

@@ -74,7 +74,10 @@ export const AppLayer = Layer.mergeAll(
   Permission.defaultLayer,
   Todo.defaultLayer,
   Session.defaultLayer,
-  SessionGoal.defaultLayer,
+  // SessionGoal needs Bus for the budget-exhausted wind-down event. Same
+  // Bus.defaultLayer reference as the merge above, so Effect's layer
+  // memoization keeps it a single bus instance per runtime.
+  SessionGoal.defaultLayer.pipe(Layer.provide(Bus.defaultLayer)),
   SessionStatus.defaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,

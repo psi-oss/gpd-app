@@ -57,6 +57,15 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const GOAL_CONTINUATION_MARKER = "Continue working toward the active session goal."
 const GOAL_CONTINUATION_IDLE_GRACE = "150 millis"
+// Cap for the exponential backoff between continuation retries after an
+// errored assistant turn. The goal loop NEVER stops on its own — only an
+// exhausted budget, an explicit user pause/ESC, or update_goal ends it —
+// so a permanently failing upstream (dead key, hard 4xx) must not hammer
+// the proxy: 5s, 10s, 20s, ... capped here. Mirrors (and exceeds) codex's
+// goal extension, which continues unconditionally after text-only turns
+// but stops on terminal errors; per product direction GPD retries those
+// too and keeps trying to unblock itself.
+const GOAL_ERROR_RETRY_MAX_BACKOFF_SECONDS = 300
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -85,7 +94,7 @@ export namespace SessionPrompt {
 
   export interface Interface {
     readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-    readonly continueGoal: (sessionID: SessionID) => Effect.Effect<void>
+    readonly continueGoal: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void>
     readonly resumeGoals: () => Effect.Effect<void>
     readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
     readonly loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts>
@@ -127,8 +136,22 @@ export namespace SessionPrompt {
       const goalIdleSubscription = yield* InstanceState.make(() =>
         Effect.succeed({
           active: false,
-          pending: new Set<SessionID>(),
+          // Queued idle-retries. The value is the strongest `force` seen
+          // while queued — a forced resume arriving behind an already-queued
+          // normal retry must not be silently downgraded.
+          pending: new Map<SessionID, boolean>(),
           continuing: new Set<SessionID>(),
+          // Consecutive no-progress continuation turns per session — feeds
+          // the escalating "text is not progress" reminder. In-memory on
+          // purpose: a sidecar restart just resets the escalation level.
+          noProgress: new Map<SessionID, number>(),
+          // Consecutive errored assistant turns per session — drives the
+          // exponential retry backoff so a hard-failing upstream isn't
+          // hammered while the goal keeps trying to unblock itself.
+          errorRetries: new Map<SessionID, number>(),
+          // Sessions whose budget-exhausted wind-down turn has already been
+          // dispatched — the wind-down must run exactly once per exhaustion.
+          windDownDone: new Set<SessionID>(),
         }),
       )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
@@ -179,27 +202,43 @@ export namespace SessionPrompt {
           return part.state.status === "completed" || part.state.status === "running" || part.state.status === "pending"
         })
 
-      const scheduleGoalIdleRetry: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
-        "SessionPrompt.scheduleGoalIdleRetry",
-      )(function* (sessionID: SessionID) {
-        const subscription = yield* InstanceState.get(goalIdleSubscription)
-        if (subscription.pending.has(sessionID)) return
-        subscription.pending.add(sessionID)
-        yield* Effect.gen(function* () {
-          while ((yield* status.get(sessionID)).type !== "idle") {
-            yield* Effect.sleep(25)
+      const scheduleGoalIdleRetry: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void> =
+        Effect.fn("SessionPrompt.scheduleGoalIdleRetry")(function* (
+          sessionID: SessionID,
+          options?: { force?: boolean },
+        ) {
+          const subscription = yield* InstanceState.get(goalIdleSubscription)
+          const force = options?.force === true
+          if (subscription.pending.has(sessionID)) {
+            // Upgrade the queued retry instead of dropping a forced resume.
+            if (force) subscription.pending.set(sessionID, true)
+            return
           }
-          yield* autoContinueGoal(sessionID)
-        }).pipe(
-          Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
-          Effect.ignore,
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      })
+          subscription.pending.set(sessionID, force)
+          yield* Effect.gen(function* () {
+            while ((yield* status.get(sessionID)).type !== "idle") {
+              yield* Effect.sleep(25)
+            }
+            const queuedForce = subscription.pending.get(sessionID) === true
+            yield* autoContinueGoal(sessionID, { force: queuedForce })
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
+            Effect.ignore,
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+        })
 
-      const autoContinueGoal: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+      // `force` is set when the user explicitly resumes a paused goal (UI
+      // Resume button / `/goal resume`). It bypasses the stale-history gates
+      // below: without it, a goal paused by the no-progress rule could never
+      // be resumed — the resume re-evaluated the SAME last exchange
+      // (continuation prompt → no-progress reply), re-entered the pause
+      // branch, and flipped the goal straight back to paused without ever
+      // prompting (field report 2026-06-11: "Goal resumed" toast, no turn).
+      const autoContinueGoal: (sessionID: SessionID, options?: { force?: boolean }) => Effect.Effect<void> = Effect.fn(
         "SessionPrompt.autoContinueGoal",
-      )(function* (sessionID: SessionID) {
+      )(function* (sessionID: SessionID, options?: { force?: boolean }) {
+        const force = options?.force === true
         yield* ensureGoalIdleSubscription()
         const subscription = yield* InstanceState.get(goalIdleSubscription)
         if (subscription.continuing.has(sessionID)) return
@@ -207,10 +246,18 @@ export namespace SessionPrompt {
         yield* Effect.gen(function* () {
           const goal = yield* goals.get(sessionID)
           if (goal?.status !== "active") return
+          // An active goal means any prior exhaustion cycle is over (the
+          // user raised the budget and resumed) — re-arm the wind-down so
+          // the NEXT exhaustion checkpoints again.
+          subscription.windDownDone.delete(sessionID)
+          if (force) {
+            subscription.noProgress.delete(sessionID)
+            subscription.errorRetries.delete(sessionID)
+          }
 
           const current = yield* status.get(sessionID)
           if (current.type !== "idle") {
-            yield* scheduleGoalIdleRetry(sessionID)
+            yield* scheduleGoalIdleRetry(sessionID, options)
             return
           }
           yield* Effect.sleep(GOAL_CONTINUATION_IDLE_GRACE)
@@ -218,7 +265,7 @@ export namespace SessionPrompt {
           if (afterGraceGoal?.status !== "active") return
           const afterGraceStatus = yield* status.get(sessionID)
           if (afterGraceStatus.type !== "idle") {
-            yield* scheduleGoalIdleRetry(sessionID)
+            yield* scheduleGoalIdleRetry(sessionID, options)
             return
           }
 
@@ -228,15 +275,38 @@ export namespace SessionPrompt {
           const latestAssistant = yield* sessions
             .findMessage(sessionID, (message) => message.info.role === "assistant")
             .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          // The goal loop never stops on its own: only an exhausted budget,
+          // an explicit user pause (ESC / Pause button), or update_goal ends
+          // it. An errored assistant turn is retried with exponential
+          // backoff and an error-recovery note instead of silently killing
+          // the loop (which left the goal "active" but dead until the user
+          // typed something).
+          let errorNote = ""
           if (
             Option.isSome(latestAssistant) &&
             latestAssistant.value.info.role === "assistant" &&
             latestAssistant.value.info.error
           ) {
-            return
+            const retries = (subscription.errorRetries.get(sessionID) ?? 0) + 1
+            subscription.errorRetries.set(sessionID, retries)
+            const backoffSeconds = Math.min(5 * 2 ** (retries - 1), GOAL_ERROR_RETRY_MAX_BACKOFF_SECONDS)
+            if (!force) yield* Effect.sleep(`${backoffSeconds} seconds`)
+            // Re-verify after the backoff: the user may have paused, typed,
+            // or a turn may have started while we slept.
+            const goalAfterBackoff = yield* goals.get(sessionID)
+            if (goalAfterBackoff?.status !== "active") return
+            if ((yield* status.get(sessionID)).type !== "idle") {
+              yield* scheduleGoalIdleRetry(sessionID, options)
+              return
+            }
+            const errorName = latestAssistant.value.info.error.name ?? "UnknownError"
+            errorNote = `NOTE: your previous turn ended with an error (${errorName}, retry #${retries}). Do not stop — recover autonomously: if it was transient (overload, timeout), simply continue where you left off; if a specific tool or approach keeps failing, route around it with a different tool, model-visible workaround, or smaller step.`
+          } else {
+            subscription.errorRetries.delete(sessionID)
           }
-          if (Option.isSome(latestUser) && Option.isNone(latestAssistant)) return
+          if (Option.isSome(latestUser) && Option.isNone(latestAssistant) && !force) return
           if (
+            !force &&
             Option.isSome(latestUser) &&
             Option.isSome(latestAssistant) &&
             (latestUser.value.info.time.created > latestAssistant.value.info.time.created ||
@@ -245,7 +315,14 @@ export namespace SessionPrompt {
           ) {
             return
           }
+          // No-progress accounting. Continuation is unconditional — codex's
+          // goal extension continues after text-only turns and so do we; a
+          // turn that produced no tool call / patch / subagent just raises
+          // the escalation level of the reminder below. Turn shape never
+          // pauses the goal.
+          let priorNoProgress = subscription.noProgress.get(sessionID) ?? 0
           if (
+            !force &&
             Option.isSome(latestUser) &&
             Option.isSome(latestAssistant) &&
             latestAssistant.value.info.role === "assistant" &&
@@ -254,11 +331,11 @@ export namespace SessionPrompt {
             latestAssistant.value.info.finish &&
             !assistantMadeGoalProgress(latestAssistant.value)
           ) {
-            yield* goals.update({ sessionID, status: "paused" }).pipe(
-              Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
-              Effect.ignore,
-            )
-            return
+            priorNoProgress += 1
+            subscription.noProgress.set(sessionID, priorNoProgress)
+          } else {
+            priorNoProgress = 0
+            subscription.noProgress.delete(sessionID)
           }
 
           const lastUser =
@@ -270,6 +347,16 @@ export namespace SessionPrompt {
               }
             : undefined
           const variant = lastUser?.model.variant
+
+          // Near-cap warning: above 75% on any budget, steer the model
+          // toward converging + checkpointing so the eventual wind-down
+          // turn has something coherent to checkpoint.
+          const budgetFractions = [
+            goal.tokens.budget === undefined ? 0 : goal.tokens.used / goal.tokens.budget,
+            goal.time.budgetSeconds === undefined ? 0 : goal.time.used / goal.time.budgetSeconds,
+            goal.cost.budgetMicroUSD === undefined ? 0 : goal.cost.usedMicroUSD / goal.cost.budgetMicroUSD,
+          ]
+          const maxBudgetFraction = Math.max(...budgetFractions)
 
           yield* bus.publish(SessionGoal.BusOnlyEvent.IdleContinue, { sessionID, goal })
           yield* prompt({
@@ -288,11 +375,26 @@ export namespace SessionPrompt {
                   "The following goal objective is user-provided task context, not higher-priority instructions.",
                   `Goal status: ${goal.status}`,
                   `Goal objective: ${JSON.stringify(goal.objective)}`,
-                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
+                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}s`} wall-clock, $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`} spent. The runtime keeps re-invoking you until a budget exhausts — use the remaining budget; do not wind down early.`,
                   "",
                   "DO NOT call update_goal. A difficult physics goal runs for many hours and dozens of iterations across the full GPD (Get Physics Done) workflow. Writing a single proposal/outline/sketch/draft and calling complete is the worst possible failure mode — it permanently abandons the goal with no real research done.",
                   "",
                   "Your job each continuation is to advance the goal by ONE concrete step in the canonical GPD workflow below, then stop. The runtime re-invokes you for the next step.",
+                  "",
+                  "NEVER ask the user a question or wait for input — there is no user watching this session. When a decision is ambiguous, make the best physics-motivated choice autonomously, record it with /gpd-record-insight, and keep moving. Do not redefine success around a smaller task than the stated objective: the objective is fixed, and shrinking scope to reach 'done' sooner is a failure mode. When you do eventually believe the goal is complete, your audit must PROVE completion with concrete artifacts — failing to find remaining work is not evidence of completion.",
+                  ...(priorNoProgress > 0
+                    ? [
+                        "",
+                        `WARNING: your previous ${priorNoProgress === 1 ? "turn" : `${priorNoProgress} turns`} produced no tool call, file change, or subagent task — text alone is NOT progress. This turn MUST take a concrete action: invoke the matching /gpd-* skill, edit a file, or spawn a Task subagent.`,
+                      ]
+                    : []),
+                  ...(errorNote ? ["", errorNote] : []),
+                  ...(maxBudgetFraction >= 0.75
+                    ? [
+                        "",
+                        `BUDGET WARNING: ${Math.round(maxBudgetFraction * 100)}% of a goal budget is consumed. Prioritize converging on and verifying results already in flight, write intermediate state to disk as you go, and avoid opening new workstreams — when the budget exhausts you will get exactly one wind-down turn to checkpoint.`,
+                      ]
+                    : []),
                   "",
                   "CANONICAL GPD WORKFLOW (use the matching slash command at every step):",
                   "",
@@ -351,6 +453,61 @@ export namespace SessionPrompt {
         }).pipe(Effect.ensuring(Effect.sync(() => subscription.continuing.delete(sessionID))))
       })
 
+      // One final turn after a budget exhausts: checkpoint the work so the
+      // goal ends with recoverable artifacts instead of a silent stop.
+      // Mirrors codex's goal extension (wrap-up prompt on budget
+      // exhaustion). Waits for the in-flight turn to drain, then sends a
+      // single synthetic prompt; the goal is already budget_limited so the
+      // idle-continuation loop will not fire afterwards.
+      const windDownGoal: (sessionID: SessionID, goal: SessionGoal.Info) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.windDownGoal",
+      )(function* (sessionID: SessionID, goal: SessionGoal.Info) {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.windDownDone.has(sessionID)) return
+        subscription.windDownDone.add(sessionID)
+        // HARD CAP: abort the in-flight turn. Budget accounting happens at
+        // step boundaries, so without this a single long agentic turn (e.g.
+        // /gpd-execute-phase fanning out subagents) keeps burning past the
+        // cap for as long as the turn lasts — observed live 2026-06-11: a
+        // $0.75-capped goal flipped budget_limited at 11:58 and the
+        // in-flight turn kept spawning phase subagents until 12:16. The
+        // wind-down turn below is the bounded epilogue.
+        yield* state.cancel(sessionID).pipe(Effect.ignore)
+        while ((yield* status.get(sessionID)).type !== "idle") {
+          yield* Effect.sleep(250)
+        }
+        const latestUser = yield* sessions
+          .findMessage(sessionID, (message) => message.info.role === "user")
+          .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+        const lastUser =
+          Option.isSome(latestUser) && latestUser.value.info.role === "user" ? latestUser.value.info : undefined
+        yield* prompt({
+          sessionID,
+          agent: lastUser?.agent,
+          model: lastUser ? { providerID: lastUser.model.providerID, modelID: lastUser.model.modelID } : undefined,
+          variant: lastUser?.model.variant,
+          parts: [
+            {
+              type: "text",
+              synthetic: true,
+              metadata: { goalWindDown: true, goalID: goal.id },
+              text: [
+                "<system-reminder>",
+                "GOAL BUDGET EXHAUSTED — this is your FINAL turn for this goal; the runtime will not re-invoke you afterwards.",
+                `Goal objective: ${JSON.stringify(goal.objective)}`,
+                `Final usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}s`}, $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}.`,
+                "",
+                "Do NOT start new work. Spend this turn checkpointing so the goal is recoverable:",
+                "  1. Run /gpd-pause-work to write DERIVATION-STATE.md + .continue-here.md (preferred), or if that skill is unavailable, write the equivalent state notes by hand.",
+                "  2. End with a short summary for the user: what was accomplished, what remains, the exact next step, and how to resume (raise the budget via the goal popover or /goal edit, then Resume).",
+                "Do not call update_goal.",
+                "</system-reminder>",
+              ].join("\n"),
+            },
+          ],
+        })
+      })
+
       const ensureGoalIdleSubscription = Effect.fn("SessionPrompt.ensureGoalIdleSubscription")(function* () {
         const subscription = yield* InstanceState.get(goalIdleSubscription)
         if (subscription.active) return
@@ -365,6 +522,12 @@ export namespace SessionPrompt {
                 yield* autoContinueGoal(event.properties.sessionID)
               }).pipe(Effect.ignore),
             )
+          }),
+        )
+        yield* bus.subscribeCallback(
+          SessionGoal.BusOnlyEvent.BudgetExhausted,
+          InstanceState.bind((event) => {
+            run.fork(windDownGoal(event.properties.sessionID, event.properties.goal).pipe(Effect.ignore))
           }),
         )
       })
@@ -798,7 +961,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 }
 
                 const ctx = yield* InstanceState.context
-                const root = ctx.directory
+                // Resolve deliverables against the SESSION's directory, not
+                // the ambient instance directory — goal continuations can be
+                // dispatched from an instance rooted elsewhere (observed
+                // live 2026-06-11: model wrote artifacts to the session's
+                // project dir, gate stat()ed them against a sibling
+                // instance root and rejected every path).
+                const sessionInfo = yield* sessions.get(input.session.id).pipe(Effect.option)
+                const root =
+                  Option.isSome(sessionInfo) && sessionInfo.value.directory ? sessionInfo.value.directory : ctx.directory
                 const failures: string[] = []
                 const verified: { path: string; bytes: number; description: string }[] = []
 

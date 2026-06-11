@@ -313,7 +313,7 @@ export const SessionRoutes = lazy(() =>
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
         const body = c.req.valid("json")
-        const updated = await AppRuntime.runPromise(
+        const { goal: updated, resumed } = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const session = yield* Session.Service
             const goalSvc = yield* SessionGoal.Service
@@ -331,12 +331,16 @@ export const SessionRoutes = lazy(() =>
                 yield* session.setTitle({ sessionID, title: newTitle })
               }
             }
-            return goal
+            return { goal, resumed: body.status === "active" && before?.status !== "active" }
           }),
         )
         if (updated.status === "active") {
+          // An explicit user resume forces the continuation: it must bypass
+          // the stale last-exchange gates in autoContinueGoal, which would
+          // otherwise re-pause a goal that was paused for no-progress
+          // without ever starting a turn.
           AppRuntime.runFork(
-            SessionPrompt.Service.use((svc) => svc.continueGoal(sessionID)).pipe(Effect.ignore),
+            SessionPrompt.Service.use((svc) => svc.continueGoal(sessionID, { force: resumed })).pipe(Effect.ignore),
           )
         }
         return c.json(updated)

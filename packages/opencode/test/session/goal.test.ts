@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { Instance } from "../../src/project/instance"
 import { ProjectID } from "../../src/project/schema"
+import { Bus } from "../../src/bus"
 import { Session } from "../../src/session"
 import { SessionGoal } from "../../src/session/goal"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -11,7 +12,7 @@ import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
-const layer = Layer.mergeAll(Session.defaultLayer, SessionGoal.defaultLayer)
+const layer = Layer.mergeAll(Session.defaultLayer, Layer.provide(SessionGoal.defaultLayer, Bus.layer))
 const runtime = ManagedRuntime.make(layer)
 
 function effect<A, E>(value: Effect.Effect<A, E, Session.Service | SessionGoal.Service>): Promise<A> {

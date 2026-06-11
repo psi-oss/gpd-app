@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { Instance } from "../../src/project/instance"
+import { Bus } from "../../src/bus"
 import { Session } from "../../src/session"
 import { SessionGoal } from "../../src/session/goal"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -10,10 +11,10 @@ import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
-const layer = Layer.mergeAll(Session.defaultLayer, SessionGoal.defaultLayer)
+const layer = Layer.mergeAll(Session.defaultLayer, Layer.provide(SessionGoal.defaultLayer, Bus.layer), Bus.layer)
 const runtime = ManagedRuntime.make(layer)
 
-function effect<A, E>(value: Effect.Effect<A, E, Session.Service | SessionGoal.Service>): Promise<A> {
+function effect<A, E>(value: Effect.Effect<A, E, Session.Service | SessionGoal.Service | Bus.Service>): Promise<A> {
   return runtime.runPromise(value as never) as Promise<A>
 }
 
@@ -94,6 +95,44 @@ describe("SessionGoal budgets", () => {
 
     expect(result?.status).toBe("budget_limited")
     expect(result?.cost.usedMicroUSD).toBe(500_000)
+  })
+
+  test("publishes BudgetExhausted exactly on the active → budget_limited flip", async () => {
+    const events: string[] = []
+    const result = await run(async () => {
+      const session = await effect(Session.Service.use((svc) => svc.create({ title: "budget-event" })))
+      await effect(
+        Bus.Service.use((bus) =>
+          bus.subscribeCallback(SessionGoal.BusOnlyEvent.BudgetExhausted, (event) => {
+            events.push(`${event.properties.sessionID}:${event.properties.goal.status}`)
+          }),
+        ),
+      )
+      await effect(
+        SessionGoal.Service.use((svc) =>
+          svc.create({ sessionID: session.id, objective: "watch event", costBudgetUSD: 0.5 }),
+        ),
+      )
+      // under budget: no event
+      await effect(
+        SessionGoal.Service.use((svc) =>
+          svc.account({ sessionID: session.id, tokens: 0, seconds: 0, costMicroUSD: 100_000 }),
+        ),
+      )
+      // exhausts: one event
+      await effect(
+        SessionGoal.Service.use((svc) =>
+          svc.account({ sessionID: session.id, tokens: 0, seconds: 0, costMicroUSD: 400_000 }),
+        ),
+      )
+      // already budget_limited: accounting continues but no second event
+      await effect(
+        SessionGoal.Service.use((svc) => svc.account({ sessionID: session.id, tokens: 0, seconds: 1, costMicroUSD: 0 })),
+      )
+      return { sessionID: session.id }
+    })
+
+    expect(events).toEqual([`${result.sessionID}:budget_limited`])
   })
 
   test("OR-of-three: any one budget exhausting flips status", async () => {
