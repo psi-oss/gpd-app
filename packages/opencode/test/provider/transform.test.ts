@@ -2745,6 +2745,32 @@ describe("ProviderTransform.variants", () => {
       }
     })
 
+    test("GPD dot-form opus 4.8 alias resolves to the same request shape as dash-form", () => {
+      const model = createMockModel({
+        id: "gpd/claude-opus-4.8",
+        providerID: "gpd",
+        api: {
+          id: "claude-opus-4.8",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      expect(Object.keys(result).length).toBeGreaterThan(0)
+      for (const [tier, options] of Object.entries(result)) {
+        expect(options).toEqual({
+          thinking: {
+            type: "adaptive",
+            display: "summarized",
+          },
+          output_config: {
+            effort: tier,
+          },
+        })
+      }
+    })
+
     test("GPD sonnet 4.6 uses adaptive thinking without xhigh promotion", () => {
       const model = createMockModel({
         id: "gpd/claude-sonnet-4-6",

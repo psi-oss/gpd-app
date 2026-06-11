@@ -11,7 +11,7 @@ import { Plugin } from "../plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "./models"
-import { gpdUsesResponsesApi, resolveGpdProviderModels } from "./gpd-models"
+import { gpdAnthropicAdaptiveProfile, gpdUsesResponsesApi, resolveGpdProviderModels } from "./gpd-models"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
@@ -1915,13 +1915,16 @@ export namespace Provider {
             //     `reasoning_effort` that reaches this hook (saved
             //     variants, manual opencode.json overrides) is folded
             //     into `output_config.effort` and removed.
-            if (
-              model.providerID === "gpd" &&
-              ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5"].includes(model.api.id) &&
-              model.api.npm === "@ai-sdk/openai-compatible" &&
-              opts.body &&
-              opts.method === "POST"
-            ) {
+            //
+            // Which models get which tweak is owned by
+            // gpdAnthropicAdaptiveProfile (gpd-models.ts) — shared with
+            // the variant builder in transform.ts, and dot/dash- and
+            // prefix-insensitive so proxy-side aliases resolve the same.
+            const adaptiveProfile =
+              model.providerID === "gpd" && model.api.npm === "@ai-sdk/openai-compatible"
+                ? gpdAnthropicAdaptiveProfile(model.api.id)
+                : undefined
+            if (adaptiveProfile?.summarizedDisplay && opts.body && opts.method === "POST") {
               const body = JSON.parse(opts.body as string)
               const existing = body.thinking
               const finalThinking =
@@ -1930,14 +1933,15 @@ export namespace Provider {
                   : existing.display === undefined
                     ? { ...existing, display: "summarized" }
                     : existing
-              if (model.api.id === "claude-opus-4-7") {
+              if (adaptiveProfile.promoteXhighToMax) {
                 if (body.reasoning_effort === "xhigh") {
                   body.reasoning_effort = "max"
                 }
                 if (body.output_config?.effort === "xhigh") {
                   body.output_config = { ...body.output_config, effort: "max" }
                 }
-              } else if (body.reasoning_effort !== undefined) {
+              }
+              if (adaptiveProfile.omitsReasoningEffort && body.reasoning_effort !== undefined) {
                 // See (4): effort must travel via output_config only.
                 if (typeof body.reasoning_effort === "string" && body.output_config?.effort === undefined) {
                   body.output_config = { ...body.output_config, effort: body.reasoning_effort }

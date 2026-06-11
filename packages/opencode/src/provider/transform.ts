@@ -6,7 +6,7 @@ import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
-import { gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
+import { gpdAnthropicAdaptiveProfile, gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
 import { Hash } from "@/util/hash"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
@@ -500,60 +500,35 @@ export namespace ProviderTransform {
       // chunks — without this the Responses API call returns a reasoning
       // block with an empty summary array and the UI shows nothing.
       const usesResponses = gpdUsesResponsesApi(model.api.id)
-      // Adaptive thinking is only available on the Claude 4.6+ family —
-      // per the Anthropic adaptive-thinking docs: Fable 5 / Mythos 5
-      // (always on, cannot be disabled), Opus 4.8 / Opus 4.7 (only
-      // supported mode, off unless requested), Opus 4.6, Sonnet 4.6.
-      // Sending `thinking: {type: "adaptive"}` to claude-haiku-4-5 returns
-      // a 400 with "adaptive thinking is not supported on this model"
-      // (verified live 2026-05-06: haiku stream rejected mid-tool-loop).
-      // Other Claude models still need a `thinking` payload, but LiteLLM
-      // translates `reasoning_effort` into the legacy
+      // Anthropic-family request shape (which models take adaptive
+      // thinking, whether display:"summarized" must be requested, whether
+      // effort travels via output_config only, xhigh→max promotion) is
+      // owned by gpdAnthropicAdaptiveProfile in gpd-models.ts — shared
+      // with the wire-time interceptor in provider.ts so the two layers
+      // can never disagree about a model id.
+      // Claude models WITHOUT a profile (e.g. haiku-4-5, which 400s on
+      // adaptive) still need a `thinking` payload, but LiteLLM translates
+      // `reasoning_effort` into the legacy
       // `thinking: {type: "enabled", budget_tokens: …}` form for them, so
-      // we omit the explicit `thinking` block here and rely on the
+      // we omit the explicit `thinking` block and rely on the
       // LiteLLM-side translation.
-      const isClaudeAdaptive = [
-        "fable-5",
-        "opus-4-8",
-        "opus-4.8",
-        "opus-4-7",
-        "opus-4.7",
-        "opus-4-6",
-        "opus-4.6",
-        "sonnet-4-6",
-        "sonnet-4.6",
-      ].some((v) => model.api.id.includes(v))
-      // Fable 5 / Opus 4.8 default `thinking.display` to "omitted" (empty
-      // thinking text — same silent flip Opus 4.7 shipped with), so the UI
-      // never renders a reasoning part unless we ask for summaries.
-      const wantsSummarizedDisplay = ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5"].includes(model.api.id)
-      // LiteLLM 1.83.14's AnthropicConfig.map_openai_params has no model-map
-      // entry for claude-opus-4-8 / claude-fable-5, so any `reasoning_effort`
-      // above "high" 500s with "Unmapped reasoning effort". Their proxy
-      // deployments whitelist `thinking` + `output_config` via
-      // allowed_openai_params instead — carry effort ONLY in
-      // `output_config.effort` and never send `reasoning_effort`. Probed
-      // live 2026-06-11: all five tiers pass on both models through the
-      // production proxy with visible reasoning summaries.
-      const omitsReasoningEffort = ["claude-opus-4-8", "claude-fable-5"].includes(model.api.id)
-      if (isClaudeAdaptive) {
+      const adaptiveProfile = gpdAnthropicAdaptiveProfile(model.api.id)
+      if (adaptiveProfile) {
         return Object.fromEntries(
           efforts.map((effort) => {
             // LiteLLM/Anthropic accepts opus-4-7 xhigh, but live probes show
             // it streams no reasoning_content for prompts where max does.
             // Preserve saved xhigh selections, but send the only tier that
-            // reliably produces visible summaries. (Opus 4.8 / Fable 5 do
-            // not need this — xhigh returned reasoning summaries on both
-            // in the 2026-06-11 probes.)
-            const effectiveEffort = model.api.id === "claude-opus-4-7" && effort === "xhigh" ? "max" : effort
+            // reliably produces visible summaries.
+            const effectiveEffort = adaptiveProfile.promoteXhighToMax && effort === "xhigh" ? "max" : effort
             return [
               effort,
               {
                 thinking: {
                   type: "adaptive",
-                  ...(wantsSummarizedDisplay ? { display: "summarized" } : {}),
+                  ...(adaptiveProfile.summarizedDisplay ? { display: "summarized" } : {}),
                 },
-                ...(omitsReasoningEffort ? {} : { reasoningEffort: effectiveEffort }),
+                ...(adaptiveProfile.omitsReasoningEffort ? {} : { reasoningEffort: effectiveEffort }),
                 output_config: {
                   effort: effectiveEffort,
                 },
