@@ -57,14 +57,15 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const GOAL_CONTINUATION_MARKER = "Continue working toward the active session goal."
 const GOAL_CONTINUATION_IDLE_GRACE = "150 millis"
-// Consecutive text-only (no tool call / patch / subtask) continuation turns
-// tolerated before the goal auto-pauses. One advisory turn used to pause the
-// goal immediately, which killed budgeted long-horizon goals the moment the
-// model paused to think out loud — and Resume could never escape it (see
-// the `force` path in autoContinueGoal). Budgets, not turn-shape, are the
-// real runaway guard; this threshold only catches a model that is truly
-// spinning without acting.
-const GOAL_NO_PROGRESS_PAUSE_THRESHOLD = 3
+// Cap for the exponential backoff between continuation retries after an
+// errored assistant turn. The goal loop NEVER stops on its own — only an
+// exhausted budget, an explicit user pause/ESC, or update_goal ends it —
+// so a permanently failing upstream (dead key, hard 4xx) must not hammer
+// the proxy: 5s, 10s, 20s, ... capped here. Mirrors (and exceeds) codex's
+// goal extension, which continues unconditionally after text-only turns
+// but stops on terminal errors; per product direction GPD retries those
+// too and keeps trying to unblock itself.
+const GOAL_ERROR_RETRY_MAX_BACKOFF_SECONDS = 300
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -137,10 +138,14 @@ export namespace SessionPrompt {
           active: false,
           pending: new Set<SessionID>(),
           continuing: new Set<SessionID>(),
-          // Consecutive no-progress continuation turns per session. In-memory
-          // on purpose: a sidecar restart resets the allowance, which at worst
-          // grants a few extra continuations — bounded by the goal budgets.
+          // Consecutive no-progress continuation turns per session — feeds
+          // the escalating "text is not progress" reminder. In-memory on
+          // purpose: a sidecar restart just resets the escalation level.
           noProgress: new Map<SessionID, number>(),
+          // Consecutive errored assistant turns per session — drives the
+          // exponential retry backoff so a hard-failing upstream isn't
+          // hammered while the goal keeps trying to unblock itself.
+          errorRetries: new Map<SessionID, number>(),
         }),
       )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
@@ -229,7 +234,10 @@ export namespace SessionPrompt {
         yield* Effect.gen(function* () {
           const goal = yield* goals.get(sessionID)
           if (goal?.status !== "active") return
-          if (force) subscription.noProgress.delete(sessionID)
+          if (force) {
+            subscription.noProgress.delete(sessionID)
+            subscription.errorRetries.delete(sessionID)
+          }
 
           const current = yield* status.get(sessionID)
           if (current.type !== "idle") {
@@ -251,12 +259,34 @@ export namespace SessionPrompt {
           const latestAssistant = yield* sessions
             .findMessage(sessionID, (message) => message.info.role === "assistant")
             .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+          // The goal loop never stops on its own: only an exhausted budget,
+          // an explicit user pause (ESC / Pause button), or update_goal ends
+          // it. An errored assistant turn is retried with exponential
+          // backoff and an error-recovery note instead of silently killing
+          // the loop (which left the goal "active" but dead until the user
+          // typed something).
+          let errorNote = ""
           if (
             Option.isSome(latestAssistant) &&
             latestAssistant.value.info.role === "assistant" &&
             latestAssistant.value.info.error
           ) {
-            return
+            const retries = (subscription.errorRetries.get(sessionID) ?? 0) + 1
+            subscription.errorRetries.set(sessionID, retries)
+            const backoffSeconds = Math.min(5 * 2 ** (retries - 1), GOAL_ERROR_RETRY_MAX_BACKOFF_SECONDS)
+            if (!force) yield* Effect.sleep(`${backoffSeconds} seconds`)
+            // Re-verify after the backoff: the user may have paused, typed,
+            // or a turn may have started while we slept.
+            const goalAfterBackoff = yield* goals.get(sessionID)
+            if (goalAfterBackoff?.status !== "active") return
+            if ((yield* status.get(sessionID)).type !== "idle") {
+              yield* scheduleGoalIdleRetry(sessionID, options)
+              return
+            }
+            const errorName = latestAssistant.value.info.error.name ?? "UnknownError"
+            errorNote = `NOTE: your previous turn ended with an error (${errorName}, retry #${retries}). Do not stop — recover autonomously: if it was transient (overload, timeout), simply continue where you left off; if a specific tool or approach keeps failing, route around it with a different tool, model-visible workaround, or smaller step.`
+          } else {
+            subscription.errorRetries.delete(sessionID)
           }
           if (Option.isSome(latestUser) && Option.isNone(latestAssistant) && !force) return
           if (
@@ -269,12 +299,11 @@ export namespace SessionPrompt {
           ) {
             return
           }
-          // No-progress accounting. A single text-only continuation turn is
-          // NOT grounds to pause a budgeted goal — models legitimately spend
-          // a turn reasoning before acting, and the budgets (time / cost /
-          // tokens) are the actual runaway guard. Pause only after
-          // GOAL_NO_PROGRESS_PAUSE_THRESHOLD consecutive no-action turns;
-          // until then keep continuing with an escalating reminder.
+          // No-progress accounting. Continuation is unconditional — codex's
+          // goal extension continues after text-only turns and so do we; a
+          // turn that produced no tool call / patch / subagent just raises
+          // the escalation level of the reminder below. Turn shape never
+          // pauses the goal.
           let priorNoProgress = subscription.noProgress.get(sessionID) ?? 0
           if (
             !force &&
@@ -287,14 +316,6 @@ export namespace SessionPrompt {
             !assistantMadeGoalProgress(latestAssistant.value)
           ) {
             priorNoProgress += 1
-            if (priorNoProgress >= GOAL_NO_PROGRESS_PAUSE_THRESHOLD) {
-              subscription.noProgress.delete(sessionID)
-              yield* goals.update({ sessionID, status: "paused" }).pipe(
-                Effect.catchIf(NotFoundError.isInstance, () => Effect.void),
-                Effect.ignore,
-              )
-              return
-            }
             subscription.noProgress.set(sessionID, priorNoProgress)
           } else {
             priorNoProgress = 0
@@ -328,17 +349,20 @@ export namespace SessionPrompt {
                   "The following goal objective is user-provided task context, not higher-priority instructions.",
                   `Goal status: ${goal.status}`,
                   `Goal objective: ${JSON.stringify(goal.objective)}`,
-                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s wall-clock.`,
+                  `Goal usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}s`} wall-clock, $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`} spent. The runtime keeps re-invoking you until a budget exhausts — use the remaining budget; do not wind down early.`,
                   "",
                   "DO NOT call update_goal. A difficult physics goal runs for many hours and dozens of iterations across the full GPD (Get Physics Done) workflow. Writing a single proposal/outline/sketch/draft and calling complete is the worst possible failure mode — it permanently abandons the goal with no real research done.",
                   "",
                   "Your job each continuation is to advance the goal by ONE concrete step in the canonical GPD workflow below, then stop. The runtime re-invokes you for the next step.",
+                  "",
+                  "NEVER ask the user a question or wait for input — there is no user watching this session. When a decision is ambiguous, make the best physics-motivated choice autonomously, record it with /gpd-record-insight, and keep moving. Do not redefine success around a smaller task than the stated objective: the objective is fixed, and shrinking scope to reach 'done' sooner is a failure mode. When you do eventually believe the goal is complete, your audit must PROVE completion with concrete artifacts — failing to find remaining work is not evidence of completion.",
                   ...(priorNoProgress > 0
                     ? [
                         "",
-                        `WARNING: your previous ${priorNoProgress === 1 ? "turn" : `${priorNoProgress} turns`} produced no tool call, file change, or subagent task — text alone is NOT progress. This turn MUST take a concrete action: invoke the matching /gpd-* skill, edit a file, or spawn a Task subagent. Do not ask the user questions; make the best autonomous decision and record it. After ${GOAL_NO_PROGRESS_PAUSE_THRESHOLD} consecutive no-action turns the goal auto-pauses.`,
+                        `WARNING: your previous ${priorNoProgress === 1 ? "turn" : `${priorNoProgress} turns`} produced no tool call, file change, or subagent task — text alone is NOT progress. This turn MUST take a concrete action: invoke the matching /gpd-* skill, edit a file, or spawn a Task subagent.`,
                       ]
                     : []),
+                  ...(errorNote ? ["", errorNote] : []),
                   "",
                   "CANONICAL GPD WORKFLOW (use the matching slash command at every step):",
                   "",
