@@ -57,5 +57,8 @@ describe("parseGoalFlags", () => {
     expect(() => parseGoalFlags("—budget=$0 x")).toThrow()
     expect(() => parseGoalFlags("—time=banana x")).toThrow()
     expect(() => parseGoalFlags("--budget=nope x")).toThrow()
+    // parseFloat would silently truncate these to a number
+    expect(() => parseGoalFlags("--budget=$1abc x")).toThrow()
+    expect(() => parseGoalFlags("--budget=$5,000 x")).toThrow()
   })
 })

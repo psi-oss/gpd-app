@@ -35,7 +35,11 @@ export function parseGoalFlags(arg: string): { cleanArg: string; flags: GoalFlag
   for (const match of arg.matchAll(flagPattern)) {
     const [, key, raw] = match
     if (key === "budget") {
-      const usd = parseFloat(raw.replace(/^\$/, ""))
+      const numeric = raw.replace(/^\$/, "")
+      // parseFloat alone truncates partially-numeric values ("$1abc" → 1),
+      // silently accepting garbage AND stripping it from the objective —
+      // require the whole token to be a number.
+      const usd = /^\d+(\.\d+)?$/.test(numeric) ? parseFloat(numeric) : NaN
       if (!Number.isFinite(usd) || usd <= 0) {
         throw new Error(`Invalid --budget=${raw}; expected $<positive number>`)
       }

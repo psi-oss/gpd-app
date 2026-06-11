@@ -136,7 +136,10 @@ export namespace SessionPrompt {
       const goalIdleSubscription = yield* InstanceState.make(() =>
         Effect.succeed({
           active: false,
-          pending: new Set<SessionID>(),
+          // Queued idle-retries. The value is the strongest `force` seen
+          // while queued — a forced resume arriving behind an already-queued
+          // normal retry must not be silently downgraded.
+          pending: new Map<SessionID, boolean>(),
           continuing: new Set<SessionID>(),
           // Consecutive no-progress continuation turns per session — feeds
           // the escalating "text is not progress" reminder. In-memory on
@@ -205,13 +208,19 @@ export namespace SessionPrompt {
           options?: { force?: boolean },
         ) {
           const subscription = yield* InstanceState.get(goalIdleSubscription)
-          if (subscription.pending.has(sessionID)) return
-          subscription.pending.add(sessionID)
+          const force = options?.force === true
+          if (subscription.pending.has(sessionID)) {
+            // Upgrade the queued retry instead of dropping a forced resume.
+            if (force) subscription.pending.set(sessionID, true)
+            return
+          }
+          subscription.pending.set(sessionID, force)
           yield* Effect.gen(function* () {
             while ((yield* status.get(sessionID)).type !== "idle") {
               yield* Effect.sleep(25)
             }
-            yield* autoContinueGoal(sessionID, options)
+            const queuedForce = subscription.pending.get(sessionID) === true
+            yield* autoContinueGoal(sessionID, { force: queuedForce })
           }).pipe(
             Effect.ensuring(Effect.sync(() => subscription.pending.delete(sessionID))),
             Effect.ignore,
@@ -237,6 +246,10 @@ export namespace SessionPrompt {
         yield* Effect.gen(function* () {
           const goal = yield* goals.get(sessionID)
           if (goal?.status !== "active") return
+          // An active goal means any prior exhaustion cycle is over (the
+          // user raised the budget and resumed) — re-arm the wind-down so
+          // the NEXT exhaustion checkpoints again.
+          subscription.windDownDone.delete(sessionID)
           if (force) {
             subscription.noProgress.delete(sessionID)
             subscription.errorRetries.delete(sessionID)

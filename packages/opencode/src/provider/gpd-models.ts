@@ -109,8 +109,18 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   "gpt-5.3-codex": ["low", "medium", "high"],
 }
 
+// Canonicalize a proxy model id for table lookups: strip a namespace
+// prefix ("team/claude-opus-4-8" → "claude-opus-4-8") and normalize
+// dot-form versions ("claude-opus-4.8" → "claude-opus-4-8"). Keeps
+// alias deployments registered on the LiteLLM proxy resolving to the
+// same effort ladder / metadata / adaptive profile as the canonical id.
+export function normalizeGpdModelId(apiId: string): string {
+  const unprefixed = apiId.includes("/") ? apiId.slice(apiId.lastIndexOf("/") + 1) : apiId
+  return unprefixed.replace(/(\d)\.(\d)/g, "$1-$2")
+}
+
 export function gpdReasoningEffortsFor(apiId: string): readonly string[] | undefined {
-  return GPD_MODEL_REASONING_EFFORTS[apiId]
+  return GPD_MODEL_REASONING_EFFORTS[apiId] ?? GPD_MODEL_REASONING_EFFORTS[normalizeGpdModelId(apiId)]
 }
 
 /**
@@ -152,7 +162,7 @@ export type GpdAnthropicAdaptiveProfile = {
 }
 
 export function gpdAnthropicAdaptiveProfile(apiId: string): GpdAnthropicAdaptiveProfile | undefined {
-  const id = apiId.replace(/(\d)\.(\d)/g, "$1-$2")
+  const id = normalizeGpdModelId(apiId)
   if (id.includes("fable-5") || id.includes("opus-4-8")) {
     return { summarizedDisplay: true, omitsReasoningEffort: true, promoteXhighToMax: false }
   }
@@ -423,8 +433,8 @@ function stubMetadataFor(id: string): GpdModelMetadata {
 function exposedMetadataFrom(ids: Iterable<string>): Record<string, GpdModelMetadata> {
   const result: Record<string, GpdModelMetadata> = {}
   for (const id of ids) {
-    if (GPD_MODEL_HIDDEN_IDS.has(id)) continue
-    result[id] = GPD_MODEL_METADATA[id] ?? stubMetadataFor(id)
+    if (GPD_MODEL_HIDDEN_IDS.has(id) || GPD_MODEL_HIDDEN_IDS.has(normalizeGpdModelId(id))) continue
+    result[id] = GPD_MODEL_METADATA[id] ?? GPD_MODEL_METADATA[normalizeGpdModelId(id)] ?? stubMetadataFor(id)
   }
   return result
 }
