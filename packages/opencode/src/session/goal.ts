@@ -1,4 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
+import { Bus } from "../bus"
 import { Database, NotFoundError, and, eq, isNull } from "@/storage/db"
 import { SyncEvent } from "@/sync"
 import { Context, Effect, Layer } from "effect"
@@ -104,6 +105,19 @@ export namespace SessionGoal {
         goal: Info,
       }),
     ),
+    // Fired exactly on the active → budget_limited transition inside
+    // recordUsage. SessionPrompt subscribes and runs one final wind-down
+    // turn (checkpoint via /gpd-pause-work + state summary) so an
+    // exhausted goal ends with a recoverable artifact instead of a
+    // silent stop — mirrors codex's goal extension, which injects a
+    // wrap-up prompt when the token budget exhausts.
+    BudgetExhausted: BusEvent.define(
+      "session.goal.budget_exhausted",
+      z.object({
+        sessionID: SessionID.zod,
+        goal: Info,
+      }),
+    ),
   }
 
   export class GoalError extends Error {}
@@ -197,6 +211,7 @@ export namespace SessionGoal {
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
+      const bus = yield* Bus.Service
       const completeAccounting = new Map<
         SessionID,
         {
@@ -415,7 +430,7 @@ export namespace SessionGoal {
           if (input.seconds > 0) budgetAccounting.delete(input.sessionID)
           else budgetAccounting.set(input.sessionID, { messageID: input.messageID, time: false })
         }
-        return yield* emit({
+        const next = yield* emit({
           ...current,
           status,
           tokens: {
@@ -432,6 +447,14 @@ export namespace SessionGoal {
             usedMicroUSD: newCostUsed,
           },
         })
+        // `current.status` was "active" here (non-active returns above), so
+        // `exhausted` marks exactly the active → budget_limited transition.
+        if (exhausted) {
+          yield* bus
+            .publish(BusOnlyEvent.BudgetExhausted, { sessionID: input.sessionID, goal: next })
+            .pipe(Effect.ignore)
+        }
+        return next
       })
 
       const modelUpdate = Effect.fn("SessionGoal.modelUpdate")(function* (input: ModelUpdateInput) {

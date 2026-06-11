@@ -146,6 +146,9 @@ export namespace SessionPrompt {
           // exponential retry backoff so a hard-failing upstream isn't
           // hammered while the goal keeps trying to unblock itself.
           errorRetries: new Map<SessionID, number>(),
+          // Sessions whose budget-exhausted wind-down turn has already been
+          // dispatched — the wind-down must run exactly once per exhaustion.
+          windDownDone: new Set<SessionID>(),
         }),
       )
       const runner = Effect.fn("SessionPrompt.runner")(function* () {
@@ -332,6 +335,16 @@ export namespace SessionPrompt {
             : undefined
           const variant = lastUser?.model.variant
 
+          // Near-cap warning: above 75% on any budget, steer the model
+          // toward converging + checkpointing so the eventual wind-down
+          // turn has something coherent to checkpoint.
+          const budgetFractions = [
+            goal.tokens.budget === undefined ? 0 : goal.tokens.used / goal.tokens.budget,
+            goal.time.budgetSeconds === undefined ? 0 : goal.time.used / goal.time.budgetSeconds,
+            goal.cost.budgetMicroUSD === undefined ? 0 : goal.cost.usedMicroUSD / goal.cost.budgetMicroUSD,
+          ]
+          const maxBudgetFraction = Math.max(...budgetFractions)
+
           yield* bus.publish(SessionGoal.BusOnlyEvent.IdleContinue, { sessionID, goal })
           yield* prompt({
             sessionID,
@@ -363,6 +376,12 @@ export namespace SessionPrompt {
                       ]
                     : []),
                   ...(errorNote ? ["", errorNote] : []),
+                  ...(maxBudgetFraction >= 0.75
+                    ? [
+                        "",
+                        `BUDGET WARNING: ${Math.round(maxBudgetFraction * 100)}% of a goal budget is consumed. Prioritize converging on and verifying results already in flight, write intermediate state to disk as you go, and avoid opening new workstreams — when the budget exhausts you will get exactly one wind-down turn to checkpoint.`,
+                      ]
+                    : []),
                   "",
                   "CANONICAL GPD WORKFLOW (use the matching slash command at every step):",
                   "",
@@ -421,6 +440,53 @@ export namespace SessionPrompt {
         }).pipe(Effect.ensuring(Effect.sync(() => subscription.continuing.delete(sessionID))))
       })
 
+      // One final turn after a budget exhausts: checkpoint the work so the
+      // goal ends with recoverable artifacts instead of a silent stop.
+      // Mirrors codex's goal extension (wrap-up prompt on budget
+      // exhaustion). Waits for the in-flight turn to drain, then sends a
+      // single synthetic prompt; the goal is already budget_limited so the
+      // idle-continuation loop will not fire afterwards.
+      const windDownGoal: (sessionID: SessionID, goal: SessionGoal.Info) => Effect.Effect<void> = Effect.fn(
+        "SessionPrompt.windDownGoal",
+      )(function* (sessionID: SessionID, goal: SessionGoal.Info) {
+        const subscription = yield* InstanceState.get(goalIdleSubscription)
+        if (subscription.windDownDone.has(sessionID)) return
+        subscription.windDownDone.add(sessionID)
+        while ((yield* status.get(sessionID)).type !== "idle") {
+          yield* Effect.sleep(250)
+        }
+        const latestUser = yield* sessions
+          .findMessage(sessionID, (message) => message.info.role === "user")
+          .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(Option.none())))
+        const lastUser =
+          Option.isSome(latestUser) && latestUser.value.info.role === "user" ? latestUser.value.info : undefined
+        yield* prompt({
+          sessionID,
+          agent: lastUser?.agent,
+          model: lastUser ? { providerID: lastUser.model.providerID, modelID: lastUser.model.modelID } : undefined,
+          variant: lastUser?.model.variant,
+          parts: [
+            {
+              type: "text",
+              synthetic: true,
+              metadata: { goalWindDown: true, goalID: goal.id },
+              text: [
+                "<system-reminder>",
+                "GOAL BUDGET EXHAUSTED — this is your FINAL turn for this goal; the runtime will not re-invoke you afterwards.",
+                `Goal objective: ${JSON.stringify(goal.objective)}`,
+                `Final usage: ${goal.tokens.used}${goal.tokens.budget === undefined ? "" : ` / ${goal.tokens.budget}`} tokens, ${goal.time.used}s${goal.time.budgetSeconds === undefined ? "" : ` / ${goal.time.budgetSeconds}s`}, $${(goal.cost.usedMicroUSD / 1_000_000).toFixed(2)}${goal.cost.budgetMicroUSD === undefined ? "" : ` / $${(goal.cost.budgetMicroUSD / 1_000_000).toFixed(2)}`}.`,
+                "",
+                "Do NOT start new work. Spend this turn checkpointing so the goal is recoverable:",
+                "  1. Run /gpd-pause-work to write DERIVATION-STATE.md + .continue-here.md (preferred), or if that skill is unavailable, write the equivalent state notes by hand.",
+                "  2. End with a short summary for the user: what was accomplished, what remains, the exact next step, and how to resume (raise the budget via the goal popover or /goal edit, then Resume).",
+                "Do not call update_goal.",
+                "</system-reminder>",
+              ].join("\n"),
+            },
+          ],
+        })
+      })
+
       const ensureGoalIdleSubscription = Effect.fn("SessionPrompt.ensureGoalIdleSubscription")(function* () {
         const subscription = yield* InstanceState.get(goalIdleSubscription)
         if (subscription.active) return
@@ -435,6 +501,12 @@ export namespace SessionPrompt {
                 yield* autoContinueGoal(event.properties.sessionID)
               }).pipe(Effect.ignore),
             )
+          }),
+        )
+        yield* bus.subscribeCallback(
+          SessionGoal.BusOnlyEvent.BudgetExhausted,
+          InstanceState.bind((event) => {
+            run.fork(windDownGoal(event.properties.sessionID, event.properties.goal).pipe(Effect.ignore))
           }),
         )
       })
