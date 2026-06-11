@@ -452,6 +452,14 @@ export namespace SessionPrompt {
         const subscription = yield* InstanceState.get(goalIdleSubscription)
         if (subscription.windDownDone.has(sessionID)) return
         subscription.windDownDone.add(sessionID)
+        // HARD CAP: abort the in-flight turn. Budget accounting happens at
+        // step boundaries, so without this a single long agentic turn (e.g.
+        // /gpd-execute-phase fanning out subagents) keeps burning past the
+        // cap for as long as the turn lasts — observed live 2026-06-11: a
+        // $0.75-capped goal flipped budget_limited at 11:58 and the
+        // in-flight turn kept spawning phase subagents until 12:16. The
+        // wind-down turn below is the bounded epilogue.
+        yield* state.cancel(sessionID).pipe(Effect.ignore)
         while ((yield* status.get(sessionID)).type !== "idle") {
           yield* Effect.sleep(250)
         }
@@ -940,7 +948,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 }
 
                 const ctx = yield* InstanceState.context
-                const root = ctx.directory
+                // Resolve deliverables against the SESSION's directory, not
+                // the ambient instance directory — goal continuations can be
+                // dispatched from an instance rooted elsewhere (observed
+                // live 2026-06-11: model wrote artifacts to the session's
+                // project dir, gate stat()ed them against a sibling
+                // instance root and rejected every path).
+                const sessionInfo = yield* sessions.get(input.session.id).pipe(Effect.option)
+                const root =
+                  Option.isSome(sessionInfo) && sessionInfo.value.directory ? sessionInfo.value.directory : ctx.directory
                 const failures: string[] = []
                 const verified: { path: string; bytes: number; description: string }[] = []
 
