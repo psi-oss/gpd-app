@@ -68,6 +68,15 @@ export type GpdModelMetadata = {
 // GPD_MODEL_METADATA, so dynamic models picked up from `/v1/models` that
 // have no metadata still get the safe default.
 export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
+  // fable-5 supports the full ladder. Thinking is always on (the `thinking`
+  // param is omitted/adaptive — an explicit thinking.type=disabled 400s);
+  // depth is controlled purely via output_config.effort=<tier>. Same
+  // low→max ladder as opus-4-7. Requires the proxy `gpd-chat` access group
+  // to advertise `claude-fable-5` in /v1/models before the picker shows it.
+  "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
+  // opus-4-8 inherits opus-4-7's request surface (adaptive thinking +
+  // output_config.effort; budget_tokens/temperature removed). Full ladder.
+  "claude-opus-4-8": ["low", "medium", "high", "xhigh", "max"],
   // opus-4-7 supports the full ladder. supports_max_reasoning_effort=true
   // and supports_xhigh_reasoning_effort=true in LiteLLM's model map; the
   // adapter sends thinking.type=adaptive + output_config.effort=<tier>.
@@ -158,6 +167,35 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
   // Anthropic 4.x rejects requests where `max_tokens` exceeds the model's
   // documented maximum, so the metadata here is the actual ceiling we can
   // ask for — not aspirational.
+  // Anthropic's most capable widely released model. New tokenizer (~30% more
+  // tokens for the same content vs Opus-tier — don't reuse opus token/cost
+  // baselines). 1M context (default), 128K max output. Pricing $10/$50 per
+  // MTok; cache_read/write derived at the same 0.1x / 1.25x multipliers as
+  // the other Anthropic rows. temperature/top_p/top_k are rejected upstream
+  // (the GPD adapter already strips them, same as opus-4-7). Thinking is
+  // always on. NOTE: this metadata only styles the picker — the model must
+  // also be registered on the LiteLLM proxy and added to the `gpd-chat`
+  // access group, or it never appears in /v1/models and never resolves.
+  "claude-fable-5": {
+    name: "Claude Fable 5",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_000_000, output: 128_000 },
+    cost: { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
+  },
+  // Current top Opus-tier model. Same request surface as opus-4-7 (no new
+  // breaking changes); 1M context, 128K output, $5/$25 per MTok.
+  "claude-opus-4-8": {
+    name: "Claude Opus 4.8",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_000_000, output: 128_000 },
+    cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  },
   "claude-opus-4-7": {
     name: "Claude Opus 4.7",
     tool_call: true,
