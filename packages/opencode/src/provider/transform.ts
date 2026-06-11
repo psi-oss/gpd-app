@@ -6,7 +6,7 @@ import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
-import { gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
+import { gpdAnthropicAdaptiveProfile, gpdReasoningEffortsFor, gpdUsesResponsesApi } from "./gpd-models"
 import { Hash } from "@/util/hash"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
@@ -500,37 +500,35 @@ export namespace ProviderTransform {
       // chunks — without this the Responses API call returns a reasoning
       // block with an empty summary array and the UI shows nothing.
       const usesResponses = gpdUsesResponsesApi(model.api.id)
-      // Adaptive thinking is only available on Claude 4.6/4.7 family —
-      // verbatim from the Anthropic adaptive-thinking docs:
-      //   "Available on Claude Mythos Preview, Claude Opus 4.7,
-      //    Claude Opus 4.6, and Claude Sonnet 4.6."
-      // Sending `thinking: {type: "adaptive"}` to claude-haiku-4-5 returns
-      // a 400 with "adaptive thinking is not supported on this model"
-      // (verified live 2026-05-06: haiku stream rejected mid-tool-loop).
-      // Other Claude models still need a `thinking` payload, but LiteLLM
-      // translates `reasoning_effort` into the legacy
+      // Anthropic-family request shape (which models take adaptive
+      // thinking, whether display:"summarized" must be requested, whether
+      // effort travels via output_config only, xhigh→max promotion) is
+      // owned by gpdAnthropicAdaptiveProfile in gpd-models.ts — shared
+      // with the wire-time interceptor in provider.ts so the two layers
+      // can never disagree about a model id.
+      // Claude models WITHOUT a profile (e.g. haiku-4-5, which 400s on
+      // adaptive) still need a `thinking` payload, but LiteLLM translates
+      // `reasoning_effort` into the legacy
       // `thinking: {type: "enabled", budget_tokens: …}` form for them, so
-      // we omit the explicit `thinking` block here and rely on the
+      // we omit the explicit `thinking` block and rely on the
       // LiteLLM-side translation.
-      const isClaudeAdaptive = ["opus-4-7", "opus-4.7", "opus-4-6", "opus-4.6", "sonnet-4-6", "sonnet-4.6"].some(
-        (v) => model.api.id.includes(v),
-      )
-      if (isClaudeAdaptive) {
+      const adaptiveProfile = gpdAnthropicAdaptiveProfile(model.api.id)
+      if (adaptiveProfile) {
         return Object.fromEntries(
           efforts.map((effort) => {
             // LiteLLM/Anthropic accepts opus-4-7 xhigh, but live probes show
             // it streams no reasoning_content for prompts where max does.
             // Preserve saved xhigh selections, but send the only tier that
             // reliably produces visible summaries.
-            const effectiveEffort = model.api.id === "claude-opus-4-7" && effort === "xhigh" ? "max" : effort
+            const effectiveEffort = adaptiveProfile.promoteXhighToMax && effort === "xhigh" ? "max" : effort
             return [
               effort,
               {
                 thinking: {
                   type: "adaptive",
-                  ...(model.api.id === "claude-opus-4-7" ? { display: "summarized" } : {}),
+                  ...(adaptiveProfile.summarizedDisplay ? { display: "summarized" } : {}),
                 },
-                reasoningEffort: effectiveEffort,
+                ...(adaptiveProfile.omitsReasoningEffort ? {} : { reasoningEffort: effectiveEffort }),
                 output_config: {
                   effort: effectiveEffort,
                 },

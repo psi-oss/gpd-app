@@ -11,7 +11,7 @@ import { Plugin } from "../plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "./models"
-import { gpdUsesResponsesApi, resolveGpdProviderModels } from "./gpd-models"
+import { gpdAnthropicAdaptiveProfile, gpdUsesResponsesApi, resolveGpdProviderModels } from "./gpd-models"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
@@ -1863,12 +1863,13 @@ export namespace Provider {
               }
             }
 
-            // claude-opus-4-7 needs three coordinated tweaks to surface
-            // visible thinking through the GPD UI. Scoped to the GPD
-            // chat-completions path; other models untouched.
+            // claude-opus-4-7 / claude-opus-4-8 / claude-fable-5 need
+            // coordinated tweaks to surface visible thinking through the
+            // GPD UI. Scoped to the GPD chat-completions path; other
+            // models untouched.
             //
-            // (1) `thinking.display = "summarized"`. opus-4-7's default
-            //     silently flipped to `"omitted"` (vs opus-4-6's
+            // (1) `thinking.display = "summarized"`. The default on all
+            //     three models is `"omitted"` (vs opus-4-6's
             //     `"summarized"`); thinking blocks come back with empty
             //     `thinking` text. The `@ai-sdk/openai-compatible` driver
             //     gates reasoning events on truthy
@@ -1878,14 +1879,17 @@ export namespace Provider {
             //     thinking summaries — see
             //     https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking.
             //
-            // (2) Promote xhigh → max. opus-4-7's adaptive scheduler
-            //     declines to think on non-computational ("think about X",
-            //     "explore Y") prompts at xhigh in practice — verified
-            //     live 2026-05-05. Only `max` reliably forces a thinking
-            //     commit for those prompts; adaptive still chooses how
-            //     many tokens to actually spend, so cheap prompts stay
-            //     cheap. Tiers below xhigh stay as-is so users who
-            //     intentionally pick low/medium/high keep that behavior.
+            // (2) Promote xhigh → max (opus-4-7 ONLY). opus-4-7's adaptive
+            //     scheduler declines to think on non-computational ("think
+            //     about X", "explore Y") prompts at xhigh in practice —
+            //     verified live 2026-05-05. Only `max` reliably forces a
+            //     thinking commit for those prompts; adaptive still
+            //     chooses how many tokens to actually spend, so cheap
+            //     prompts stay cheap. Tiers below xhigh stay as-is so
+            //     users who intentionally pick low/medium/high keep that
+            //     behavior. opus-4-8 / fable-5 returned reasoning
+            //     summaries at xhigh in the 2026-06-11 probes, so their
+            //     xhigh is honored as-is.
             //
             // (3) Re-order JSON keys so `thinking` is the LAST top-level
             //     field. LiteLLM v1.83.14's `map_openai_params` iterates
@@ -1900,13 +1904,27 @@ export namespace Provider {
             //     `output_config.effort`) and then re-applies our
             //     `thinking` payload intact (display preserved). See
             //     `litellm/llms/anthropic/chat/transformation.py:1088-1108`.
-            if (
-              model.providerID === "gpd" &&
-              model.api.id === "claude-opus-4-7" &&
-              model.api.npm === "@ai-sdk/openai-compatible" &&
-              opts.body &&
-              opts.method === "POST"
-            ) {
+            //
+            // (4) Strip `reasoning_effort` on opus-4-8 / fable-5. LiteLLM
+            //     1.83.14's AnthropicConfig has no model-map entry for
+            //     either id, so `reasoning_effort: xhigh|max` 500s with
+            //     "Unmapped reasoning effort" (probed live 2026-06-11).
+            //     Their proxy deployments whitelist `thinking` +
+            //     `output_config` via allowed_openai_params instead;
+            //     effort travels in `output_config.effort` only. Any
+            //     `reasoning_effort` that reaches this hook (saved
+            //     variants, manual opencode.json overrides) is folded
+            //     into `output_config.effort` and removed.
+            //
+            // Which models get which tweak is owned by
+            // gpdAnthropicAdaptiveProfile (gpd-models.ts) — shared with
+            // the variant builder in transform.ts, and dot/dash- and
+            // prefix-insensitive so proxy-side aliases resolve the same.
+            const adaptiveProfile =
+              model.providerID === "gpd" && model.api.npm === "@ai-sdk/openai-compatible"
+                ? gpdAnthropicAdaptiveProfile(model.api.id)
+                : undefined
+            if (adaptiveProfile?.summarizedDisplay && opts.body && opts.method === "POST") {
               const body = JSON.parse(opts.body as string)
               const existing = body.thinking
               const finalThinking =
@@ -1915,11 +1933,20 @@ export namespace Provider {
                   : existing.display === undefined
                     ? { ...existing, display: "summarized" }
                     : existing
-              if (body.reasoning_effort === "xhigh") {
-                body.reasoning_effort = "max"
+              if (adaptiveProfile.promoteXhighToMax) {
+                if (body.reasoning_effort === "xhigh") {
+                  body.reasoning_effort = "max"
+                }
+                if (body.output_config?.effort === "xhigh") {
+                  body.output_config = { ...body.output_config, effort: "max" }
+                }
               }
-              if (body.output_config?.effort === "xhigh") {
-                body.output_config = { ...body.output_config, effort: "max" }
+              if (adaptiveProfile.omitsReasoningEffort && body.reasoning_effort !== undefined) {
+                // See (4): effort must travel via output_config only.
+                if (typeof body.reasoning_effort === "string" && body.output_config?.effort === undefined) {
+                  body.output_config = { ...body.output_config, effort: body.reasoning_effort }
+                }
+                delete body.reasoning_effort
               }
               // Anthropic's `max_tokens` is a COMBINED thinking + output
               // budget. opus-4-7 at `effort: "max"` thinks with "no
@@ -1929,11 +1956,12 @@ export namespace Provider {
               // Verified 2026-05-05: dumped body showed `max_tokens:
               // 32000` + `effort: max`, model thought to budget exhaustion
               // mid-derivation and never emitted the answer. Bump the cap
-              // to opus-4-7's full 128k output ceiling at max effort so
-              // the answer always has room to land. Lower tiers keep the
-              // standard cap — they don't blow through 32k as easily.
+              // to the full 128k output ceiling (shared by all three
+              // models) at max effort so the answer always has room to
+              // land. Lower tiers keep the standard cap — they don't blow
+              // through 32k as easily.
               if (
-                body.reasoning_effort === "max" &&
+                (body.reasoning_effort === "max" || body.output_config?.effort === "max") &&
                 typeof body.max_tokens === "number" &&
                 body.max_tokens < 128_000
               ) {

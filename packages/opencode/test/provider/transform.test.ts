@@ -2686,6 +2686,91 @@ describe("ProviderTransform.variants", () => {
       })
     })
 
+    test("GPD opus 4.8 carries effort via output_config only, never reasoning_effort", () => {
+      const model = createMockModel({
+        id: "gpd/claude-opus-4-8",
+        providerID: "gpd",
+        api: {
+          id: "claude-opus-4-8",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      // The effort ladder length is owned by GPD_MODEL_REASONING_EFFORTS
+      // (falls back to low/medium/high until a model entry lands), so only
+      // assert the per-tier request shape here. LiteLLM 1.83.14 500s with
+      // "Unmapped reasoning effort" on reasoning_effort=xhigh|max for ids
+      // missing from its model map — effort must travel in
+      // output_config.effort only, and thinking summaries must be
+      // requested explicitly (display defaults to "omitted" on 4.8/Fable).
+      for (const [tier, options] of Object.entries(result)) {
+        expect(options).toEqual({
+          thinking: {
+            type: "adaptive",
+            display: "summarized",
+          },
+          output_config: {
+            effort: tier,
+          },
+        })
+        expect("reasoningEffort" in options).toBe(false)
+      }
+    })
+
+    test("GPD fable 5 carries effort via output_config only, never reasoning_effort", () => {
+      const model = createMockModel({
+        id: "gpd/claude-fable-5",
+        providerID: "gpd",
+        api: {
+          id: "claude-fable-5",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      for (const [tier, options] of Object.entries(result)) {
+        expect(options).toEqual({
+          thinking: {
+            type: "adaptive",
+            display: "summarized",
+          },
+          output_config: {
+            effort: tier,
+          },
+        })
+        expect("reasoningEffort" in options).toBe(false)
+      }
+    })
+
+    test("GPD dot-form opus 4.8 alias resolves to the same request shape as dash-form", () => {
+      const model = createMockModel({
+        id: "gpd/claude-opus-4.8",
+        providerID: "gpd",
+        api: {
+          id: "claude-opus-4.8",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      expect(Object.keys(result).length).toBeGreaterThan(0)
+      for (const [tier, options] of Object.entries(result)) {
+        expect(options).toEqual({
+          thinking: {
+            type: "adaptive",
+            display: "summarized",
+          },
+          output_config: {
+            effort: tier,
+          },
+        })
+      }
+    })
+
     test("GPD sonnet 4.6 uses adaptive thinking without xhigh promotion", () => {
       const model = createMockModel({
         id: "gpd/claude-sonnet-4-6",
