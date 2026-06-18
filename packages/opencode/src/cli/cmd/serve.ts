@@ -16,34 +16,62 @@ import { Installation } from "../../installation"
  * pegging CPU indefinitely. Observed in the wild: 4 orphans at 100% CPU
  * for 24+ hours on a dev laptop.
  *
- * Detection: the process's PPID changes when its parent dies. On macOS
- * the orphan is always adopted by launchd (PID 1). On Linux the orphan
- * is adopted by the nearest subreaper (systemd-logind in user-session
- * scope sets PR_SET_CHILD_SUBREAPER, so PPID becomes that subreaper's
- * PID, not 1). Checking `process.ppid !== initialPpid` covers both —
- * under POSIX a process's PPID only ever changes when its parent dies,
- * so false positives are impossible in practice.
+ * Detection: probe the ORIGINAL parent's liveness with `process.kill(pid, 0)`
+ * (signal 0 sends nothing — it only validates the target exists; throws
+ * ESRCH once the parent is gone). We do NOT compare `process.ppid` against
+ * its initial value: bun caches `process.ppid` at startup and never refreshes
+ * it after the kernel reparents an orphan, so the old `process.ppid !==
+ * initialPpid` check was dead — it stayed equal forever and the watchdog
+ * never fired (verified 2026-06-18: kernel reparented an orphaned sidecar to
+ * PID 1 while bun's `process.ppid` kept reporting the dead parent's PID; and
+ * `process.getppid()` does not exist in bun). Probing the captured parent PID
+ * directly sidesteps the stale-ppid cache entirely.
+ *
+ * PID-reuse caveat: between the parent dying and the next poll the OS could
+ * recycle its PID onto an unrelated process, which would read as "alive" for
+ * up to one interval. macOS/Linux cycle PIDs through a large space so a
+ * collision inside a ~3s window is vanishingly unlikely, and the failure mode
+ * is benign (one extra interval of life), so this is an acceptable trade vs.
+ * the heavier pipe-FD handshake.
  *
  * Gated to GPD-spawned sidecars via OPENCODE_CLIENT=desktop (set in
  * src-tauri/src/cli.rs when spawning us). Standalone `opencode serve &`
  * users — who may intentionally detach the process past the parent shell
  * — are unaffected. Containers whose entrypoint is opencode start with
- * PPID=1; the `initialPpid === 1` short-circuit skips them too (the
+ * PPID=1; the `parentPid <= 1` short-circuit skips them too (the
  * container orchestrator owns lifecycle).
  */
+/**
+ * True if a process with `pid` currently exists. Uses signal 0, which
+ * sends nothing and only validates the target: it returns on success,
+ * throws ESRCH when the pid is gone, and EPERM when the pid exists but
+ * belongs to another user (treated as alive — defensive; never the case
+ * for our own parent). Deliberately does NOT consult `process.ppid`,
+ * which bun caches at startup and never refreshes after reparenting.
+ */
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e: any) {
+    return e?.code === "EPERM"
+  }
+}
+
 function startOrphanWatchdog(): void {
   if (process.platform === "win32") return
   if (process.env["OPENCODE_CLIENT"] !== "desktop") return
-  const initialPpid = process.ppid
-  if (initialPpid === 1) return
+  // Captured once at startup, while it still reflects the real spawning
+  // parent. bun's caching of process.ppid is fine here — we want the
+  // spawn-time value and probe THAT pid's liveness from now on.
+  const parentPid = process.ppid
+  if (!parentPid || parentPid <= 1) return
   setInterval(() => {
-    if (process.ppid !== initialPpid) {
-      console.error(
-        `[orphan-watchdog] parent ${initialPpid} died (now reparented to ${process.ppid}), self-exiting`,
-      )
+    if (!isProcessAlive(parentPid)) {
+      console.error(`[orphan-watchdog] parent ${parentPid} is gone, self-exiting`)
       process.exit(0)
     }
-  }, 5_000).unref()
+  }, 3_000).unref()
 }
 
 export const ServeCommand = cmd({
