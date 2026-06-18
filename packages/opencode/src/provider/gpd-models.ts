@@ -175,58 +175,6 @@ export function gpdAnthropicAdaptiveProfile(apiId: string): GpdAnthropicAdaptive
   return undefined
 }
 
-/**
- * Request-shape profile for Anthropic adaptive-thinking models on the GPD
- * provider. Single source of truth shared by the variant builder
- * (transform.ts `variants`) and the wire-time interceptor (provider.ts
- * GPD fetch hook) so the two layers can never disagree about a model id.
- *
- * Ids are matched dot/dash-insensitively and by substring, so proxy-side
- * aliases like `claude-opus-4.8` or `team/claude-fable-5` resolve to the
- * same profile as the canonical dash-form model_name.
- *
- * Adaptive thinking is only available on the Claude 4.6+ family — per the
- * Anthropic adaptive-thinking docs: Fable 5 / Mythos 5 (always on, cannot
- * be disabled), Opus 4.8 / Opus 4.7 (only supported mode, off unless
- * requested), Opus 4.6, Sonnet 4.6. Sending `thinking: {type: "adaptive"}`
- * to claude-haiku-4-5 returns a 400 "adaptive thinking is not supported
- * on this model" (verified live 2026-05-06), so haiku intentionally has
- * no profile.
- */
-export type GpdAnthropicAdaptiveProfile = {
-  // `thinking.display` defaults to "omitted" on these models (empty
-  // thinking text), so summaries must be requested explicitly for the UI
-  // to render a reasoning part.
-  summarizedDisplay: boolean
-  // LiteLLM 1.83.14's AnthropicConfig has no model-map entry for these
-  // ids and 500s with "Unmapped reasoning effort" on
-  // `reasoning_effort: xhigh|max`. Their proxy deployments whitelist
-  // `thinking` + `output_config` via allowed_openai_params instead —
-  // effort must travel in `output_config.effort` ONLY (probed live
-  // 2026-06-11: all five tiers pass on both models with this shape).
-  omitsReasoningEffort: boolean
-  // opus-4-7's adaptive scheduler declines to think on non-computational
-  // prompts at xhigh in practice (verified live 2026-05-05); only `max`
-  // reliably forces a thinking commit there. Opus 4.8 / Fable 5 returned
-  // reasoning summaries at xhigh in the 2026-06-11 probes, so their
-  // xhigh is honored as-is.
-  promoteXhighToMax: boolean
-}
-
-export function gpdAnthropicAdaptiveProfile(apiId: string): GpdAnthropicAdaptiveProfile | undefined {
-  const id = apiId.replace(/(\d)\.(\d)/g, "$1-$2")
-  if (id.includes("fable-5") || id.includes("opus-4-8")) {
-    return { summarizedDisplay: true, omitsReasoningEffort: true, promoteXhighToMax: false }
-  }
-  if (id.includes("opus-4-7")) {
-    return { summarizedDisplay: true, omitsReasoningEffort: false, promoteXhighToMax: true }
-  }
-  if (id.includes("opus-4-6") || id.includes("sonnet-4-6")) {
-    return { summarizedDisplay: false, omitsReasoningEffort: false, promoteXhighToMax: false }
-  }
-  return undefined
-}
-
 // Models that exist in LiteLLM and have metadata here, but are not safe to
 // expose in the desktop picker yet. Keep this list empty unless a model fails
 // the full-payload probe in `script/gpd-full-payload-probe.ts`.
