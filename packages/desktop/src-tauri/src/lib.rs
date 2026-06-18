@@ -584,6 +584,40 @@ fn wsl_path(path: String, mode: Option<WslPathMode>) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// RES-1158: register Cmd/Ctrl+F as an OS-level global shortcut only while the
+/// main window is focused, releasing it otherwise.
+///
+/// A registered global shortcut is consumed system-wide for as long as it stays
+/// registered, so keeping it registered while GPD sits in the background would
+/// hijack Find (Cmd+F) in every other application. Scoping registration to the
+/// window's focus state makes the combo behave like a window-local accelerator
+/// while still bypassing WKWebView's native Cmd+F interception when GPD is the
+/// foreground app. Idempotent: safe to call repeatedly for the same state.
+#[cfg(desktop)]
+fn sync_find_shortcut(app: &AppHandle, focused: bool) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+    let modifier = if cfg!(target_os = "macos") {
+        Modifiers::SUPER
+    } else {
+        Modifiers::CONTROL
+    };
+    let find_shortcut = Shortcut::new(Some(modifier), Code::KeyF);
+    let global_shortcut = app.global_shortcut();
+
+    if focused {
+        if !global_shortcut.is_registered(find_shortcut) {
+            if let Err(e) = global_shortcut.register(find_shortcut) {
+                tracing::error!("RES-1158: failed to register Cmd+F shortcut: {e}");
+            }
+        }
+    } else if global_shortcut.is_registered(find_shortcut) {
+        if let Err(e) = global_shortcut.unregister(find_shortcut) {
+            tracing::error!("RES-1158: failed to unregister Cmd+F shortcut: {e}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Reproduce macOS path_helper for GUI launches so MacTeX, MacPorts,
@@ -674,15 +708,25 @@ pub fn run() {
             let menu = app_menu::build(&handle)?;
             app.set_menu(menu)?;
 
-            // RES-1158: register Cmd/Ctrl+F as an OS-level shortcut. This
-            // fires regardless of menu state and bypasses macOS WKWebView's
-            // native Cmd+F interception. Emits the same Tauri event as the
-            // menu item would, so the desktop bridge in index.tsx routes it
-            // uniformly into the webview's session search bar.
+            // RES-1158: route Cmd/Ctrl+F into the in-conversation search bar.
+            // macOS WKWebView swallows Cmd+F before it reaches our JS and the
+            // custom Edit-menu accelerator did not propagate reliably (see the
+            // note above), so we claim the combo via the global-shortcut plugin
+            // and re-emit the same Tauri event index.tsx already routes into the
+            // webview's session search bar.
+            //
+            // IMPORTANT: a registered OS global shortcut consumes the combo
+            // system-wide for as long as it stays registered. A focus check
+            // inside the handler only decides whether *we* react to it — it does
+            // NOT hand the swallowed keystroke back to the foreground app. So
+            // registering it unconditionally hijacks Find (Cmd+F) in every other
+            // application while GPD is running. To behave like a window-scoped
+            // accelerator, registration is managed in initialize() as the main
+            // window gains and loses focus (see sync_find_shortcut).
             #[cfg(desktop)]
             {
                 use tauri::Emitter;
-                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+                use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
                 let win_handle = handle.clone();
                 let modifier = if cfg!(target_os = "macos") {
                     Modifiers::SUPER
@@ -695,18 +739,18 @@ pub fn run() {
                         tauri_plugin_global_shortcut::Builder::new()
                             .with_handler(move |_app, shortcut, event| {
                                 if shortcut == &find_shortcut && event.state() == ShortcutState::Pressed {
-                                    // Only fire when our window is focused —
-                                    // otherwise we'd hijack Cmd+F system-wide.
+                                    // Defense-in-depth: the shortcut is only
+                                    // registered while our window is focused
+                                    // (see the focus handler below), but guard
+                                    // here too against a focus-transition race.
                                     if let Some(win) = win_handle.get_webview_window(MainWindow::LABEL)
                                     {
-                                        let focused = win.is_focused().unwrap_or(false);
-                                        if !focused {
-                                            return;
+                                        if win.is_focused().unwrap_or(false) {
+                                            let _ = win.emit(
+                                                app_menu::FIND_IN_CONVERSATION_EVENT,
+                                                (),
+                                            );
                                         }
-                                        let _ = win.emit(
-                                            app_menu::FIND_IN_CONVERSATION_EVENT,
-                                            (),
-                                        );
                                     }
                                 }
                             })
@@ -716,14 +760,9 @@ pub fn run() {
                         tracing::error!("RES-1158: failed to register global-shortcut plugin: {e}");
                         e
                     })?;
-                handle
-                    .global_shortcut()
-                    .register(find_shortcut)
-                    .map_err(|e| {
-                        tracing::error!("RES-1158: failed to register Cmd+F shortcut: {e}");
-                        e
-                    })?;
-                tracing::info!("RES-1158: registered Cmd/Ctrl+F global shortcut");
+                // The shortcut itself is (un)registered on demand in
+                // initialize() once the main window exists, scoped to that
+                // window's focus state — see sync_find_shortcut.
             }
 
             specta_builder.mount_events(&handle);
@@ -1236,6 +1275,22 @@ async fn initialize(app: AppHandle) {
 
     // Create main window immediately - the web app handles its own loading/health gate
     MainWindow::create(&app).expect("Failed to create main window");
+
+    // RES-1158: now that the (foreground) main window exists, register the
+    // Cmd/Ctrl+F shortcut and keep it scoped to the window's focus state, so it
+    // never hijacks Find in other applications while GPD is in the background.
+    #[cfg(desktop)]
+    {
+        if let Some(window) = app.get_webview_window(MainWindow::LABEL) {
+            sync_find_shortcut(&app, window.is_focused().unwrap_or(true));
+            let focus_app = app.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(focused) = event {
+                    sync_find_shortcut(&focus_app, *focused);
+                }
+            });
+        }
+    }
 
     let _ = loading_task.await;
 
