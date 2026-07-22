@@ -92,6 +92,13 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   // the production GPD LiteLLM proxy with streaming Responses API, app-like
   // max_output_tokens, and a padded 55-tool / 174KB request body.
   "gpt-5.5": ["low", "medium", "high", "xhigh"],
+  // gpt-5.6 family (sol / terra / luna, released 2026-07-09): OpenAI
+  // documents the full none→max effort ladder for all three; `none` and
+  // `minimal` are not GPD tiers. Probed live 2026-07-22 through the
+  // production proxy (streaming Responses API, full app tool payload).
+  "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
   // gpt-5.4 family: xhigh OK, max rejected upstream by OpenAI.
   "gpt-5.4": ["low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
@@ -262,6 +269,11 @@ const GPD_RESPONSES_API_MODELS: ReadonlySet<string> = new Set([
   "gpt-5.4-mini",
   "gpt-5.4-nano",
   "gpt-5.5",
+  // gpt-5.6 family verified 2026-07-22: reasoning summaries stream via
+  // `/v1/responses` through the proxy, same as the 5.4/5.5 families.
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.3-codex",
 ])
 
@@ -354,6 +366,38 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     temperature: true,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 5, output: 30, cache_read: 0.5 },
+  },
+  // gpt-5.6 family (2026-07-09): sol is the frontier tier, terra the
+  // balanced tier, luna the high-volume tier. Unlike the 5.4/5.5 families,
+  // OpenAI bills prompt-cache writes for 5.6 (models.dev cost blocks carry
+  // cache_write), so cache_write is set here where earlier GPT entries
+  // omit it.
+  "gpt-5.6-sol": {
+    name: "GPT 5.6 Sol",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 5, output: 30, cache_read: 0.5, cache_write: 6.25 },
+  },
+  "gpt-5.6-terra": {
+    name: "GPT 5.6 Terra",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 2.5, output: 15, cache_read: 0.25, cache_write: 3.125 },
+  },
+  "gpt-5.6-luna": {
+    name: "GPT 5.6 Luna",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_050_000, output: 128_000 },
+    cost: { input: 1, output: 6, cache_read: 0.1, cache_write: 1.25 },
   },
   "gpt-5.4": {
     name: "GPT 5.4",
