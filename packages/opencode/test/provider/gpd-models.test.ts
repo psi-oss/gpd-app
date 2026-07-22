@@ -25,6 +25,10 @@ test("gpt-5.6 family exposes the full effort ladder and Responses routing", () =
     expect(gpdUsesResponsesApi(id)).toBe(true)
     expect(GPD_MODEL_METADATA[id]?.reasoning).toBe(true)
     expect(GPD_MODEL_METADATA[id]?.limit).toEqual({ context: 1_050_000, output: 128_000 })
+    // /v1/responses rejects the temperature param for 5.6 (probed live
+    // 2026-07-22); the capability flag must stay off so agent-configured
+    // temperatures are never sent.
+    expect(GPD_MODEL_METADATA[id]?.temperature).toBe(false)
   }
   expect(GPD_MODEL_METADATA["gpt-5.6-sol"]?.name).toBe("GPT 5.6 Sol")
   expect(GPD_MODEL_METADATA["gpt-5.6-terra"]?.name).toBe("GPT 5.6 Terra")
