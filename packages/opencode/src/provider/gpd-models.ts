@@ -311,7 +311,11 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     tool_call: true,
     reasoning: true,
     attachment: true,
-    temperature: true,
+    // 2026-07-22 live probe: /v1/responses rejects the temperature param
+    // outright ("Unsupported parameter") and chat.completions only accepts
+    // the default 1. With temperature: true an agent-configured temperature
+    // flows through llm.ts into the request and 400s every turn.
+    temperature: false,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 5, output: 30, cache_read: 0.5 },
   },
@@ -319,13 +323,15 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
   // balanced tier, luna the high-volume tier. Unlike the 5.4/5.5 families,
   // OpenAI bills prompt-cache writes for 5.6 (models.dev cost blocks carry
   // cache_write), so cache_write is set here where earlier GPT entries
-  // omit it.
+  // omit it. temperature: false on all three — 2026-07-22 live probe:
+  // /v1/responses (the path these models use) rejects the param with
+  // "Unsupported parameter: 'temperature'".
   "gpt-5.6-sol": {
     name: "GPT 5.6 Sol",
     tool_call: true,
     reasoning: true,
     attachment: true,
-    temperature: true,
+    temperature: false,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 5, output: 30, cache_read: 0.5, cache_write: 6.25 },
   },
@@ -334,7 +340,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     tool_call: true,
     reasoning: true,
     attachment: true,
-    temperature: true,
+    temperature: false,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 2.5, output: 15, cache_read: 0.25, cache_write: 3.125 },
   },
@@ -343,7 +349,7 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     tool_call: true,
     reasoning: true,
     attachment: true,
-    temperature: true,
+    temperature: false,
     limit: { context: 1_050_000, output: 128_000 },
     cost: { input: 1, output: 6, cache_read: 0.1, cache_write: 1.25 },
   },
@@ -383,7 +389,9 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
     // max → silently dropped (rt=0), so cap at high in the effort table.
     reasoning: true,
     attachment: true,
-    temperature: true,
+    // 2026-07-22 live probe: LiteLLM rejects temperature for this model
+    // ("gpt-5 models don't support temperature=0.5. Only temperature=1").
+    temperature: false,
     // Output ceiling per PSI MODELS.md (128K for the GPT-5.x family).
     // Was previously 32_768 — half the chat-completions chunked stream
     // could be cut short, especially on long codex outputs.
