@@ -1,5 +1,10 @@
 import { afterEach, expect, mock, test } from "bun:test"
-import { GPD_MODEL_METADATA, gpdReasoningEffortsFor, resolveGpdProviderModels } from "../../src/provider/gpd-models"
+import {
+  GPD_MODEL_METADATA,
+  gpdReasoningEffortsFor,
+  gpdUsesResponsesApi,
+  resolveGpdProviderModels,
+} from "../../src/provider/gpd-models"
 
 const originalFetch = globalThis.fetch
 
@@ -10,6 +15,20 @@ afterEach(() => {
 
 test("gpt-5.5 exposes app-path-safe reasoning tiers", () => {
   expect(gpdReasoningEffortsFor("gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"])
+})
+
+// gpt-5.6 family (sol / terra / luna): first OpenAI family with the full
+// low→max ladder, and it routes through the Responses API like 5.4/5.5.
+test("gpt-5.6 family exposes the full effort ladder and Responses routing", () => {
+  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    expect(gpdReasoningEffortsFor(id)).toEqual(["low", "medium", "high", "xhigh", "max"])
+    expect(gpdUsesResponsesApi(id)).toBe(true)
+    expect(GPD_MODEL_METADATA[id]?.reasoning).toBe(true)
+    expect(GPD_MODEL_METADATA[id]?.limit).toEqual({ context: 1_050_000, output: 128_000 })
+  }
+  expect(GPD_MODEL_METADATA["gpt-5.6-sol"]?.name).toBe("GPT 5.6 Sol")
+  expect(GPD_MODEL_METADATA["gpt-5.6-terra"]?.name).toBe("GPT 5.6 Terra")
+  expect(GPD_MODEL_METADATA["gpt-5.6-luna"]?.name).toBe("GPT 5.6 Luna")
 })
 
 // gpt-5.5-pro and gpt-5.4-pro were removed (2026-05-08): the pro variants
