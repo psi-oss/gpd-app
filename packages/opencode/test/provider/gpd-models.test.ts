@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test"
 import {
   GPD_MODEL_METADATA,
+  gpdAnthropicAdaptiveProfile,
   gpdReasoningEffortsFor,
   gpdUsesResponsesApi,
   resolveGpdProviderModels,
@@ -15,6 +16,24 @@ afterEach(() => {
 
 test("gpt-5.5 exposes app-path-safe reasoning tiers", () => {
   expect(gpdReasoningEffortsFor("gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"])
+})
+
+// claude-opus-5 (2026-07-24): full ladder, opus-4-8/fable-5 adaptive
+// profile (output_config-only effort against the pinned LiteLLM image),
+// and it must not collide with the dot/dash-normalized 4.x opus ids.
+test("claude-opus-5 exposes the full ladder and the unmapped-id adaptive profile", () => {
+  expect(gpdReasoningEffortsFor("claude-opus-5")).toEqual(["low", "medium", "high", "xhigh", "max"])
+  expect(GPD_MODEL_METADATA["claude-opus-5"]?.name).toBe("Claude Opus 5")
+  expect(GPD_MODEL_METADATA["claude-opus-5"]?.limit).toEqual({ context: 1_000_000, output: 128_000 })
+  expect(gpdUsesResponsesApi("claude-opus-5")).toBe(false)
+  expect(gpdAnthropicAdaptiveProfile("claude-opus-5")).toEqual({
+    summarizedDisplay: true,
+    omitsReasoningEffort: true,
+    promoteXhighToMax: false,
+  })
+  // 4.x ids keep their own profiles — "opus-5" must not swallow them.
+  expect(gpdAnthropicAdaptiveProfile("claude-opus-4-5")).toBeUndefined()
+  expect(gpdAnthropicAdaptiveProfile("claude-opus-4-7")?.promoteXhighToMax).toBe(true)
 })
 
 // gpt-5.6 family (sol / terra / luna): first OpenAI family with the full
