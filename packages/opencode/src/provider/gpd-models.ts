@@ -77,6 +77,12 @@ export const GPD_MODEL_REASONING_EFFORTS: Record<string, readonly string[]> = {
   // opus-4-8 inherits opus-4-7's request surface (adaptive thinking +
   // output_config.effort; budget_tokens/temperature removed). Full ladder.
   "claude-opus-4-8": ["low", "medium", "high", "xhigh", "max"],
+  // claude-opus-5 (released 2026-07-24): the live Anthropic Models API
+  // reports the full low→max effort ladder (capabilities.effort.*), and
+  // the 2026-07-24 full-payload probe through the production proxy passed
+  // all five tiers (adaptive thinking + output_config.effort, same
+  // allowed_openai_params proxy shape as opus-4-8 / fable-5).
+  "claude-opus-5": ["low", "medium", "high", "xhigh", "max"],
   // opus-4-7 supports the full ladder. supports_max_reasoning_effort=true
   // and supports_xhigh_reasoning_effort=true in LiteLLM's model map; the
   // adapter sends thinking.type=adaptive + output_config.effort=<tier>.
@@ -170,7 +176,12 @@ export type GpdAnthropicAdaptiveProfile = {
 
 export function gpdAnthropicAdaptiveProfile(apiId: string): GpdAnthropicAdaptiveProfile | undefined {
   const id = normalizeGpdModelId(apiId)
-  if (id.includes("fable-5") || id.includes("opus-4-8")) {
+  // opus-5 (2026-07-24) shares the fable-5 / opus-4-8 shape: unmapped in
+  // the pinned LiteLLM image, so its proxy row whitelists thinking +
+  // output_config and effort must travel in output_config.effort only.
+  // ("opus-5" does not substring-match "opus-4-5" — the 4.x ids keep
+  // their own branches below.)
+  if (id.includes("fable-5") || id.includes("opus-4-8") || id.includes("opus-5")) {
     return { summarizedDisplay: true, omitsReasoningEffort: true, promoteXhighToMax: false }
   }
   if (id.includes("opus-4-7")) {
@@ -261,6 +272,20 @@ export const GPD_MODEL_METADATA: Record<string, GpdModelMetadata> = {
   },
   // Current top Opus-tier model. Same request surface as opus-4-7 (no new
   // breaking changes); 1M context, 128K output, $5/$25 per MTok.
+  // claude-opus-5 (2026-07-24): strongest Opus-tier model. Same rate card
+  // as opus-4-8 ($5/$25, cache read $0.50 / write $6.25). 1M context /
+  // 128K output per the live Anthropic Models API. Adaptive-thinking only
+  // (budget_tokens unsupported); the GPD adapter strips sampling params at
+  // wire time via the adaptive profile, same as opus-4-8 / fable-5.
+  "claude-opus-5": {
+    name: "Claude Opus 5",
+    tool_call: true,
+    reasoning: true,
+    attachment: true,
+    temperature: true,
+    limit: { context: 1_000_000, output: 128_000 },
+    cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  },
   "claude-opus-4-8": {
     name: "Claude Opus 4.8",
     tool_call: true,

@@ -2686,6 +2686,36 @@ describe("ProviderTransform.variants", () => {
       })
     })
 
+    test("GPD opus 5 exposes the full ladder with output_config-only effort", () => {
+      const model = createMockModel({
+        id: "gpd/claude-opus-5",
+        providerID: "gpd",
+        api: {
+          id: "claude-opus-5",
+          url: "https://litellm.test/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+
+      // opus-5 shares the opus-4-8 / fable-5 adaptive profile: unmapped in
+      // the pinned LiteLLM image, so effort travels in output_config.effort
+      // only, with summaries requested explicitly.
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      for (const [tier, options] of Object.entries(result)) {
+        expect(options).toEqual({
+          thinking: {
+            type: "adaptive",
+            display: "summarized",
+          },
+          output_config: {
+            effort: tier,
+          },
+        })
+        expect("reasoningEffort" in options).toBe(false)
+      }
+    })
+
     test("GPD opus 4.8 carries effort via output_config only, never reasoning_effort", () => {
       const model = createMockModel({
         id: "gpd/claude-opus-4-8",
