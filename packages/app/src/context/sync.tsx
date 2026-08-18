@@ -13,6 +13,7 @@ import { useGlobalSync } from "./global-sync"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
 import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
+import { cmp } from "./global-sync/utils"
 import { diffs as list, message as clean } from "@/utils/diffs"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
@@ -32,8 +33,6 @@ function runInflight(map: Map<string, Promise<void>>, key: string, task: () => P
 }
 
 const keyFor = (directory: string, id: string) => `${directory}\n${id}`
-
-const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 function merge<T extends { id: string }>(a: readonly T[], b: readonly T[]) {
   const map = new Map(a.map((item) => [item.id, item] as const))

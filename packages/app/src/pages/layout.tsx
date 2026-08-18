@@ -73,6 +73,7 @@ import {
   sortedRootSessions,
   workspaceKey,
 } from "./layout/helpers"
+import { cmp } from "@/context/global-sync/utils"
 import {
   collectNewSessionDeepLinks,
   collectOpenProjectDeepLinks,
@@ -778,7 +779,7 @@ export default function Layout(props: ParentProps) {
 
   const mergeByID = <T extends { id: string }>(current: T[], incoming: T[]) => {
     if (current.length === 0) {
-      return incoming.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      return incoming.slice().sort((a, b) => cmp(a.id, b.id))
     }
 
     const map = new Map<string, T>()
@@ -788,7 +789,7 @@ export default function Layout(props: ParentProps) {
     for (const item of incoming) {
       map.set(item.id, item)
     }
-    return [...map.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    return [...map.values()].sort((a, b) => cmp(a.id, b.id))
   }
 
   async function prefetchMessages(directory: string, sessionID: string, token: number) {

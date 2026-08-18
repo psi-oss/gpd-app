@@ -26,7 +26,7 @@ import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global
 import { trimSessions } from "./global-sync/session-trim"
 import type { ProjectMeta } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
-import { sanitizeProject } from "./global-sync/utils"
+import { cmp, sanitizeProject } from "./global-sync/utils"
 import { formatServerError } from "@/utils/server-errors"
 
 type GlobalStore = {
@@ -210,7 +210,7 @@ function createGlobalSync() {
         const nonArchived = (x.data ?? [])
           .filter((s) => !!s?.id)
           .filter((s) => !s.time?.archived)
-          .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+          .sort((a, b) => cmp(a.id, b.id))
         const limit = store.limit
         const childSessions = store.session.filter((s) => !!s.parentID)
         const sessions = trimSessions([...nonArchived, ...childSessions], {

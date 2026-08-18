@@ -72,6 +72,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
+import { cmp } from "@/context/global-sync/utils"
 
 const emptyUserMessages: UserMessage[] = []
 type FollowupItem = FollowupDraft & { id: string }
@@ -483,7 +484,7 @@ export default function Page() {
     () => {
       const revert = revertMessageID()
       if (!revert) return userMessages()
-      return userMessages().filter((m) => m.id < revert)
+      return userMessages().filter((m) => cmp(m.id, revert) < 0)
     },
     emptyUserMessages,
     {
@@ -784,7 +785,7 @@ export default function Page() {
       )
       return
     }
-    const at = list.findIndex((item) => item.id > next.id)
+    const at = list.findIndex((item) => cmp(item.id, next.id) > 0)
     if (at >= 0) {
       globalSync.set("project", [...list.slice(0, at), next, ...list.slice(at)])
       return
@@ -936,7 +937,7 @@ export default function Page() {
     on(
       () => visibleUserMessages().at(-1)?.id,
       (lastId, prevLastId) => {
-        if (lastId && prevLastId && lastId > prevLastId) {
+        if (lastId && prevLastId && cmp(lastId, prevLastId) > 0) {
           setStore("messageId", undefined)
         }
       },
@@ -1959,7 +1960,7 @@ export default function Page() {
       const sessionID = params.id
       if (!sessionID) return
 
-      const next = userMessages().find((item) => item.id > id)
+      const next = userMessages().find((item) => cmp(item.id, id) > 0)
       const prev = prompt.current().slice()
       const last = info()?.revert
 
@@ -2012,7 +2013,7 @@ export default function Page() {
     const id = revertMessageID()
     if (!id) return []
     return userMessages()
-      .filter((item) => item.id >= id)
+      .filter((item) => cmp(item.id, id) >= 0)
       .map((item) => ({ id: item.id, text: line(item.id) }))
   })
 

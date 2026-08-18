@@ -766,9 +766,12 @@ export namespace Session {
         })
         const msgs = yield* messages({ sessionID: input.sessionID })
         const idMap = new Map<string, MessageID>()
+        // Copy everything before the cut-off message. `msgs` is chronological;
+        // ID order is not (they wrap every 795 days), so cut by position.
+        const cutoff = input.messageID ? msgs.findIndex((msg) => msg.info.id === input.messageID) : -1
 
-        for (const msg of msgs) {
-          if (input.messageID && msg.info.id >= input.messageID) break
+        for (const [index, msg] of msgs.entries()) {
+          if (cutoff !== -1 && index >= cutoff) break
           const newID = MessageID.ascending()
           idMap.set(msg.info.id, newID)
 
