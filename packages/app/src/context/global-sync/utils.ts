@@ -1,6 +1,14 @@
 import type { Agent, Project, ProviderListResponse } from "@opencode-ai/sdk/v2/client"
+import { Identifier } from "@opencode-ai/util/identifier"
 
-export const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+/**
+ * Orders sessions, messages, parts, permissions and questions by their IDs.
+ * IDs encode creation time modulo 2^48 and wrap every 795 days, so a plain
+ * string comparison sorts everything created after a wrap ahead of everything
+ * before it — which is how messages sent after 2026-08-14 ended up above a
+ * chat's existing history.
+ */
+export const cmp = Identifier.compare
 
 function isAgent(input: unknown): input is Agent {
   if (!input || typeof input !== "object") return false

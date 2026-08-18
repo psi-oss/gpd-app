@@ -309,9 +309,7 @@ export namespace SessionPrompt {
             !force &&
             Option.isSome(latestUser) &&
             Option.isSome(latestAssistant) &&
-            (latestUser.value.info.time.created > latestAssistant.value.info.time.created ||
-              (latestUser.value.info.time.created === latestAssistant.value.info.time.created &&
-                latestUser.value.info.id > latestAssistant.value.info.id))
+            MessageV2.compare(latestUser.value.info, latestAssistant.value.info) > 0
           ) {
             return
           }
@@ -327,7 +325,7 @@ export namespace SessionPrompt {
             Option.isSome(latestAssistant) &&
             latestAssistant.value.info.role === "assistant" &&
             isGoalContinuationMessage(latestUser.value) &&
-            latestUser.value.info.id < latestAssistant.value.info.id &&
+            MessageV2.compare(latestUser.value.info, latestAssistant.value.info) < 0 &&
             latestAssistant.value.info.finish &&
             !assistantMadeGoalProgress(latestAssistant.value)
           ) {
@@ -2165,11 +2163,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const hasToolCalls =
               lastAssistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
 
+            // The turn is done when the newest user message already has a
+            // finished assistant reply after it. Compare creation times, never
+            // the IDs: they wrap every 795 days, and reading them as a clock is
+            // what made every pre-2026-08-14 chat answer nothing at all.
             if (
               lastAssistant?.finish &&
               !["tool-calls"].includes(lastAssistant.finish) &&
               !hasToolCalls &&
-              lastUser.id < lastAssistant.id
+              MessageV2.compare(lastUser, lastAssistant) < 0
             ) {
               yield* slog.info("exiting loop")
               break
@@ -2277,7 +2279,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
               if (step > 1 && lastFinished) {
                 for (const m of msgs) {
-                  if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
+                  if (m.info.role !== "user" || MessageV2.compare(m.info, lastFinished) <= 0) continue
                   for (const p of m.parts) {
                     if (p.type !== "text" || p.ignored || p.synthetic) continue
                     if (!p.text.trim()) continue

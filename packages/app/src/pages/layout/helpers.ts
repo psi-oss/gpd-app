@@ -1,5 +1,6 @@
 import { getFilename } from "@opencode-ai/util/path"
 import { type Session } from "@opencode-ai/sdk/v2/client"
+import { cmp } from "@/context/global-sync/utils"
 
 type SessionStore = {
   session?: Session[]
@@ -21,7 +22,7 @@ function sortSessions(now: number) {
     const bUpdated = b.time.updated ?? b.time.created
     const aRecent = aUpdated > oneMinuteAgo
     const bRecent = bUpdated > oneMinuteAgo
-    if (aRecent && bRecent) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    if (aRecent && bRecent) return cmp(a.id, b.id)
     if (aRecent && !bRecent) return -1
     if (!aRecent && bRecent) return 1
     return bUpdated - aUpdated

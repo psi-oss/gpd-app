@@ -87,6 +87,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { TuiPluginRuntime } from "../../plugin"
 import { DialogGoUpsell } from "../../component/dialog-go-upsell"
 import { SessionRetry } from "@/session/retry"
+import { Identifier } from "@opencode-ai/util/identifier"
 
 addDefaultParsers(parsers.parsers)
 
@@ -129,7 +130,7 @@ export function Session() {
     const parentID = session()?.parentID ?? session()?.id
     return sync.data.session
       .filter((x) => x.parentID === parentID || x.id === parentID)
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .toSorted((a, b) => Identifier.compare(a.id, b.id))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const permissions = createMemo(() => {
@@ -528,7 +529,9 @@ export function Session() {
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const revert = session()?.revert?.messageID
-        const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
+        const message = messages().findLast(
+          (x) => (!revert || Identifier.compare(x.id, revert) < 0) && x.role === "user",
+        )
         if (!message) return
         sdk.client.session
           .revert({
@@ -567,7 +570,7 @@ export function Session() {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.role === "user" && x.id > messageID)
+        const message = messages().find((x) => x.role === "user" && Identifier.compare(x.id, messageID) > 0)
         if (!message) {
           sdk.client.session.unrevert({
             sessionID: route.sessionID,
@@ -805,7 +808,7 @@ export function Session() {
       onSelect: (dialog) => {
         const revertID = session()?.revert?.messageID
         const lastAssistantMessage = messages().findLast(
-          (msg) => msg.role === "assistant" && (!revertID || msg.id < revertID),
+          (msg) => msg.role === "assistant" && (!revertID || Identifier.compare(msg.id, revertID) < 0),
         )
         if (!lastAssistantMessage) {
           toast.show({ message: "No assistant messages found", variant: "error" })
@@ -1019,7 +1022,7 @@ export function Session() {
   const revertRevertedMessages = createMemo(() => {
     const messageID = revertMessageID()
     if (!messageID) return []
-    return messages().filter((x) => x.id >= messageID && x.role === "user")
+    return messages().filter((x) => Identifier.compare(x.id, messageID) >= 0 && x.role === "user")
   })
 
   const revert = createMemo(() => {
@@ -1141,7 +1144,7 @@ export function Session() {
                         )
                       })()}
                     </Match>
-                    <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
+                    <Match when={revert()?.messageID && Identifier.compare(message.id, revert()!.messageID) >= 0}>
                       <></>
                     </Match>
                     <Match when={message.role === "user"}>
@@ -1257,7 +1260,7 @@ function UserMessage(props: {
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() => props.pending && props.message.id > props.pending)
+  const queued = createMemo(() => props.pending && Identifier.compare(props.message.id, props.pending) > 0)
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())

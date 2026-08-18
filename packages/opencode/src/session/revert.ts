@@ -87,7 +87,11 @@ export namespace SessionRevert {
         if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
         yield* snap.revert(patches)
         if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot as string)
-        const range = all.filter((msg) => msg.info.id >= rev!.messageID)
+        // `all` is already in chronological order and rev.messageID always came
+        // from it, so take everything from that message onward by position.
+        // Comparing IDs would misjudge the range: they wrap every 795 days.
+        const start = all.findIndex((msg) => msg.info.id === rev!.messageID)
+        const range = start === -1 ? [] : all.slice(start)
         const diffs = yield* summary.computeDiff({ messages: range })
         yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
         yield* bus.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
@@ -120,9 +124,12 @@ export namespace SessionRevert {
         const messageID = session.revert.messageID
         const remove = [] as MessageV2.WithParts[]
         let target: MessageV2.WithParts | undefined
-        for (const msg of msgs) {
-          if (msg.info.id < messageID) continue
-          if (msg.info.id > messageID) {
+        // Position in the chronological list, not ID order — IDs wrap every
+        // 795 days and would put the wrong messages on either side of the mark.
+        const mark = msgs.findIndex((msg) => msg.info.id === messageID)
+        for (const [index, msg] of msgs.entries()) {
+          if (mark === -1 || index < mark) continue
+          if (index > mark) {
             remove.push(msg)
             continue
           }

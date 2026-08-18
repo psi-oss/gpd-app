@@ -32,6 +32,7 @@ import { SessionGoal } from "../../src/session/goal"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { Identifier } from "../../src/id/id"
 import { SessionStatus } from "../../src/session/status"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
@@ -352,6 +353,73 @@ it.live("loop exits immediately when last assistant has stop finish", () =>
       expect(result.info.role).toBe("assistant")
       if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
       expect(yield* llm.calls).toBe(0)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+// Regression for the 2026-08-14 outage: every chat whose last reply predated
+// that date stopped answering. Message IDs encode time modulo 2^48 and wrap
+// every 795 days, so a message sent after the wrap has a *smaller* id than the
+// history above it. runLoop read `lastUser.id < lastAssistant.id` as "already
+// answered" and broke out immediately — no reply, no error, HTTP 200 carrying
+// the stale assistant message.
+it.live("answers a new message in a chat whose history was written before an id wrap", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      // 2026-08-14T11:19:55.136Z is the wrap instant. Seed the history just
+      // before it so its ids sort above anything minted now.
+      const beforeWrap = 1786706395136 - 60_000
+      const olderUser = yield* sessions.updateMessage({
+        id: MessageID.ascending(Identifier.create("msg", "ascending", beforeWrap)),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: beforeWrap },
+      })
+      const olderAssistant: MessageV2.Assistant = {
+        id: MessageID.ascending(Identifier.create("msg", "ascending", beforeWrap + 1)),
+        role: "assistant",
+        parentID: olderUser.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: beforeWrap + 1, completed: beforeWrap + 2 },
+        finish: "stop",
+      }
+      yield* sessions.updateMessage(olderAssistant)
+
+      const newUser = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "still there?" }],
+      })
+
+      // The premise of the regression: string order says the new message is
+      // older than the history it was appended to.
+      expect(newUser.info.id < olderAssistant.id).toBe(true)
+
+      yield* llm.text("still here")
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(result.info.role).toBe("assistant")
+      expect(result.info.id).not.toBe(olderAssistant.id)
+      expect(result.parts.some((p) => p.type === "text" && p.text === "still here")).toBe(true)
     }),
     { git: true, config: providerCfg },
   ),

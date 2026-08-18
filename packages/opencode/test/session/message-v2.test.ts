@@ -1062,14 +1062,20 @@ describe("session.message-v2.latest", () => {
   const CONTINUE_USER = MessageID.make("msg_005")
   const NEW_COMPACTION_USER = MessageID.make("msg_006")
 
+  // Creation times, not IDs, are what `latest` orders on — message IDs wrap
+  // every 795 days and cannot be read as a clock. Each fixture gets a distinct
+  // increasing timestamp so these tests exercise the real ordering key.
+  const at = (created: number) => ({ time: { created } })
+
   const tailUser: MessageV2.WithParts = {
-    info: userInfo(TAIL_USER),
+    info: { ...userInfo(TAIL_USER), ...at(1) },
     parts: [{ ...basePart(TAIL_USER, "p1"), type: "text", text: "original prompt" }] as MessageV2.Part[],
   }
 
   const overflowAssistant: MessageV2.WithParts = {
     info: {
       ...assistantInfo(OVERFLOW_ASSISTANT, TAIL_USER),
+      ...at(2),
       finish: "tool-calls",
       tokens: { input: 280_000, output: 200, reasoning: 0, cache: { read: 0, write: 0 }, total: 280_200 },
     } as MessageV2.Assistant,
@@ -1077,7 +1083,7 @@ describe("session.message-v2.latest", () => {
   }
 
   const compactionUser: MessageV2.WithParts = {
-    info: userInfo(COMPACTION_USER),
+    info: { ...userInfo(COMPACTION_USER), ...at(3) },
     parts: [
       {
         ...basePart(COMPACTION_USER, "p1"),
@@ -1090,6 +1096,7 @@ describe("session.message-v2.latest", () => {
   const summaryAssistant: MessageV2.WithParts = {
     info: {
       ...assistantInfo(SUMMARY_ASSISTANT, COMPACTION_USER),
+      ...at(4),
       summary: true,
       finish: "stop",
       tokens: { input: 150_000, output: 1_500, reasoning: 0, cache: { read: 0, write: 0 }, total: 151_500 },
@@ -1098,7 +1105,7 @@ describe("session.message-v2.latest", () => {
   }
 
   const continueUser: MessageV2.WithParts = {
-    info: userInfo(CONTINUE_USER),
+    info: { ...userInfo(CONTINUE_USER), ...at(5) },
     parts: [
       {
         ...basePart(CONTINUE_USER, "p1"),
@@ -1134,7 +1141,7 @@ describe("session.message-v2.latest", () => {
 
   test("a fresh compaction-user newer than the latest summary surfaces in tasks", () => {
     const newCompactionUser: MessageV2.WithParts = {
-      info: userInfo(NEW_COMPACTION_USER),
+      info: { ...userInfo(NEW_COMPACTION_USER), ...at(6) },
       parts: [
         {
           ...basePart(NEW_COMPACTION_USER, "p1"),

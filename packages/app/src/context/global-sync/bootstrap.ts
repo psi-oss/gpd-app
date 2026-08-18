@@ -281,7 +281,7 @@ function projectID(directory: string, projects: Project[]) {
 function mergeSession(setStore: SetStoreFunction<State>, session: Session) {
   setStore("session", (list) => {
     const next = list.slice()
-    const idx = next.findIndex((item) => item.id >= session.id)
+    const idx = next.findIndex((item) => cmp(item.id, session.id) >= 0)
     if (idx === -1) return [...next, session]
     if (next[idx]?.id === session.id) {
       next[idx] = session

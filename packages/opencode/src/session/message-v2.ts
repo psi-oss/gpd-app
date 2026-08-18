@@ -2,6 +2,7 @@ import { BusEvent } from "@/bus/bus-event"
 import { SessionID, MessageID, PartID } from "./schema"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
+import { Identifier } from "@opencode-ai/util/identifier"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { LSP } from "../lsp"
 import { Snapshot } from "@/snapshot"
@@ -559,7 +560,10 @@ export namespace MessageV2 {
           .select()
           .from(PartTable)
           .where(inArray(PartTable.message_id, ids))
-          .orderBy(PartTable.message_id, PartTable.id)
+          // Chronological within each message. Part IDs wrap every 795 days
+          // (see @opencode-ai/util/identifier), so they cannot carry the order
+          // on their own for a message written across a wrap boundary.
+          .orderBy(PartTable.message_id, PartTable.time_created, PartTable.id)
           .all(),
       )
       for (const row of partRows) {
@@ -898,7 +902,12 @@ export namespace MessageV2 {
 
   export function parts(message_id: MessageID) {
     const rows = Database.use((db) =>
-      db.select().from(PartTable).where(eq(PartTable.message_id, message_id)).orderBy(PartTable.id).all(),
+      db
+        .select()
+        .from(PartTable)
+        .where(eq(PartTable.message_id, message_id))
+        .orderBy(PartTable.time_created, PartTable.id)
+        .all(),
     )
     return rows.map(
       (row) =>
@@ -948,25 +957,37 @@ export namespace MessageV2 {
     return filterCompacted(stream(sessionID))
   })
 
+  /**
+   * Orders two messages by when they were created. Message IDs are not usable
+   * as a clock — they encode time modulo 2^48 and wrap every 795 days, which
+   * silently reverses old-versus-new across a boundary — so compare the
+   * recorded creation time and fall back to the ID only inside one
+   * millisecond. Sessions routinely span more than a wrap period, so this
+   * needs the real timestamp, not `Identifier.compare`.
+   */
+  export function compare(a: { id: string; time: { created: number } }, b: { id: string; time: { created: number } }) {
+    if (a.time.created !== b.time.created) return a.time.created < b.time.created ? -1 : 1
+    return Identifier.compare(a.id, b.id)
+  }
+
   // filterCompacted reorders messages for model consumption
   // ([compaction-user, summary, ...retained tail..., continue-user]), so array
-  // position is not chronological. Derive each binding by max id (MessageID
-  // is monotonic via MessageID.ascending) so a pre-compaction overflowing tail
-  // assistant doesn't get mistaken for the most recent turn. tasks are
-  // compaction/subtask parts attached to user messages newer than the latest
-  // finished assistant — i.e. unprocessed work.
+  // position is not chronological. Derive each binding by latest creation time
+  // so a pre-compaction overflowing tail assistant doesn't get mistaken for the
+  // most recent turn. tasks are compaction/subtask parts attached to user
+  // messages newer than the latest finished assistant — i.e. unprocessed work.
   export function latest(msgs: WithParts[]) {
     let user: User | undefined
     let assistant: Assistant | undefined
     let finished: Assistant | undefined
     for (const msg of msgs) {
       const info = msg.info
-      if (info.role === "user" && (!user || info.id > user.id)) user = info
-      if (info.role === "assistant" && (!assistant || info.id > assistant.id)) assistant = info
-      if (info.role === "assistant" && info.finish && (!finished || info.id > finished.id)) finished = info
+      if (info.role === "user" && (!user || compare(info, user) > 0)) user = info
+      if (info.role === "assistant" && (!assistant || compare(info, assistant) > 0)) assistant = info
+      if (info.role === "assistant" && info.finish && (!finished || compare(info, finished) > 0)) finished = info
     }
     const tasks = msgs.flatMap((m) =>
-      finished && m.info.id <= finished.id
+      finished && compare(m.info, finished) <= 0
         ? []
         : m.parts.filter((p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask"),
     )

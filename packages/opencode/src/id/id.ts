@@ -1,7 +1,17 @@
 import z from "zod"
 import { randomBytes } from "crypto"
+import { Identifier as Ordering } from "@opencode-ai/util/identifier"
 
 export namespace Identifier {
+  /**
+   * Order two IDs by creation time. IDs encode their timestamp modulo 2^48 and
+   * therefore wrap every 795 days, so never compare them as plain strings —
+   * see `@opencode-ai/util/identifier` for the details and the bound.
+   */
+  export const compare = Ordering.compare
+  export const isBefore = Ordering.isBefore
+  export const isAfter = Ordering.isAfter
+
   const prefixes = {
     event: "evt",
     session: "ses",
@@ -56,6 +66,14 @@ export namespace Identifier {
     return result
   }
 
+  /**
+   * Mints an ID whose first 12 hex characters encode
+   * `(timestamp * 0x1000 + counter) mod 2^48`. The value does not fit in 48
+   * bits, so it wraps every 795 days. `Identifier.compare` handles that; plain
+   * string comparison does not. Do not widen the field to dodge the wrap — the
+   * client mints IDs with the same layout (`packages/app/src/utils/id.ts`) and
+   * the two must agree byte for byte.
+   */
   export function create(prefix: string, direction: "descending" | "ascending", timestamp?: number): string {
     const currentTimestamp = timestamp ?? Date.now()
 
@@ -75,13 +93,5 @@ export namespace Identifier {
     }
 
     return prefix + "_" + timeBytes.toString("hex") + randomBase62(LENGTH - 12)
-  }
-
-  /** Extract timestamp from an ascending ID. Does not work with descending IDs. */
-  export function timestamp(id: string): number {
-    const prefix = id.split("_")[0]
-    const hex = id.slice(prefix.length + 1, prefix.length + 13)
-    const encoded = BigInt("0x" + hex)
-    return Number(encoded / BigInt(0x1000))
   }
 }

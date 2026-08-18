@@ -18,6 +18,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { UserMessage } from "@opencode-ai/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { useCloseTabDialog } from "@/components/file-edit/close-tab-dialog"
+import { cmp } from "@/context/global-sync/utils"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -116,7 +117,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const visibleUserMessages = () => {
     const revert = info()?.revert?.messageID
     if (!revert) return userMessages()
-    return userMessages().filter((m) => m.id < revert)
+    return userMessages().filter((m) => cmp(m.id, revert) < 0)
   }
 
   const showAllFiles = () => {
@@ -325,7 +326,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }
 
     const revert = info()?.revert?.messageID
-    const message = findLast(userMessages(), (x) => !revert || x.id < revert)
+    const message = findLast(userMessages(), (x) => !revert || cmp(x.id, revert) < 0)
     if (!message) return
 
     await sdk.client.session.revert({ sessionID, messageID: message.id })
@@ -335,7 +336,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       prompt.set(restored)
     }
 
-    const prev = findLast(userMessages(), (x) => x.id < message.id)
+    const prev = findLast(userMessages(), (x) => cmp(x.id, message.id) < 0)
     setActiveMessage(prev)
   }
 
@@ -346,17 +347,17 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const revertMessageID = info()?.revert?.messageID
     if (!revertMessageID) return
 
-    const next = userMessages().find((x) => x.id > revertMessageID)
+    const next = userMessages().find((x) => cmp(x.id, revertMessageID) > 0)
     if (!next) {
       await sdk.client.session.unrevert({ sessionID })
       prompt.reset()
-      const last = findLast(userMessages(), (x) => x.id >= revertMessageID)
+      const last = findLast(userMessages(), (x) => cmp(x.id, revertMessageID) >= 0)
       setActiveMessage(last)
       return
     }
 
     await sdk.client.session.revert({ sessionID, messageID: next.id })
-    const prev = findLast(userMessages(), (x) => x.id < next.id)
+    const prev = findLast(userMessages(), (x) => cmp(x.id, next.id) < 0)
     setActiveMessage(prev)
   }
 
