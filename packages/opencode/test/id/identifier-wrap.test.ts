@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Identifier } from "../../src/id/id"
+import { Binary } from "@opencode-ai/util/binary"
 
 // 2026-08-14T11:19:55.136Z — the instant the encoded time field last wrapped
 // past 2^48. Everything minted after it has a smaller hex prefix than
@@ -64,5 +65,55 @@ describe("id.identifier wraparound", () => {
     expect(Identifier.compare("msg_001", "msg_002")).toBeLessThan(0)
     expect(Identifier.compare("msg_002", "msg_001")).toBeGreaterThan(0)
     expect(Identifier.compare("msg_001", "msg_001")).toBe(0)
+  })
+
+  test("compare is a total order, even across a span wider than half a period", () => {
+    // Ring-distance comparison is not transitive once a set spans more than
+    // half a period: it would report a < b, b < c and c < a. A sort given such
+    // a comparator produces arbitrary output, so the order has to be total
+    // even for ids it can no longer place correctly.
+    const period = 2 ** 48
+    const spread = [0, (3 * period) / 8, (3 * period) / 4].map(
+      (offset) => "msg_" + Math.floor(offset).toString(16).padStart(12, "0") + "abcdefghijkl",
+    )
+
+    for (const a of spread) {
+      for (const b of spread) {
+        expect(Math.sign(Identifier.compare(a, b))).toBe(Math.sign(-Identifier.compare(b, a)) || 0)
+      }
+    }
+    for (const a of spread) {
+      for (const b of spread) {
+        for (const c of spread) {
+          if (Identifier.compare(a, b) < 0 && Identifier.compare(b, c) < 0) {
+            expect(Identifier.compare(a, c)).toBeLessThan(0)
+          }
+        }
+      }
+    }
+  })
+
+  test("binary search finds ids in an array sorted across a wrap", () => {
+    // Binary.search has to agree with whatever order the array was sorted in.
+    // While it compared raw strings and the callers sorted with compare, rows
+    // present in the list came back as missing.
+    const ids = [WRAP - 5000, WRAP - 1000, WRAP + 1000, WRAP + 5000]
+      .map((t) => ({ id: Identifier.create("msg", "ascending", t) }))
+      .sort((a, b) => Identifier.compare(a.id, b.id))
+
+    for (const item of ids) {
+      const hit = Binary.search(ids, item.id, (x) => x.id)
+      expect(hit.found).toBe(true)
+      expect(ids[hit.index].id).toBe(item.id)
+    }
+  })
+
+  test("binary insert keeps an array in creation order across a wrap", () => {
+    const list: { id: string }[] = []
+    for (const t of [WRAP + 5000, WRAP - 1000, WRAP + 1000, WRAP - 5000]) {
+      Binary.insert(list, { id: Identifier.create("msg", "ascending", t) }, (x) => x.id)
+    }
+    const sorted = [...list].sort((a, b) => Identifier.compare(a.id, b.id))
+    expect(list.map((x) => x.id)).toEqual(sorted.map((x) => x.id))
   })
 })

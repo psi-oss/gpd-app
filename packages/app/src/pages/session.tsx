@@ -937,7 +937,7 @@ export default function Page() {
     on(
       () => visibleUserMessages().at(-1)?.id,
       (lastId, prevLastId) => {
-        if (lastId && prevLastId && lastId > prevLastId) {
+        if (lastId && prevLastId && cmp(lastId, prevLastId) > 0) {
           setStore("messageId", undefined)
         }
       },

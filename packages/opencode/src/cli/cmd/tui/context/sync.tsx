@@ -30,6 +30,7 @@ import { useArgs } from "./args"
 import { batch, createEffect, on } from "solid-js"
 import { Log } from "@/util/log"
 import { ConsoleState, emptyConsoleState, type ConsoleState as ConsoleStateType } from "@/config/console-state"
+import { Identifier } from "@opencode-ai/util/identifier"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -356,7 +357,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const start = Date.now() - 30 * 24 * 60 * 60 * 1000
       const sessionListPromise = sdk.client.session
         .list({ start: start })
-        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+        .then((x) => (x.data ?? []).toSorted((a, b) => Identifier.compare(a.id, b.id)))
 
       // blocking - include session.list when continuing a session
       const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
